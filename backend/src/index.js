@@ -2639,6 +2639,363 @@ app.post('/api/catalog/share', async (c) => {
 });
 
 
+// ══════════════════════════════════════════════════════════════
+// MODULE 19 — AI WATCH ENGINE + ACTIVITY CENTER
+// ══════════════════════════════════════════════════════════════
+
+// ── Idempotency check ────────────────────────────────────────
+async function alertAlreadyFired(orgId, convId, idKey, idValue, today) {
+  try {
+    const { data } = await supabase.from('messages').select('id')
+      .eq('organisation_id', orgId).eq('conversation_id', convId)
+      .filter(`metadata->>${idKey}`, 'eq', idValue)
+      .filter('metadata->>alert_date', 'eq', today).maybeSingle();
+    return !!data;
+  } catch { return false; }
+}
+
+// ── Alert message insert helper ──────────────────────────────
+async function insertAlert(orgId, convId, content, meta) {
+  return supabase.from('messages').insert({
+    organisation_id: orgId, conversation_id: convId, role: 'system', content,
+    tokens_input: 0, tokens_output: 0,
+    metadata: { sender_type: 'system', visibility: 'owner_only', message_type: 'system_alert', read_by_owner: false, preview_text: content.slice(0, 50), ...meta },
+  });
+}
+
+// ── Get or create customer conversation ──────────────────────
+async function getConvForCustomer(orgId, userId, customerId) {
+  let { data: conv } = await supabase.from('conversations').select('id')
+    .eq('organisation_id', orgId).eq('entity_type', 'customer').eq('entity_id', customerId).eq('status', 'active').maybeSingle();
+  if (!conv) {
+    const { data: newConv } = await supabase.from('conversations').insert({
+      organisation_id: orgId, user_id: userId, entity_type: 'customer', entity_id: customerId, model: 'gpt-4o-mini', status: 'active',
+    }).select('id').single();
+    conv = newConv;
+  }
+  return conv?.id;
+}
+
+// ── Get global AI conversation ───────────────────────────────
+async function getGlobalConv(orgId, userId) {
+  let { data: conv } = await supabase.from('conversations').select('id')
+    .eq('organisation_id', orgId).is('entity_type', null).eq('status', 'active').maybeSingle();
+  if (!conv) {
+    const { data: newConv } = await supabase.from('conversations').insert({
+      organisation_id: orgId, user_id: userId, entity_type: null, model: 'gpt-4o-mini', status: 'active',
+    }).select('id').single();
+    conv = newConv;
+  }
+  return conv?.id;
+}
+
+// ── Job 1: Morning Briefing ─────────────────────────────────
+async function jobMorningBriefing(orgId, userId) {
+  const today = new Date().toISOString().split('T')[0];
+  let fired = 0;
+  const { data: tasks } = await supabase.from('tasks').select('id, title, entity_id, entity_type')
+    .eq('organisation_id', orgId).eq('entity_type', 'delivery').eq('status', 'pending').eq('due_date', today).is('deleted_at', null);
+  for (const task of (tasks || [])) {
+    let custName = 'Customer'; let custId = null;
+    if (task.entity_id) {
+      const { data: inv } = await supabase.from('invoices').select('customer_id, invoice_number').eq('id', task.entity_id).maybeSingle();
+      if (inv) {
+        custId = inv.customer_id;
+        const { data: cust } = await supabase.from('customers').select('name').eq('id', inv.customer_id).maybeSingle();
+        custName = cust?.name || 'Customer';
+        const convId = await getConvForCustomer(orgId, userId, inv.customer_id);
+        if (convId && !(await alertAlreadyFired(orgId, convId, 'task_id', task.id, today))) {
+          await insertAlert(orgId, convId, `🚚 Delivery due today — ${inv.invoice_number} for ${custName}. Mark done when delivered.`,
+            { task_id: task.id, alert_type: 'delivery_due', alert_date: today });
+          await supabase.from('entity_memory').upsert({ organisation_id: orgId, entity_type: 'customer', entity_id: inv.customer_id, memory_key: 'last_delivery_alert_date', memory_value: today, confidence: 1.0 },
+            { onConflict: 'organisation_id,entity_type,entity_id,memory_key' });
+          fired++;
+        }
+      }
+    }
+  }
+  return fired;
+}
+
+// ── Job 2: Payment Reminders ─────────────────────────────────
+async function jobPaymentReminders(orgId, userId) {
+  const today = new Date().toISOString().split('T')[0];
+  let fired = 0;
+  const { data: tasks } = await supabase.from('tasks').select('id, entity_id')
+    .eq('organisation_id', orgId).eq('entity_type', 'reminder').eq('status', 'pending').eq('due_date', today).is('deleted_at', null);
+  for (const task of (tasks || [])) {
+    if (!task.entity_id) continue;
+    const { data: inv } = await supabase.from('invoices').select('customer_id, invoice_number').eq('id', task.entity_id).maybeSingle();
+    if (!inv) continue;
+    const { data: cust } = await supabase.from('customers').select('name, outstanding_balance').eq('id', inv.customer_id).maybeSingle();
+    const convId = await getConvForCustomer(orgId, userId, inv.customer_id);
+    if (convId && !(await alertAlreadyFired(orgId, convId, 'task_id', task.id, today))) {
+      const amt = (cust?.outstanding_balance || 0).toLocaleString('en-IN');
+      await insertAlert(orgId, convId, `💰 Payment reminder — ${cust?.name || 'Customer'} owes ₹${amt}. Tap to send WhatsApp.`,
+        { task_id: task.id, invoice_id: inv.id, alert_type: 'reminder_due', alert_date: today, customer_id: inv.customer_id });
+      await supabase.from('entity_memory').upsert({ organisation_id: orgId, entity_type: 'customer', entity_id: inv.customer_id, memory_key: 'last_reminder_alert_date', memory_value: today, confidence: 1.0 },
+        { onConflict: 'organisation_id,entity_type,entity_id,memory_key' });
+      fired++;
+    }
+  }
+  return fired;
+}
+
+// ── Job 3: Overdue Escalation ────────────────────────────────
+async function jobOverdueEscalation(orgId, userId) {
+  const today = new Date().toISOString().split('T')[0];
+  let fired = 0;
+  const { data: invoices } = await supabase.from('invoices').select('id, invoice_number, total_amount, due_date, customer_id')
+    .eq('organisation_id', orgId).not('status', 'in', '("paid","cancelled")').lt('due_date', today).is('deleted_at', null);
+  for (const inv of (invoices || [])) {
+    const { data: cust } = await supabase.from('customers').select('name').eq('id', inv.customer_id).maybeSingle();
+    const convId = await getConvForCustomer(orgId, userId, inv.customer_id);
+    if (convId && !(await alertAlreadyFired(orgId, convId, 'invoice_id', inv.id, today))) {
+      const days = Math.floor((Date.now() - new Date(inv.due_date).getTime()) / 86400000);
+      const amt = (inv.total_amount || 0).toLocaleString('en-IN');
+      await insertAlert(orgId, convId, `⚠️ Invoice ${inv.invoice_number} overdue by ${days} day${days > 1 ? 's' : ''} — ${cust?.name || 'Customer'} owes ₹${amt}.`,
+        { invoice_id: inv.id, alert_type: 'overdue_invoice', alert_date: today, customer_id: inv.customer_id });
+      fired++;
+    }
+  }
+  return fired;
+}
+
+// ── Job 4: Bank Reconciliation ───────────────────────────────
+async function jobBankReconciliation(orgId, userId) {
+  const today = new Date().toISOString().split('T')[0];
+  try {
+    const { data: txns } = await supabase.from('bank_transactions').select('amount')
+      .eq('organisation_id', orgId).eq('reconciled', false).is('deleted_at', null);
+    if (!txns || txns.length === 0) return 0;
+    const total = txns.reduce((s, t) => s + (t.amount || 0), 0).toLocaleString('en-IN');
+    const convId = await getGlobalConv(orgId, userId);
+    if (convId && !(await alertAlreadyFired(orgId, convId, 'alert_type', 'bank_reconciliation', today))) {
+      await insertAlert(orgId, convId, `🏦 ${txns.length} bank transaction${txns.length > 1 ? 's' : ''} need reconciliation — ₹${total} unreconciled today.`,
+        { alert_type: 'bank_reconciliation', alert_date: today });
+      return 1;
+    }
+  } catch {}
+  return 0;
+}
+
+// ── Job 5: Daily Insight Regeneration ────────────────────────
+async function jobDailyInsight(orgId) {
+  const today = new Date().toISOString().split('T')[0];
+  try {
+    const { data: custs } = await supabase.from('customers').select('outstanding_balance').eq('organisation_id', orgId);
+    const totalOutstanding = (custs || []).reduce((s, c) => s + (c.outstanding_balance || 0), 0);
+    const { count: overdueCount } = await supabase.from('invoices').select('*', { count: 'exact', head: true })
+      .eq('organisation_id', orgId).not('status', 'in', '("paid","cancelled")').lt('due_date', today);
+    const { count: paidToday } = await supabase.from('invoices').select('*', { count: 'exact', head: true })
+      .eq('organisation_id', orgId).eq('status', 'paid').gte('updated_at', today + 'T00:00:00');
+    const { count: pendingDeliveries } = await supabase.from('tasks').select('*', { count: 'exact', head: true })
+      .eq('organisation_id', orgId).eq('entity_type', 'delivery').eq('status', 'pending').gte('due_date', today);
+
+    const context = `Outstanding: ₹${totalOutstanding.toLocaleString('en-IN')}. Overdue invoices: ${overdueCount || 0}. Paid today: ${paidToday || 0}. Pending deliveries: ${pendingDeliveries || 0}.`;
+
+    let insightText = `Focus on collecting ₹${totalOutstanding.toLocaleString('en-IN')} outstanding across ${(custs || []).length} customers.`;
+
+    const client = getOpenAI();
+    if (client) {
+      try {
+        const controller = new AbortController();
+        const tid = setTimeout(() => controller.abort(), 6000);
+        const comp = await client.chat.completions.create({
+          model: 'gpt-4o-mini',
+          messages: [
+            { role: 'system', content: 'Generate one actionable insight sentence (max 15 words) for an Indian MSME trader. Use ₹ and Indian formatting. Plain text only.' },
+            { role: 'user', content: context },
+          ],
+          temperature: 0.3,
+        }, { signal: controller.signal });
+        clearTimeout(tid);
+        insightText = comp.choices[0].message.content?.trim() || insightText;
+      } catch {}
+    }
+
+    await supabase.from('ai_context').upsert({
+      organisation_id: orgId, context_key: 'daily_insight',
+      context_value: JSON.stringify({ content: insightText, generated_at: new Date().toISOString() }),
+      scope: 'global', is_active: true,
+    }, { onConflict: 'organisation_id,context_key,scope' });
+
+    return true;
+  } catch { return false; }
+}
+
+// ── Job 6: Draft Cleanup ─────────────────────────────────────
+async function jobDraftCleanup(orgId) {
+  try {
+    const fiveMinAgo = new Date(Date.now() - 5 * 60000).toISOString();
+    const { data: stale } = await supabase.from('ai_actions').select('id')
+      .eq('organisation_id', orgId).eq('status', 'pending').lt('created_at', fiveMinAgo).is('deleted_at', null);
+    let count = 0;
+    for (const action of (stale || [])) {
+      await supabase.from('ai_actions').update({ status: 'rejected' }).eq('id', action.id);
+      count++;
+    }
+    return count;
+  } catch { return 0; }
+}
+
+// ─── POST /api/watch/trigger ─────────────────────────────────
+app.post('/api/watch/trigger', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { userId, organisationId } = auth;
+    const body = await c.req.json().catch(() => ({}));
+    const jobType = body.job_type || 'all';
+
+    let alertsFired = 0;
+    let tasksUpdated = 0;
+    let insightUpdated = false;
+
+    if (jobType === 'all' || jobType === 'morning_briefing') {
+      alertsFired += await jobMorningBriefing(organisationId, userId);
+    }
+    if (jobType === 'all' || jobType === 'payment_reminders') {
+      alertsFired += await jobPaymentReminders(organisationId, userId);
+    }
+    if (jobType === 'all' || jobType === 'overdue_escalation') {
+      alertsFired += await jobOverdueEscalation(organisationId, userId);
+    }
+    if (jobType === 'all' || jobType === 'bank_reconciliation') {
+      alertsFired += await jobBankReconciliation(organisationId, userId);
+    }
+    if (jobType === 'all' || jobType === 'daily_insight') {
+      insightUpdated = await jobDailyInsight(organisationId);
+    }
+    if (jobType === 'all' || jobType === 'draft_cleanup') {
+      tasksUpdated = await jobDraftCleanup(organisationId);
+    }
+
+    console.log(`🔔 Watch trigger: ${alertsFired} alerts, ${tasksUpdated} drafts cleaned, insight=${insightUpdated}`);
+    return c.json({ alerts_fired: alertsFired, tasks_updated: tasksUpdated, insight_updated: insightUpdated });
+  } catch (error) {
+    console.error('POST /api/watch/trigger error:', error);
+    return c.json({ error: 'server_error' }, 500);
+  }
+});
+
+// ─── GET /api/activity ───────────────────────────────────────
+app.get('/api/activity', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { userId, organisationId } = auth;
+    const tab = c.req.query('tab') || 'watchlist';
+
+    if (tab === 'watchlist') {
+      const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString();
+      const { data: alerts } = await supabase.from('messages').select('id, content, metadata, created_at, conversation_id')
+        .eq('organisation_id', organisationId).eq('role', 'system').gte('created_at', sevenDaysAgo)
+        .order('created_at', { ascending: false }).limit(50);
+
+      const items = [];
+      for (const alert of (alerts || [])) {
+        const meta = alert.metadata || {};
+        let custName = null, custId = meta.customer_id || null, custPhone = null;
+        if (custId) {
+          const { data: cust } = await supabase.from('customers').select('name, phone').eq('id', custId).maybeSingle();
+          custName = cust?.name; custPhone = cust?.phone;
+        } else {
+          // Try to get customer from conversation
+          const { data: conv } = await supabase.from('conversations').select('entity_id, entity_type').eq('id', alert.conversation_id).maybeSingle();
+          if (conv?.entity_type === 'customer' && conv.entity_id) {
+            custId = conv.entity_id;
+            const { data: cust } = await supabase.from('customers').select('name, phone').eq('id', conv.entity_id).maybeSingle();
+            custName = cust?.name; custPhone = cust?.phone;
+          }
+        }
+        items.push({
+          id: alert.id, type: meta.alert_type || 'system', content: alert.content,
+          customer_name: custName, customer_id: custId, customer_phone: custPhone,
+          alert_date: meta.alert_date || alert.created_at?.split('T')[0],
+          is_silenced: meta.silenced || false,
+          task_id: meta.task_id || null, invoice_id: meta.invoice_id || null,
+          created_at: alert.created_at,
+        });
+      }
+      return c.json({ items });
+
+    } else {
+      // My Tasks
+      const { data: tasks } = await supabase.from('tasks').select('id, title, description, status, priority, due_date, entity_type, entity_id, created_at')
+        .eq('organisation_id', organisationId).is('deleted_at', null)
+        .or(`created_by.eq.${userId},assigned_to.eq.${userId}`)
+        .order('due_date', { ascending: true }).limit(50);
+
+      const items = [];
+      for (const task of (tasks || [])) {
+        let custName = null, custId = null, custPhone = null;
+        if (task.entity_id && (task.entity_type === 'delivery' || task.entity_type === 'reminder')) {
+          const { data: inv } = await supabase.from('invoices').select('customer_id').eq('id', task.entity_id).maybeSingle();
+          if (inv?.customer_id) {
+            custId = inv.customer_id;
+            const { data: cust } = await supabase.from('customers').select('name, phone').eq('id', inv.customer_id).maybeSingle();
+            custName = cust?.name; custPhone = cust?.phone;
+          }
+        }
+        items.push({
+          id: task.id, title: task.title, description: task.description,
+          status: task.status, priority: task.priority, due_date: task.due_date,
+          entity_type: task.entity_type, entity_id: task.entity_id,
+          customer_name: custName, customer_id: custId, customer_phone: custPhone,
+          created_at: task.created_at,
+        });
+      }
+      return c.json({ items });
+    }
+  } catch (error) {
+    console.error('GET /api/activity error:', error);
+    return c.json({ error: 'server_error' }, 500);
+  }
+});
+
+// ─── PATCH /api/tasks/:task_id ───────────────────────────────
+app.patch('/api/tasks/:task_id', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const taskId = c.req.param('task_id');
+    const body = await c.req.json();
+
+    const updateFields = {};
+    if (body.status) updateFields.status = body.status;
+    if (body.status === 'completed') updateFields.completed_at = new Date().toISOString();
+    updateFields.updated_at = new Date().toISOString();
+
+    const { error } = await supabase.from('tasks').update(updateFields)
+      .eq('id', taskId).eq('organisation_id', auth.organisationId);
+    if (error) return c.json({ error: 'server_error' }, 500);
+
+    // Write entity_memory if completed
+    if (body.status === 'completed') {
+      const { data: task } = await supabase.from('tasks').select('entity_id, entity_type, due_date').eq('id', taskId).single();
+      if (task?.entity_id) {
+        const { data: inv } = await supabase.from('invoices').select('customer_id').eq('id', task.entity_id).maybeSingle();
+        if (inv?.customer_id) {
+          const today = new Date().toISOString().split('T')[0];
+          const onTime = task.due_date ? task.due_date >= today : true;
+          try {
+            await supabase.from('entity_memory').upsert({
+              organisation_id: auth.organisationId, entity_type: 'customer', entity_id: inv.customer_id,
+              memory_key: 'task_completed_on_time', memory_value: onTime ? 'true' : 'false', confidence: 1.0,
+            }, { onConflict: 'organisation_id,entity_type,entity_id,memory_key' });
+          } catch {}
+        }
+      }
+    }
+
+    return c.json({ updated: true });
+  } catch (error) {
+    return c.json({ error: 'server_error' }, 500);
+  }
+});
+
+
 // Export supabase client for use in other modules
 export { supabase };
 
