@@ -23,7 +23,7 @@ export default function HomeScreen() {
       <View style={styles.content}>
         <Text style={styles.title}>Welcome to AssistMe!</Text>
         <Text style={styles.subtitle}>
-          You're now logged in. Future flows will be built here.
+          You&apos;re now logged in. Future flows will be built here.
         </Text>
 
         <TouchableOpacity style={styles.button} onPress={handleLogout}>
