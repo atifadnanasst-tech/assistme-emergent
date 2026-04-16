@@ -10,7 +10,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 // Load environment variables
-dotenv.config({ path: join(__dirname, '../.env') });
+dotenv.config({ path: '/app/backend/.env' });
 
 // Initialize Supabase client with service role key (backend only)
 const supabaseUrl = process.env.SUPABASE_URL;
