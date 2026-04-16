@@ -70,6 +70,25 @@ function RootLayoutNav() {
       <Stack.Screen name="login" options={{ headerShown: false }} />
       <Stack.Screen name="otp" options={{ headerShown: false }} />
       <Stack.Screen name="home" options={{ headerShown: false }} />
+      <Stack.Screen name="products" options={{ headerShown: false }} />
+      <Stack.Screen name="ai" options={{ headerShown: false }} />
+      <Stack.Screen name="lists" options={{ headerShown: false }} />
+      <Stack.Screen name="customer/new" options={{ headerShown: false }} />
+      <Stack.Screen name="group/new" options={{ headerShown: false }} />
+      <Stack.Screen name="broadcast/new" options={{ headerShown: false }} />
+      <Stack.Screen name="settings/devices" options={{ headerShown: false }} />
+      <Stack.Screen name="settings/team" options={{ headerShown: false }} />
+      <Stack.Screen name="settings/profile" options={{ headerShown: false }} />
+      <Stack.Screen name="settings/staff" options={{ headerShown: false }} />
+      <Stack.Screen name="settings/billing" options={{ headerShown: false }} />
+      <Stack.Screen name="settings/catalogs" options={{ headerShown: false }} />
+      <Stack.Screen name="settings/notifications" options={{ headerShown: false }} />
+      <Stack.Screen name="settings/appearance" options={{ headerShown: false }} />
+      <Stack.Screen name="settings/social" options={{ headerShown: false }} />
+      <Stack.Screen name="settings/export" options={{ headerShown: false }} />
+      <Stack.Screen name="settings/help" options={{ headerShown: false }} />
+      <Stack.Screen name="settings/language" options={{ headerShown: false }} />
+      <Stack.Screen name="settings/disclaimer" options={{ headerShown: false }} />
     </Stack>
   );
 }
