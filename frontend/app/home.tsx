@@ -4,9 +4,11 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { authService } from '../lib/auth';
 import { supabase } from '../lib/supabase';
+import { useAuth } from '../contexts/AuthContext';
 
 export default function HomeScreen() {
   const router = useRouter();
+  const { setIsAuthenticated } = useAuth();
 
   const handleLogout = async () => {
     console.log('🚪 [LOGOUT] Starting logout sequence...');
@@ -22,13 +24,19 @@ export default function HomeScreen() {
       await supabase.auth.signOut();
       console.log('✅ [LOGOUT] Supabase signOut complete');
       
-      // STEP 3: Navigate to login
+      // STEP 3: Update auth state
+      console.log('🔐 [LOGOUT] Setting authentication state to false');
+      setIsAuthenticated(false);
+      console.log('✅ [LOGOUT] Auth state updated');
+      
+      // STEP 4: Navigate to login
       console.log('🚀 [LOGOUT] Navigating to login...');
       router.replace('/login');
       console.log('✅ [LOGOUT] Logout complete');
     } catch (error) {
       console.error('❌ [LOGOUT] Error during logout:', error);
-      // Still navigate to login even if there's an error
+      // Still update state and navigate even if there's an error
+      setIsAuthenticated(false);
       router.replace('/login');
     }
   };
