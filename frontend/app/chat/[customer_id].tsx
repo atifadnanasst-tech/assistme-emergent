@@ -579,7 +579,7 @@ setTimeout(() => {
 
       {/* Spark FAB — floating above input bar, right side */}
       {!sparkMode && !sparkProcessing && inputText.trim().length === 0 && (
-        <TouchableOpacity style={styles.sparkFab} onPress={() => setSparkMode(true)}>
+        <TouchableOpacity style={[styles.sparkFab, { bottom: 68 + (keyboardVisible ? 0 : insets.bottom) }]} onPress={() => setSparkMode(true)}>
           <Ionicons name="sparkles" size={22} color="#FFF" />
         </TouchableOpacity>
       )}
@@ -629,18 +629,30 @@ setTimeout(() => {
             )}
           </View>
 
-          {/* Send button — only shows when there's text or in spark mode */}
-          {(sparkMode || inputText.trim().length > 0) && (
+          {/* Send button when text typed, or spark send in spark mode, or mic when idle */}
+          {sparkMode ? (
             <TouchableOpacity
-              style={[styles.sendBtn, sparkMode && styles.sparkSendBtn]}
-              onPress={sparkMode ? handleSpark : handleSend}
-              disabled={sparkMode ? (sparkProcessing || inputText.trim().length === 0) : sending}
+              style={[styles.sendBtn, styles.sparkSendBtn]}
+              onPress={handleSpark}
+              disabled={sparkProcessing || inputText.trim().length === 0}
             >
-              {(sending || sparkProcessing) ? (
+              {sparkProcessing ? (
                 <ActivityIndicator size="small" color="#FFF" />
               ) : (
                 <Ionicons name="send" size={20} color="#FFF" />
               )}
+            </TouchableOpacity>
+          ) : inputText.trim().length > 0 ? (
+            <TouchableOpacity style={styles.sendBtn} onPress={handleSend} disabled={sending}>
+              {sending ? (
+                <ActivityIndicator size="small" color="#FFF" />
+              ) : (
+                <Ionicons name="send" size={20} color="#FFF" />
+              )}
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity style={styles.micBtn}>
+              <Ionicons name="mic" size={22} color="#FFF" />
             </TouchableOpacity>
           )}
         </View>
@@ -894,11 +906,15 @@ const styles = StyleSheet.create({
     backgroundColor: '#00796B',
   },
   sparkFab: {
-    position: 'absolute', right: 16, bottom: 70, zIndex: 20,
+    position: 'absolute', right: 16, zIndex: 20,
     width: 52, height: 52, borderRadius: 26, backgroundColor: '#075E54',
     justifyContent: 'center', alignItems: 'center',
     elevation: 6, shadowColor: '#000', shadowOffset: { width: 0, height: 3 },
     shadowOpacity: 0.25, shadowRadius: 4,
+  },
+  micBtn: {
+    width: 44, height: 44, borderRadius: 22, backgroundColor: '#075E54',
+    justifyContent: 'center', alignItems: 'center',
   },
 
   // Menu overlay
