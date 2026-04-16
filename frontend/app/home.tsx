@@ -327,15 +327,17 @@ export default function HomeScreen() {
 
         {/* Insight Strip */}
         {insightStrip && insightStrip.content && (
-          <View style={styles.insightStrip}>
+          <TouchableOpacity
+            style={styles.insightStrip}
+            activeOpacity={0.7}
+            onPress={() => router.push('/activity')}
+          >
             <Ionicons name="bulb" size={20} color="#8B6914" />
             <Text style={styles.insightText} numberOfLines={2}>
               {insightStrip.content}
             </Text>
-            <TouchableOpacity>
-              <Text style={styles.insightDetails}>Details ›</Text>
-            </TouchableOpacity>
-          </View>
+            <Text style={styles.insightDetails}>Details ›</Text>
+          </TouchableOpacity>
         )}
       </SafeAreaView>
 
