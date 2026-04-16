@@ -6,6 +6,7 @@ import { createClient } from '@supabase/supabase-js';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { registerAIRoutes, getOpenAI } from './ai-routes.js';
+import PDFDocument from 'pdfkit';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -1890,6 +1891,438 @@ app.get('/api/customer/:customer_id/history', async (c) => {
 
   } catch (error) {
     console.error('GET /api/customer/history error:', error);
+    return c.json({ error: 'server_error' }, 500);
+  }
+});
+
+
+// ══════════════════════════════════════════════════════════════
+// FLOW 4 — INVOICE CREATION ROUTES
+// ══════════════════════════════════════════════════════════════
+
+// ─── GET /api/invoice/new ──────────────────────────────────
+app.get('/api/invoice/new', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+    const customerId = c.req.query('customer_id');
+
+    // Q1: Organisation
+    const { data: org } = await supabase.from('organisations').select('id, name').eq('id', organisationId).single();
+
+    // Q2: Customer (validate org)
+    let customerData = null;
+    let billingAddress = null;
+    let shippingAddress = null;
+    if (customerId) {
+      const cust = await validateCustomer(customerId, organisationId);
+      if (cust) {
+        customerData = { id: cust.id, name: cust.name, tax_id: cust.tax_id || null, custom_fields: cust.custom_fields || {} };
+        // Q3: Addresses
+        try {
+          const { data: addrs } = await supabase.from('customer_addresses').select('*')
+            .eq('customer_id', customerId).eq('organisation_id', organisationId);
+          if (addrs) {
+            const billing = addrs.find(a => a.address_type === 'billing' && a.is_default) || addrs.find(a => a.address_type === 'billing') || addrs[0];
+            const shipping = addrs.find(a => a.address_type === 'shipping' && a.is_default) || addrs.find(a => a.address_type === 'shipping');
+            if (billing) billingAddress = { id: billing.id, line1: billing.line1 || '', line2: billing.line2 || '', city: billing.city || '', state: billing.state || '', pincode: billing.pincode || '' };
+            if (shipping) shippingAddress = { id: shipping.id, line1: shipping.line1 || '', city: shipping.city || '', state: shipping.state || '' };
+          }
+        } catch {}
+      }
+    }
+
+    // Q4: Products
+    const { data: products } = await supabase.from('products').select('id, name, sku, selling_price, tax_rate, unit, custom_fields')
+      .eq('organisation_id', organisationId).eq('is_active', true).order('name');
+
+    return c.json({
+      organisation: { id: org?.id, name: org?.name },
+      customer: customerData,
+      billing_address: billingAddress,
+      shipping_address: shippingAddress,
+      products: (products || []).map(p => ({
+        id: p.id, name: p.name, sku: p.sku, selling_price: p.selling_price,
+        tax_rate: p.tax_rate || 0, unit: p.unit || 'unit', hsn_code: p.custom_fields?.hsn_code || null,
+      })),
+      prefilled_items: [],
+    });
+  } catch (error) {
+    console.error('GET /api/invoice/new error:', error);
+    return c.json({ error: 'server_error' }, 500);
+  }
+});
+
+// ─── GET /api/products ──────────────────────────────────────
+app.get('/api/products/list', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { data: products } = await supabase.from('products').select('id, name, sku, selling_price, tax_rate, unit, custom_fields')
+      .eq('organisation_id', auth.organisationId).eq('is_active', true).order('name');
+    return c.json({
+      products: (products || []).map(p => ({
+        id: p.id, name: p.name, sku: p.sku, selling_price: p.selling_price,
+        tax_rate: p.tax_rate || 0, unit: p.unit || 'unit', hsn_code: p.custom_fields?.hsn_code || null,
+      })),
+    });
+  } catch (error) {
+    return c.json({ error: 'server_error' }, 500);
+  }
+});
+
+// ─── GET /api/invoice/ai-suggestion ─────────────────────────
+app.get('/api/invoice/ai-suggestion', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+    const productId = c.req.query('product_id');
+    const customerId = c.req.query('customer_id');
+    if (!productId || !customerId) return c.json({ suggested_price: null, suggested_quantity: null, reason: 'Missing parameters' });
+
+    // Check entity_memory for this customer+product
+    let suggestion = { suggested_price: null, suggested_quantity: null, reason: 'No suggestion available yet' };
+    try {
+      const { data: memories } = await supabase.from('entity_memory').select('memory_key, memory_value')
+        .eq('organisation_id', organisationId).eq('entity_type', 'customer').eq('entity_id', customerId).is('deleted_at', null);
+      // Check past invoices for this product+customer
+      const { data: pastItems } = await supabase.from('invoice_items').select('quantity, unit_price, invoice_id')
+        .eq('product_id', productId).eq('organisation_id', organisationId);
+      if (pastItems && pastItems.length > 0) {
+        const avgQty = Math.round(pastItems.reduce((s, i) => s + (i.quantity || 0), 0) / pastItems.length);
+        const avgPrice = Math.round(pastItems.reduce((s, i) => s + (i.unit_price || 0), 0) / pastItems.length * 100) / 100;
+        const custName = (await supabase.from('customers').select('name').eq('id', customerId).single()).data?.name || 'Customer';
+        suggestion = { suggested_price: avgPrice, suggested_quantity: avgQty, reason: `${custName} usually orders ${avgQty} units at ₹${avgPrice}` };
+      }
+    } catch {}
+    return c.json(suggestion);
+  } catch (error) {
+    return c.json({ suggested_price: null, suggested_quantity: null, reason: 'Error fetching suggestion' });
+  }
+});
+
+// ─── PATCH /api/customer/:customer_id/defaults ──────────────
+app.patch('/api/customer/:customer_id/defaults', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const customerId = c.req.param('customer_id');
+    const customer = await validateCustomer(customerId, auth.organisationId);
+    if (!customer) return c.json({ error: 'customer_not_found' }, 404);
+
+    const body = await c.req.json();
+    const currentFields = customer.custom_fields || {};
+    const updated = {
+      ...currentFields,
+      payment_terms: body.payment_terms ?? currentFields.payment_terms,
+      delivery_preference: body.delivery_preference ?? currentFields.delivery_preference,
+      default_invoice_type: body.default_invoice_type ?? currentFields.default_invoice_type,
+    };
+    await supabase.from('customers').update({ custom_fields: updated }).eq('id', customerId).eq('organisation_id', auth.organisationId);
+    return c.json({ saved: true });
+  } catch (error) {
+    return c.json({ error: 'server_error' }, 500);
+  }
+});
+
+// ─── POST /api/invoices ─────────────────────────────────────
+app.post('/api/invoices', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { userId, organisationId } = auth;
+    const body = await c.req.json();
+    const { customer_id, items, packing_handling, due_date, invoice_type, po_number } = body;
+
+    if (!customer_id || !items || items.length === 0) return c.json({ error: 'missing_fields' }, 400);
+    const customer = await validateCustomer(customer_id, organisationId);
+    if (!customer) return c.json({ error: 'customer_not_found' }, 404);
+
+    // Invoice number = COUNT + 1
+    const { count: invCount } = await supabase.from('invoices').select('*', { count: 'exact', head: true }).eq('organisation_id', organisationId);
+    const seqNum = (invCount || 0) + 1;
+    const invoiceNumber = 'INV-' + seqNum.toString().padStart(3, '0');
+
+    // Backend recomputes all financials
+    let subtotal = 0;
+    let totalTax = 0;
+    let cgstTotal = 0, sgstTotal = 0, igstTotal = 0;
+    const computedItems = [];
+
+    // Determine intra/inter state
+    let supplierState = null;
+    let customerState = null;
+    try {
+      const { data: orgData } = await supabase.from('organisations').select('settings').eq('id', organisationId).single();
+      supplierState = orgData?.settings?.gstin_state || null;
+    } catch {}
+    try {
+      const { data: addrs } = await supabase.from('customer_addresses').select('state')
+        .eq('customer_id', customer_id).eq('organisation_id', organisationId).eq('address_type', 'billing').limit(1);
+      customerState = addrs?.[0]?.state || null;
+    } catch {}
+    const isIntraState = supplierState && customerState && supplierState.toLowerCase() === customerState.toLowerCase();
+
+    for (const item of items) {
+      // Fetch product for selling_price and tax_rate
+      const { data: product } = await supabase.from('products').select('id, name, selling_price, tax_rate, custom_fields')
+        .eq('id', item.product_id).eq('organisation_id', organisationId).eq('is_active', true).single();
+      if (!product) continue;
+
+      const qty = item.quantity || 1;
+      const unitPrice = product.selling_price || 0;
+      const lineTotal = Math.round(qty * unitPrice * 100) / 100;
+      const taxRate = product.tax_rate || 0;
+      const itemTax = Math.round(lineTotal * taxRate / 100 * 100) / 100;
+
+      subtotal += lineTotal;
+      totalTax += itemTax;
+
+      if (isIntraState || (!supplierState || !customerState)) {
+        cgstTotal += Math.round(itemTax / 2 * 100) / 100;
+        sgstTotal += Math.round(itemTax / 2 * 100) / 100;
+      } else {
+        igstTotal += itemTax;
+      }
+
+      computedItems.push({
+        product_id: product.id, description: product.name, quantity: qty,
+        unit_price: unitPrice, tax_rate: taxRate, line_total: lineTotal, sort_order: computedItems.length + 1,
+        hsn_code: product.custom_fields?.hsn_code || null,
+      });
+    }
+
+    const packingHandling = Math.round((packing_handling || 0) * 100) / 100;
+    const totalAmount = Math.round((subtotal + totalTax + packingHandling) * 100) / 100;
+
+    // Compute due_date
+    let computedDueDate = due_date;
+    if (!computedDueDate) {
+      const paymentTerms = customer.custom_fields?.payment_terms || '';
+      const match = paymentTerms.match(/(\d+)/);
+      const days = match ? parseInt(match[1]) : 7;
+      computedDueDate = new Date(Date.now() + days * 86400000).toISOString().split('T')[0];
+    }
+
+    // Create invoice
+    const status = body.status || 'sent';
+    const { data: newInvoice, error: invErr } = await supabase.from('invoices').insert({
+      organisation_id: organisationId, customer_id, invoice_number: invoiceNumber,
+      status, issue_date: new Date().toISOString().split('T')[0], due_date: computedDueDate,
+      currency: 'INR', subtotal, tax_amount: totalTax, total_amount: totalAmount,
+      amount_due: totalAmount, amount_paid: 0,
+      custom_fields: {
+        invoice_type: invoice_type || 'Tax Invoice', po_number: po_number || null,
+        packing_handling: packingHandling,
+        cgst_amount: cgstTotal, sgst_amount: sgstTotal, igst_amount: igstTotal,
+      },
+    }).select('id').single();
+
+    if (invErr) { console.error('Create invoice error:', invErr); return c.json({ error: 'server_error', detail: invErr.message }, 500); }
+
+    // Create invoice items
+    for (const item of computedItems) {
+      await supabase.from('invoice_items').insert({
+        organisation_id: organisationId, invoice_id: newInvoice.id,
+        product_id: item.product_id, description: item.description,
+        quantity: item.quantity, unit_price: item.unit_price,
+        tax_rate: item.tax_rate, line_total: item.line_total, sort_order: item.sort_order,
+      });
+    }
+
+    // Update customer outstanding_balance
+    if (status !== 'draft') {
+      await supabase.from('customers')
+        .update({ outstanding_balance: (customer.outstanding_balance || 0) + totalAmount })
+        .eq('id', customer_id).eq('organisation_id', organisationId);
+    }
+
+    return c.json({ invoice_id: newInvoice.id, invoice_number: invoiceNumber, total_amount: totalAmount, pdf_url: null });
+  } catch (error) {
+    console.error('POST /api/invoices error:', error);
+    return c.json({ error: 'server_error' }, 500);
+  }
+});
+
+// ─── POST /api/invoices/:id/pdf ─────────────────────────────
+app.post('/api/invoices/:invoice_id/pdf', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+    const invoiceId = c.req.param('invoice_id');
+
+    // Fetch invoice + items + customer + org
+    const { data: invoice } = await supabase.from('invoices').select('*').eq('id', invoiceId).eq('organisation_id', organisationId).single();
+    if (!invoice) return c.json({ error: 'invoice_not_found' }, 404);
+
+    const { data: items } = await supabase.from('invoice_items').select('*').eq('invoice_id', invoiceId).order('sort_order');
+    const { data: customer } = await supabase.from('customers').select('name, phone, tax_id').eq('id', invoice.customer_id).single();
+    const { data: org } = await supabase.from('organisations').select('name').eq('id', organisationId).single();
+
+    // Generate PDF with pdfkit
+    const doc = new PDFDocument({ size: 'A4', margin: 50 });
+    const chunks = [];
+    doc.on('data', chunk => chunks.push(chunk));
+
+    const pdfReady = new Promise((resolve) => doc.on('end', resolve));
+
+    // Header
+    doc.fontSize(20).font('Helvetica-Bold').text(org?.name || 'Business', { align: 'center' });
+    doc.moveDown(0.3);
+    doc.fontSize(14).font('Helvetica').text('TAX INVOICE', { align: 'center' });
+    doc.moveDown(0.5);
+    doc.fontSize(10).text(`Invoice #: ${invoice.invoice_number}`, { align: 'right' });
+    doc.text(`Date: ${invoice.issue_date}`, { align: 'right' });
+    doc.text(`Due: ${invoice.due_date}`, { align: 'right' });
+    doc.moveDown(0.5);
+
+    // Bill To
+    doc.fontSize(11).font('Helvetica-Bold').text('BILL TO:');
+    doc.font('Helvetica').fontSize(10).text(customer?.name || '');
+    if (customer?.tax_id) doc.text(`GSTIN: ${customer.tax_id}`);
+    doc.moveDown(1);
+
+    // Items table header
+    const tableTop = doc.y;
+    doc.font('Helvetica-Bold').fontSize(9);
+    doc.text('#', 50, tableTop, { width: 20 });
+    doc.text('Item', 75, tableTop, { width: 200 });
+    doc.text('Qty', 280, tableTop, { width: 40, align: 'right' });
+    doc.text('Rate', 330, tableTop, { width: 70, align: 'right' });
+    doc.text('Tax', 405, tableTop, { width: 40, align: 'right' });
+    doc.text('Amount', 450, tableTop, { width: 95, align: 'right' });
+    doc.moveDown(0.3);
+    doc.moveTo(50, doc.y).lineTo(545, doc.y).stroke();
+    doc.moveDown(0.3);
+
+    // Items
+    doc.font('Helvetica').fontSize(9);
+    (items || []).forEach((item, i) => {
+      const y = doc.y;
+      doc.text(`${i + 1}`, 50, y, { width: 20 });
+      doc.text(item.description || '', 75, y, { width: 200 });
+      doc.text(`${item.quantity}`, 280, y, { width: 40, align: 'right' });
+      doc.text(`₹${(item.unit_price || 0).toFixed(2)}`, 330, y, { width: 70, align: 'right' });
+      doc.text(`${item.tax_rate || 0}%`, 405, y, { width: 40, align: 'right' });
+      doc.text(`₹${(item.line_total || 0).toFixed(2)}`, 450, y, { width: 95, align: 'right' });
+      doc.moveDown(0.5);
+    });
+
+    doc.moveDown(0.3);
+    doc.moveTo(50, doc.y).lineTo(545, doc.y).stroke();
+    doc.moveDown(0.5);
+
+    // Totals
+    const totalsX = 380;
+    doc.font('Helvetica').fontSize(10);
+    doc.text('Subtotal:', totalsX, doc.y, { width: 70 });
+    doc.text(`₹${(invoice.subtotal || 0).toFixed(2)}`, 450, doc.y - 12, { width: 95, align: 'right' });
+    doc.moveDown(0.3);
+    doc.text(`GST:`, totalsX, doc.y, { width: 70 });
+    doc.text(`₹${(invoice.tax_amount || 0).toFixed(2)}`, 450, doc.y - 12, { width: 95, align: 'right' });
+    if (invoice.custom_fields?.packing_handling > 0) {
+      doc.moveDown(0.3);
+      doc.text('P&H:', totalsX, doc.y, { width: 70 });
+      doc.text(`₹${invoice.custom_fields.packing_handling.toFixed(2)}`, 450, doc.y - 12, { width: 95, align: 'right' });
+    }
+    doc.moveDown(0.5);
+    doc.font('Helvetica-Bold').fontSize(12);
+    doc.text('TOTAL:', totalsX, doc.y, { width: 70 });
+    doc.text(`₹${(invoice.total_amount || 0).toFixed(2)}`, 450, doc.y - 14, { width: 95, align: 'right' });
+
+    doc.end();
+    await pdfReady;
+
+    const pdfBuffer = Buffer.concat(chunks);
+    const fileName = `${invoice.invoice_number}.pdf`;
+    const storagePath = `${organisationId}/${fileName}`;
+
+    // Upload to Supabase Storage
+    const { error: uploadErr } = await supabase.storage.from('invoices').upload(storagePath, pdfBuffer, {
+      contentType: 'application/pdf', upsert: true,
+    });
+    if (uploadErr) { console.error('PDF upload error:', uploadErr); return c.json({ error: 'upload_failed' }, 500); }
+
+    const { data: publicUrl } = supabase.storage.from('invoices').getPublicUrl(storagePath);
+
+    // Save to attachments table
+    try {
+      await supabase.from('attachments').insert({
+        organisation_id: organisationId, entity_type: 'invoice', entity_id: invoiceId,
+        file_name: fileName, mime_type: 'application/pdf',
+        storage_path: storagePath, public_url: publicUrl.publicUrl,
+      });
+    } catch (attErr) { console.warn('Attachment record failed:', attErr); }
+
+    return c.json({ pdf_url: publicUrl.publicUrl, attachment_id: null });
+  } catch (error) {
+    console.error('POST /api/invoices/pdf error:', error);
+    return c.json({ error: 'server_error' }, 500);
+  }
+});
+
+// ─── POST /api/invoices/:id/share ───────────────────────────
+app.post('/api/invoices/:invoice_id/share', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+    const invoiceId = c.req.param('invoice_id');
+    const body = await c.req.json();
+    const channel = body.channel || 'app';
+
+    const { data: invoice } = await supabase.from('invoices').select('*').eq('id', invoiceId).eq('organisation_id', organisationId).single();
+    if (!invoice) return c.json({ error: 'invoice_not_found' }, 404);
+
+    const { data: customer } = await supabase.from('customers').select('id, name, phone').eq('id', invoice.customer_id).single();
+
+    if (channel === 'app') {
+      // Send invoice card to chat
+      const { data: conv } = await supabase.from('conversations').select('id')
+        .eq('organisation_id', organisationId).eq('entity_type', 'customer')
+        .eq('entity_id', invoice.customer_id).eq('status', 'active').maybeSingle();
+      if (conv) {
+        // Fetch items summary
+        const { data: items } = await supabase.from('invoice_items').select('description, quantity').eq('invoice_id', invoiceId).limit(3);
+        const itemsSummary = (items || []).map(i => `${i.description} × ${i.quantity}`).join(', ');
+
+        const { data: msg } = await supabase.from('messages').insert({
+          organisation_id: organisationId, conversation_id: conv.id,
+          role: 'tool', content: `Invoice #${invoice.invoice_number} created`,
+          metadata: {
+            sender_type: 'system', visibility: 'both', message_type: 'invoice_card',
+            read_by_owner: true, preview_text: `Invoice #${invoice.invoice_number} - ₹${invoice.total_amount}`,
+            card_type: 'invoice_card',
+            card_data: {
+              invoice_id: invoiceId, invoice_number: invoice.invoice_number,
+              total_amount: invoice.total_amount, due_date: invoice.due_date,
+              status: invoice.status, items_summary: itemsSummary,
+            },
+          },
+          tokens_input: 0, tokens_output: 0,
+        }).select('id').single();
+        return c.json({ shared: true, message_id: msg?.id });
+      }
+      return c.json({ shared: false, message_id: null });
+
+    } else if (channel === 'whatsapp') {
+      const phone = (customer?.phone || '').replace(/[^0-9]/g, '');
+      // Get PDF URL
+      const { data: attachment } = await supabase.from('attachments').select('public_url')
+        .eq('entity_type', 'invoice').eq('entity_id', invoiceId).order('created_at', { ascending: false }).limit(1).maybeSingle();
+      const pdfLink = attachment?.public_url ? `\n📄 PDF: ${attachment.public_url}` : '';
+      const text = encodeURIComponent(
+        `Invoice #${invoice.invoice_number}\nAmount: ₹${(invoice.total_amount || 0).toLocaleString('en-IN')}\nDue: ${invoice.due_date}${pdfLink}`
+      );
+      return c.json({ shared: true, whatsapp_url: `https://wa.me/${phone}?text=${text}` });
+    }
+
+    return c.json({ error: 'invalid_channel' }, 400);
+  } catch (error) {
+    console.error('POST /api/invoices/share error:', error);
     return c.json({ error: 'server_error' }, 500);
   }
 });
