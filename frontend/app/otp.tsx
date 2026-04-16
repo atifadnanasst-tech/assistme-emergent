@@ -134,7 +134,15 @@ export default function OTPScreen() {
 
       const setupData = await setupResponse.json();
 
-      // Store session securely
+      console.log('✅ [OTP] Backend setup-session successful:', {
+        organisation_id: setupData.organisation_id,
+        user_id: setupData.user_id,
+        role: setupData.role,
+        is_new_user: setupData.is_new_user,
+      });
+
+      // STEP 1: Store ALL session data securely (awaits each operation)
+      console.log('🔐 [OTP] Starting secure storage of session data...');
       await authService.storeSession(
         data.session.access_token,
         data.session.refresh_token,
@@ -142,8 +150,42 @@ export default function OTPScreen() {
         setupData.user_id,
         setupData.role
       );
+      console.log('🔐 [OTP] All session data stored successfully');
 
-      // Navigate to home
+      // STEP 2: Verify tokens are actually stored before proceeding
+      const storedToken = await authService.getAccessToken();
+      const storedOrgId = await authService.getOrganisationId();
+      console.log('🔍 [OTP] Verification - Token stored:', !!storedToken);
+      console.log('🔍 [OTP] Verification - Org ID stored:', storedOrgId);
+
+      if (!storedToken || !storedOrgId) {
+        console.error('❌ [OTP] Storage verification failed!');
+        setError('Session storage failed. Please try again.');
+        setLoading(false);
+        return;
+      }
+
+      // STEP 3: Set the Supabase session in memory
+      console.log('🔄 [OTP] Setting Supabase session in memory...');
+      const { error: setSessionError } = await supabase.auth.setSession({
+        access_token: data.session.access_token,
+        refresh_token: data.session.refresh_token,
+      });
+
+      if (setSessionError) {
+        console.error('❌ [OTP] Failed to set Supabase session:', setSessionError);
+        setError('Session setup failed. Please try again.');
+        setLoading(false);
+        return;
+      }
+
+      console.log('✅ [OTP] Supabase session set in memory');
+
+      // STEP 4: Small delay to ensure all state updates propagate
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      // STEP 5: Navigate to home (only after everything is ready)
+      console.log('🚀 [OTP] Navigating to /home...');
       router.replace('/home');
     } catch (err) {
       console.error('Verify OTP error:', err);

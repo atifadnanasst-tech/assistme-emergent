@@ -8,13 +8,20 @@ const USER_ID_KEY = 'user_id';
 const USER_ROLE_KEY = 'user_role';
 
 export const authService = {
-  // Store session securely
+  // Store session securely - ALL operations awaited individually
   async storeSession(accessToken: string, refreshToken: string, orgId: string, userId: string, role: string) {
+    console.log('🔐 [AUTH] Starting session storage...');
     await SecureStore.setItemAsync(TOKEN_KEY, accessToken);
+    console.log('🔐 [AUTH] ✅ Access token stored');
     await SecureStore.setItemAsync(REFRESH_TOKEN_KEY, refreshToken);
+    console.log('🔐 [AUTH] ✅ Refresh token stored');
     await SecureStore.setItemAsync(ORG_ID_KEY, orgId);
+    console.log('🔐 [AUTH] ✅ Organisation ID stored');
     await SecureStore.setItemAsync(USER_ID_KEY, userId);
+    console.log('🔐 [AUTH] ✅ User ID stored');
     await SecureStore.setItemAsync(USER_ROLE_KEY, role);
+    console.log('🔐 [AUTH] ✅ User role stored');
+    console.log('🔐 [AUTH] All session data stored successfully');
   },
 
   // Get stored access token

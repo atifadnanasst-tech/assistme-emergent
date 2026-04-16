@@ -204,9 +204,21 @@ test_plan:
   test_all: false
   test_priority: "infrastructure_first"
 
+  - task: "Flow 1: Race condition fix - OTP to home navigation"
+    implemented: true
+    working: "PENDING_VERIFICATION"
+    file: "/app/frontend/app/otp.tsx, /app/frontend/lib/auth.ts, /app/frontend/app/_layout.tsx"
+    stuck_count: 0
+    priority: "CRITICAL"
+    needs_retesting: true
+    status_history:
+      - working: "PENDING_VERIFICATION"
+        agent: "main"
+        comment: "Race condition fix applied in exact sequence: 1) Sequential SecureStore awaits with logging, 2) Storage verification before proceeding, 3) Supabase setSession for in-memory state, 4) 100ms delay for state propagation, 5) Navigation to /home. Added loading gate in navigation guard with isCheckingAuth state. Comprehensive logging at all steps. AWAITING MANUAL TEST TO CONFIRM OTP FLOW LANDS ON /HOME CONSISTENTLY."
+
 agent_communication:
   - agent: "main"
-    message: "Flow 1 implementation complete. All screens built (login, OTP, home), backend endpoint created, session management with SecureStore implemented. System tags seeding included. Ready for backend testing first, then frontend testing after user approval."
+    message: "Race condition fix complete. Applied 5-step sequence: sequential storage awaits → storage verification → in-memory state update → delay → navigation. Added loading gate in layout to prevent premature redirects. Comprehensive logging added at both verification points (OTP handler + auth guard). Ready for manual testing. DO NOT PROCEED TO FLOW 2 until OTP flow consistently lands on /home."
   - agent: "testing"
     message: "✅ Backend authentication endpoint testing completed successfully. Fixed critical null Supabase client bug. All endpoints working correctly: GET /api/health returns proper response, POST /api/auth/setup-session properly handles all error cases (missing/malformed/invalid tokens) with 401 status and 'invalid_token' error. Ready for frontend testing after user approval."
   - agent: "testing"
