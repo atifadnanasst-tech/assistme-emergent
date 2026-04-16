@@ -1,0 +1,20 @@
+{
+  "name": "assistme-backend",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@hono/node-server": "^1.15.3",
+    "@supabase/supabase-js": "^2.103.2",
+    "dotenv": "^16.4.7",
+    "hono": "^4.7.7"
+  }
+}
