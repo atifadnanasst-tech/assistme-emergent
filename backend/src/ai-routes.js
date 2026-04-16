@@ -30,6 +30,40 @@ function getOpenAI() {
   return openai;
 }
 
+// ── Active context tracking (in-memory, per conversationId) ──
+const activeContext = new Map();
+
+function getActiveContext(conversationId) {
+  if (!activeContext.has(conversationId)) {
+    activeContext.set(conversationId, { customer_id: null, customer_name: null, timeframe: null });
+  }
+  return activeContext.get(conversationId);
+}
+
+const TIMEFRAME_PATTERNS = [
+  { pattern: /\b(today|aaj|aaj ka)\b/i, value: 'today' },
+  { pattern: /\b(this week|is hafte|is week)\b/i, value: 'this_week' },
+  { pattern: /\b(this month|is mahine|is month)\b/i, value: 'this_month' },
+  { pattern: /\b(last month|pichle mahine|pichla month)\b/i, value: 'last_month' },
+  { pattern: /\b(yesterday|kal)\b/i, value: 'yesterday' },
+  { pattern: /\b(abhi|right now|now)\b/i, value: 'now' },
+];
+
+function detectTimeframe(message) {
+  for (const { pattern, value } of TIMEFRAME_PATTERNS) {
+    if (pattern.test(message)) return value;
+  }
+  return null;
+}
+
+function buildContextInjection(ctx) {
+  const parts = [];
+  if (ctx.customer_name) parts.push(`customer: ${ctx.customer_name}`);
+  if (ctx.timeframe) parts.push(`timeframe: ${ctx.timeframe}`);
+  if (parts.length === 0) return '';
+  return `\nCurrent context — ${parts.join(', ')}. Use this to resolve pronouns like 'he', 'him', 'uska', 'this month'.`;
+}
+
 // ── Tool → card_type mapping (deterministic, not AI-decided) ─
 const TOOL_CARD_TYPE_MAP = {
   get_daily_summary: 'daily_summary',
@@ -218,7 +252,28 @@ async function executeTool(toolName, args, supabase, organisationId) {
           .eq('organisation_id', organisationId)
           .ilike('name', `%${query}%`)
           .limit(10);
-        return { card_type: 'query_response', data: { customers: results || [] } };
+
+        const matches = results || [];
+
+        if (matches.length === 0) {
+          return { card_type: 'not_found', data: { message: `No customer found with name "${query}"` } };
+        }
+        if (matches.length === 1) {
+          // Single match — store in active context (passed via _conversationId)
+          return {
+            card_type: 'query_response',
+            data: { customers: matches },
+            _resolved: { customer_id: matches[0].id, customer_name: matches[0].name },
+          };
+        }
+        // Multiple matches — clarification needed
+        return {
+          card_type: 'clarification',
+          data: {
+            question: 'Which customer do you mean?',
+            options: matches.map(m => ({ id: m.id, name: m.name })),
+          },
+        };
       }
 
       case 'get_collection_insights': {
@@ -371,6 +426,11 @@ export function registerAIRoutes(app, supabase) {
       });
       if (saveErr) return c.json({ error: 'server_error' }, 500);
 
+      // 1b. Update active context — timeframe detection
+      const ctx = getActiveContext(conversationId);
+      const detectedTimeframe = detectTimeframe(userMessage);
+      if (detectedTimeframe) ctx.timeframe = detectedTimeframe;
+
       // 2. Context assembly
       let globalContext = '';
       try {
@@ -391,7 +451,7 @@ export function registerAIRoutes(app, supabase) {
         role: m.role === 'user' ? 'user' : 'assistant', content: m.content || '',
       }));
 
-      const systemContent = SYSTEM_PROMPT + (globalContext ? `\n\nBusiness context:\n${globalContext}` : '');
+      const systemContent = SYSTEM_PROMPT + buildContextInjection(ctx) + (globalContext ? `\n\nBusiness context:\n${globalContext}` : '');
       const aiMessages = [{ role: 'system', content: systemContent }, ...history];
 
       // 3. Call OpenAI — STRICT tool_choice='required'
@@ -432,6 +492,13 @@ export function registerAIRoutes(app, supabase) {
           console.log('🔧 [AI] Tool called:', toolName, 'args:', JSON.stringify(toolArgs));
           toolResult = await executeTool(toolName, toolArgs, supabase, organisationId);
           console.log('🔧 [AI] Tool result card_type:', toolResult.card_type);
+
+          // Update active context if search_customers resolved a single match
+          if (toolResult._resolved) {
+            ctx.customer_id = toolResult._resolved.customer_id;
+            ctx.customer_name = toolResult._resolved.customer_name;
+            console.log('🔧 [AI] Context updated — customer:', ctx.customer_name);
+          }
 
           // Deterministic card_type from tool, not from AI
           cardType = toolResult.card_type || TOOL_CARD_TYPE_MAP[toolName] || 'query_response';

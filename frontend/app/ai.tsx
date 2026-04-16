@@ -396,6 +396,13 @@ setSendingState('idle');
     if (item.role === 'user') return renderUserMessage(item);
 
     switch (item.card_type) {
+      case 'clarification': return (
+        <View style={styles.cardContainer}>
+          <Text style={{ fontSize: 14, color: '#333333', marginBottom: 8 }}>
+            {item.content || 'Which customer do you mean?'}
+          </Text>
+        </View>
+      );
       case 'daily_summary': return renderDailySummary(item);
       case 'payment_reminder': return renderPaymentReminder(item);
       case 'reorder_suggestion': return renderReorderSuggestion(item);
@@ -427,7 +434,8 @@ setSendingState('idle');
   return (
     <KeyboardAvoidingView
       style={styles.flex1}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+keyboardVerticalOffset={80}
     >
       {/* Header */}
       <SafeAreaView style={styles.safeTop} edges={['top']}>
@@ -450,8 +458,9 @@ setSendingState('idle');
           data={messages}
           renderItem={renderMessage}
           keyExtractor={item => item.id}
-          contentContainerStyle={styles.chatContent}
+          contentContainerStyle={[styles.chatContent, { paddingBottom: 120 }]}
           onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: false })}
+onLayout={() => flatListRef.current?.scrollToEnd({ animated: false })}
           showsVerticalScrollIndicator={false}
         />
 
