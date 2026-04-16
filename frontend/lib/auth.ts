@@ -39,13 +39,20 @@ export const authService = {
     return await SecureStore.getItemAsync(ORG_ID_KEY);
   },
 
-  // Clear all stored data
+  // Clear all stored data - sequential deletion with logging
   async clearSession() {
+    console.log('🗑️ [AUTH] Starting session clearance...');
     await SecureStore.deleteItemAsync(TOKEN_KEY);
+    console.log('🗑️ [AUTH] ✅ Access token deleted');
     await SecureStore.deleteItemAsync(REFRESH_TOKEN_KEY);
+    console.log('🗑️ [AUTH] ✅ Refresh token deleted');
     await SecureStore.deleteItemAsync(ORG_ID_KEY);
+    console.log('🗑️ [AUTH] ✅ Organisation ID deleted');
     await SecureStore.deleteItemAsync(USER_ID_KEY);
+    console.log('🗑️ [AUTH] ✅ User ID deleted');
     await SecureStore.deleteItemAsync(USER_ROLE_KEY);
+    console.log('🗑️ [AUTH] ✅ User role deleted');
+    console.log('✅ [AUTH] All session data cleared');
   },
 
   // Check if session is valid

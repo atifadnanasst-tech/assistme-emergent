@@ -181,10 +181,7 @@ export default function OTPScreen() {
 
       console.log('✅ [OTP] Supabase session set in memory');
 
-      // STEP 4: Small delay to ensure all state updates propagate
-      await new Promise(resolve => setTimeout(resolve, 100));
-
-      // STEP 5: Navigate to home (only after everything is ready)
+      // Navigate to home (proper await sequencing - no delay needed)
       console.log('🚀 [OTP] Navigating to /home...');
       router.replace('/home');
     } catch (err) {
