@@ -455,7 +455,12 @@ export default function AIScreen() {
 
       {/* Input bar */}
       <View style={styles.inputBar}>
-        <Ionicons name="sparkles" size={20} color="#075E54" style={styles.inputSparkle} />
+        <TouchableOpacity style={styles.inputIconDisabled}>
+          <Ionicons name="attach" size={22} color="#CCCCCC" />
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.inputIconDisabled}>
+          <Ionicons name="camera-outline" size={22} color="#CCCCCC" />
+        </TouchableOpacity>
         <TextInput
           style={styles.textInput}
           placeholder="Ask AI about your business..."
@@ -480,30 +485,6 @@ export default function AIScreen() {
           </View>
         )}
       </View>
-
-      {/* Bottom Navigation */}
-      <SafeAreaView style={styles.bottomNavSafe} edges={['bottom']}>
-        <View style={styles.bottomNav}>
-          <TouchableOpacity style={styles.navItem} onPress={() => router.push('/home')}>
-            <Ionicons name="chatbubbles-outline" size={24} color="#667781" />
-            <Text style={styles.navItemText}>Chats</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.navItem} onPress={() => router.push('/products')}>
-            <Ionicons name="cube-outline" size={24} color="#667781" />
-            <Text style={styles.navItemText}>Products</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.navItem}>
-            <Ionicons name="settings-outline" size={24} color="#667781" />
-            <Text style={styles.navItemText}>Tools</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.navItemActive}>
-            <View style={styles.navItemActivePill}>
-              <Ionicons name="sparkles" size={24} color="#FFFFFF" />
-              <Text style={styles.navItemTextActive}>AI</Text>
-            </View>
-          </TouchableOpacity>
-        </View>
-      </SafeAreaView>
     </KeyboardAvoidingView>
   );
 }
@@ -681,7 +662,9 @@ const styles = StyleSheet.create({
     borderTopColor: '#F0F0F0',
     gap: 8,
   },
-  inputSparkle: { marginRight: 4 },
+  inputIconDisabled: {
+    padding: 6,
+  },
   textInput: {
     flex: 1,
     fontSize: 15,
@@ -705,29 +688,4 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-
-  // ── Bottom nav ─────────────────────────────────────────
-  bottomNavSafe: { backgroundColor: '#FFFFFF' },
-  bottomNav: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    paddingVertical: 8,
-    borderTopWidth: 1,
-    borderTopColor: '#F0F0F0',
-  },
-  navItem: { alignItems: 'center', paddingVertical: 8, paddingHorizontal: 16 },
-  navItemText: { fontSize: 12, color: '#667781', marginTop: 4 },
-  navItemActive: { alignItems: 'center' },
-  navItemActivePill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#075E54',
-    borderRadius: 20,
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-    gap: 6,
-  },
-  navItemTextActive: { fontSize: 12, color: '#FFFFFF', fontWeight: '600' },
 });

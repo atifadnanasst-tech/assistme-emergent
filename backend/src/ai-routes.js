@@ -1,9 +1,10 @@
 // AI Routes for AssistMe — Flow 2B
 // Backend-controlled AI: DB queries first, AI formats results
+// STRICT: tool_choice='required' for all business queries
 import OpenAI from 'openai';
 
 // ── Rate limiter (in-memory, per org) ────────────────────────
-const rateLimitMap = new Map(); // orgId → { count, windowStart }
+const rateLimitMap = new Map();
 const RATE_LIMIT_MAX = 10;
 const RATE_LIMIT_WINDOW_MS = 60_000;
 
@@ -24,49 +25,48 @@ function getOpenAI() {
   if (openai) return openai;
   const key = process.env.EMERGENT_LLM_KEY || process.env.OPENAI_API_KEY;
   const baseURL = process.env.EMERGENT_LLM_BASE_URL || 'https://api.openai.com/v1';
-  if (!key) {
-    console.warn('⚠️  No LLM key configured');
-    return null;
-  }
+  if (!key) { console.warn('⚠️  No LLM key configured'); return null; }
   openai = new OpenAI({ apiKey: key, baseURL });
   return openai;
 }
 
+// ── Tool → card_type mapping (deterministic, not AI-decided) ─
+const TOOL_CARD_TYPE_MAP = {
+  get_daily_summary: 'daily_summary',
+  get_overdue_payments: 'payment_reminder',
+  search_customers: 'query_response',
+  get_collection_insights: 'collection_insight',
+  get_bank_summary: 'bank_summary',
+  get_reorder_suggestions: 'reorder_suggestion',
+};
+
 // ── System prompt ────────────────────────────────────────────
 const SYSTEM_PROMPT = `You are a business data assistant for an Indian MSME trader.
-You have access to these tools to query the owner's live business database:
-- get_daily_summary: Get today's business summary (pending payments, deliveries, quotes)
-- get_overdue_payments: Get list of overdue invoices with customer details
-- search_customers: Search customers by name
-- get_collection_insights: Get collection efficiency data
-- get_bank_summary: Get bank account balances
-- get_reorder_suggestions: Get products that need reordering
+You MUST use tools to answer any business question. NEVER answer from memory.
 
-When the owner asks a question:
-1. Use the appropriate tool to fetch real data
-2. Format your response using ONLY the data returned by the tool
-3. Output ONLY this JSON — no other text:
-{
-  "response_text": "plain language answer using ONLY the data provided",
-  "card_type": "query_response",
-  "card_data": {}
-}
+Available tools:
+- get_daily_summary: business summary (payments, deliveries, quotes)
+- get_overdue_payments: overdue invoices with customer details
+- search_customers: search customers by name
+- get_collection_insights: collection efficiency data
+- get_bank_summary: bank account balances
+- get_reorder_suggestions: low-stock products
 
-HARD RULES:
-- Never invent amounts, names, or counts
-- Only use numbers from the tool results
-- If no data is available, say so honestly
-- Always respond in JSON format with response_text, card_type, card_data
-- For financial queries, ALWAYS use a tool — never guess
-- Amounts are in INR (₹)`;
+RULES:
+- ALWAYS call a tool first. Never guess financial data.
+- After receiving tool results, write a plain-language summary using ONLY the data returned.
+- Amounts are in INR (₹). Format Indian style: ₹1,20,000.
+- Never invent numbers, names, or counts.
+- If tool returns empty data, say "No records found" — do not fabricate.
+- Keep responses concise and actionable.`;
 
-// ── Tool definitions for function calling ────────────────────
+// ── Tool definitions ─────────────────────────────────────────
 const TOOLS = [
   {
     type: 'function',
     function: {
       name: 'get_daily_summary',
-      description: 'Get today\'s business summary including pending payments, deliveries due, and expiring quotes',
+      description: 'Get today\'s business summary: pending payments total, deliveries due, expiring quotes. Call this for "summary", "how is business", "today\'s status" etc.',
       parameters: { type: 'object', properties: {}, required: [] },
     },
   },
@@ -74,7 +74,7 @@ const TOOLS = [
     type: 'function',
     function: {
       name: 'get_overdue_payments',
-      description: 'Get list of overdue invoices with customer names, amounts, and days overdue',
+      description: 'Get ALL overdue invoices with customer name, amount, days overdue. Call this for "overdue", "pending payments", "who owes me", "payment reminders" etc.',
       parameters: { type: 'object', properties: {}, required: [] },
     },
   },
@@ -82,12 +82,10 @@ const TOOLS = [
     type: 'function',
     function: {
       name: 'search_customers',
-      description: 'Search customers by name. Use when the owner asks about a specific customer.',
+      description: 'Search customers by name. Call this when owner mentions a specific customer name.',
       parameters: {
         type: 'object',
-        properties: {
-          query: { type: 'string', description: 'Customer name or partial name to search for' },
-        },
+        properties: { query: { type: 'string', description: 'Customer name or partial name' } },
         required: ['query'],
       },
     },
@@ -96,7 +94,7 @@ const TOOLS = [
     type: 'function',
     function: {
       name: 'get_collection_insights',
-      description: 'Get collection efficiency data — how much has been recovered and efficiency trends',
+      description: 'Get collection efficiency: total outstanding, collections this week. Call for "collections", "recovery", "efficiency" etc.',
       parameters: { type: 'object', properties: {}, required: [] },
     },
   },
@@ -104,7 +102,7 @@ const TOOLS = [
     type: 'function',
     function: {
       name: 'get_bank_summary',
-      description: 'Get bank account balances and total cash position',
+      description: 'Get bank account balances and total cash. Call for "bank", "balance", "cash position" etc.',
       parameters: { type: 'object', properties: {}, required: [] },
     },
   },
@@ -112,20 +110,18 @@ const TOOLS = [
     type: 'function',
     function: {
       name: 'get_reorder_suggestions',
-      description: 'Get products that are low on stock and need reordering',
+      description: 'Get products low on stock that need reordering. Call for "reorder", "stock", "inventory" etc.',
       parameters: { type: 'object', properties: {}, required: [] },
     },
   },
 ];
 
-// ── Tool execution functions ─────────────────────────────────
+// ── Tool execution ───────────────────────────────────────────
 async function executeTool(toolName, args, supabase, organisationId) {
   try {
     switch (toolName) {
       case 'get_daily_summary': {
-        const todayIST = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-
-        // Pending payments
+        // Pending payments = all customers with outstanding > 0
         const { data: customers } = await supabase
           .from('customers')
           .select('id, name, outstanding_balance')
@@ -133,16 +129,15 @@ async function executeTool(toolName, args, supabase, organisationId) {
           .gt('outstanding_balance', 0);
         const pendingAmount = (customers || []).reduce((s, c) => s + (c.outstanding_balance || 0), 0);
 
-        // Deliveries due (invoices created today with status sent)
-        const { count: deliveryCount } = await supabase
+        // Overdue invoices count
+        const { count: overdueCount } = await supabase
           .from('invoices')
           .select('*', { count: 'exact', head: true })
           .eq('organisation_id', organisationId)
-          .eq('status', 'sent')
-          .gte('created_at', todayIST + 'T00:00:00+05:30')
-          .lte('created_at', todayIST + 'T23:59:59+05:30');
+          .lt('due_date', new Date().toISOString())
+          .neq('status', 'paid');
 
-        // Expiring quotes
+        // Draft quotes
         const { count: quoteCount } = await supabase
           .from('invoices')
           .select('*', { count: 'exact', head: true })
@@ -150,46 +145,69 @@ async function executeTool(toolName, args, supabase, organisationId) {
           .eq('status', 'draft');
 
         return {
-          pending_amount: pendingAmount,
-          pending_customers: (customers || []).length,
-          delivery_count: deliveryCount || 0,
-          quote_count: quoteCount || 0,
-          date: todayIST,
+          card_type: 'daily_summary',
+          data: {
+            pending_amount: pendingAmount,
+            pending_customers: (customers || []).length,
+            overdue_count: overdueCount || 0,
+            delivery_count: overdueCount || 0,
+            quote_count: quoteCount || 0,
+          },
         };
       }
 
       case 'get_overdue_payments': {
         const { data: invoices } = await supabase
           .from('invoices')
-          .select('customer_id, total_amount, due_date, status')
+          .select('id, customer_id, total_amount, due_date, status')
           .eq('organisation_id', organisationId)
           .lt('due_date', new Date().toISOString())
-          .neq('status', 'paid');
+          .neq('status', 'paid')
+          .order('due_date', { ascending: true });
 
-        if (!invoices || invoices.length === 0) return { overdue: [] };
+        if (!invoices || invoices.length === 0) {
+          return { card_type: 'payment_reminder', data: { customers: [], total: 0 } };
+        }
 
         const customerIds = [...new Set(invoices.map(i => i.customer_id))];
-        const { data: custs } = await supabase
-          .from('customers')
-          .select('id, name, phone')
-          .in('id', customerIds);
-
+        let custs = [];
+        if (customerIds.length > 0) {
+          const { data: custData } = await supabase
+            .from('customers')
+            .select('id, name, phone, outstanding_balance')
+            .in('id', customerIds);
+          custs = custData || [];
+        }
         const custMap = {};
-        (custs || []).forEach(c => { custMap[c.id] = c; });
+        custs.forEach(c => { custMap[c.id] = c; });
 
-        const overdue = invoices.map(inv => {
-          const cust = custMap[inv.customer_id] || {};
-          const daysOverdue = Math.floor((Date.now() - new Date(inv.due_date).getTime()) / 86400000);
-          return {
-            customer_name: cust.name || 'Unknown',
-            customer_id: inv.customer_id,
-            phone: cust.phone || null,
-            amount: inv.total_amount,
-            days_overdue: daysOverdue,
-          };
+        // Aggregate by customer
+        const byCustomer = {};
+        invoices.forEach(inv => {
+          if (!byCustomer[inv.customer_id]) {
+            const cust = custMap[inv.customer_id] || {};
+            byCustomer[inv.customer_id] = {
+              id: inv.customer_id,
+              name: cust.name || 'Unknown',
+              phone: cust.phone || null,
+              amount: 0,
+              days_overdue: 0,
+            };
+          }
+          byCustomer[inv.customer_id].amount += inv.total_amount || 0;
+          const days = Math.floor((Date.now() - new Date(inv.due_date).getTime()) / 86400000);
+          if (days > byCustomer[inv.customer_id].days_overdue) {
+            byCustomer[inv.customer_id].days_overdue = days;
+          }
         });
 
-        return { overdue };
+        const customerList = Object.values(byCustomer);
+        const total = customerList.reduce((s, c) => s + c.amount, 0);
+
+        return {
+          card_type: 'payment_reminder',
+          data: { customers: customerList, total, invoice_count: invoices.length },
+        };
       }
 
       case 'search_customers': {
@@ -200,7 +218,7 @@ async function executeTool(toolName, args, supabase, organisationId) {
           .eq('organisation_id', organisationId)
           .ilike('name', `%${query}%`)
           .limit(10);
-        return { customers: results || [] };
+        return { card_type: 'query_response', data: { customers: results || [] } };
       }
 
       case 'get_collection_insights': {
@@ -209,13 +227,14 @@ async function executeTool(toolName, args, supabase, organisationId) {
           .select('outstanding_balance')
           .eq('organisation_id', organisationId);
         const totalOutstanding = (customers || []).reduce((s, c) => s + (c.outstanding_balance || 0), 0);
-
-        // No payments table — collected = 0 per spec
         return {
-          total_outstanding: totalOutstanding,
-          collected_today: 0,
-          collected_this_week: 0,
-          customer_count: (customers || []).length,
+          card_type: 'collection_insight',
+          data: {
+            total_outstanding: totalOutstanding,
+            collected_today: 0,
+            collected_this_week: 0,
+            customer_count: (customers || []).length,
+          },
         };
       }
 
@@ -225,7 +244,10 @@ async function executeTool(toolName, args, supabase, organisationId) {
           .select('id, name, current_balance, bank_name')
           .eq('organisation_id', organisationId);
         const total = (accounts || []).reduce((s, a) => s + (a.current_balance || 0), 0);
-        return { accounts: accounts || [], total };
+        return {
+          card_type: 'bank_summary',
+          data: { accounts: (accounts || []).map(a => ({ name: a.name || a.bank_name, balance: a.current_balance || 0 })), total },
+        };
       }
 
       case 'get_reorder_suggestions': {
@@ -233,85 +255,55 @@ async function executeTool(toolName, args, supabase, organisationId) {
           .from('inventory')
           .select('product_id, quantity, reorder_point, reorder_qty')
           .eq('organisation_id', organisationId);
-
         const lowStock = (inventory || []).filter(i => i.quantity <= i.reorder_point);
-        if (lowStock.length === 0) return { products: [] };
+        if (lowStock.length === 0) return { card_type: 'reorder_suggestion', data: { products: [] } };
 
         const productIds = lowStock.map(i => i.product_id);
-        const { data: products } = await supabase
-          .from('products')
-          .select('id, name')
-          .in('id', productIds);
-
+        let products = [];
+        if (productIds.length > 0) {
+          const { data: prodData } = await supabase.from('products').select('id, name').in('id', productIds);
+          products = prodData || [];
+        }
         const prodMap = {};
-        (products || []).forEach(p => { prodMap[p.id] = p.name; });
+        products.forEach(p => { prodMap[p.id] = p.name; });
 
         return {
-          products: lowStock.map(i => ({
-            product_name: prodMap[i.product_id] || 'Unknown',
-            product_id: i.product_id,
-            current_stock: i.quantity,
-            reorder_point: i.reorder_point,
-            suggested_qty: i.reorder_qty,
-          })),
+          card_type: 'reorder_suggestion',
+          data: {
+            products: lowStock.map(i => ({
+              product_name: prodMap[i.product_id] || 'Unknown',
+              product_id: i.product_id,
+              current_stock: i.quantity,
+              reorder_point: i.reorder_point,
+              suggested_qty: i.reorder_qty,
+            })),
+          },
         };
       }
 
       default:
-        return { error: `Unknown tool: ${toolName}` };
+        return { card_type: 'query_response', data: { error: `Unknown tool: ${toolName}` } };
     }
   } catch (err) {
     console.error(`Tool ${toolName} failed:`, err.message);
-    return { error: err.message };
+    return { card_type: 'query_response', data: { error: err.message } };
   }
-}
-
-// ── Allowed card types ───────────────────────────────────────
-const ALLOWED_CARD_TYPES = [
-  'daily_summary', 'payment_reminder', 'reorder_suggestion',
-  'bank_summary', 'collection_insight', 'query_response',
-];
-
-// ── Parse AI response safely ─────────────────────────────────
-function parseAIResponse(text) {
-  let parsed;
-  try {
-    // Try to extract JSON from the response
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : null;
-  } catch {
-    parsed = null;
-  }
-
-  const responseText = parsed?.response_text || text || 'I could not process that.';
-  let cardType = parsed?.card_type || 'query_response';
-  if (!ALLOWED_CARD_TYPES.includes(cardType)) cardType = 'query_response';
-  const cardData = (parsed?.card_data && typeof parsed.card_data === 'object') ? parsed.card_data : {};
-
-  return { responseText, cardType, cardData };
 }
 
 // ── Register AI routes ───────────────────────────────────────
 export function registerAIRoutes(app, supabase) {
 
-  // ─── Auth helper ─────────────────────────────────────────
   async function authenticate(c) {
     const authHeader = c.req.header('Authorization');
     if (!authHeader || !authHeader.startsWith('Bearer ')) return null;
     const token = authHeader.split(' ')[1];
     if (!supabase) return null;
-
     const { data: userData, error } = await supabase.auth.getUser(token);
     if (error || !userData.user) return null;
-
     const authId = userData.user.id;
     const { data: userRecord } = await supabase
-      .from('users')
-      .select('id, organisation_id')
-      .eq('auth_id', authId)
-      .single();
+      .from('users').select('id, organisation_id').eq('auth_id', authId).single();
     if (!userRecord) return null;
-
     return { userId: userRecord.id, organisationId: userRecord.organisation_id };
   }
 
@@ -321,68 +313,37 @@ export function registerAIRoutes(app, supabase) {
       const auth = await authenticate(c);
       if (!auth) return c.json({ error: 'unauthorized' }, 401);
 
-      const { organisationId } = auth;
-
-      // Find global AI conversation (entity_type IS NULL)
       let { data: conversation } = await supabase
-        .from('conversations')
-        .select('id')
-        .eq('organisation_id', organisationId)
-        .is('entity_type', null)
-        .eq('status', 'active')
-        .maybeSingle();
+        .from('conversations').select('id')
+        .eq('organisation_id', auth.organisationId)
+        .is('entity_type', null).eq('status', 'active').maybeSingle();
 
-      // Create if not found
       if (!conversation) {
         const { data: newConv, error: createErr } = await supabase
-          .from('conversations')
-          .insert({
-            organisation_id: organisationId,
-            user_id: auth.userId,
-            entity_type: null,
-            model: 'gpt-4o-mini',
-            status: 'active',
-          })
-          .select('id')
-          .single();
-        if (createErr) {
-          console.error('Failed to create AI conversation:', createErr);
-          return c.json({ error: 'server_error' }, 500);
-        }
+          .from('conversations').insert({
+            organisation_id: auth.organisationId, user_id: auth.userId,
+            entity_type: null, model: 'gpt-4o-mini', status: 'active',
+          }).select('id').single();
+        if (createErr) return c.json({ error: 'server_error' }, 500);
         conversation = newConv;
       }
 
-      // Fetch messages (latest 50, chronological)
-      const { data: messages, error: msgError } = await supabase
-        .from('messages')
-        .select('id, role, content, metadata, created_at')
+      const { data: messages } = await supabase
+        .from('messages').select('id, role, content, metadata, created_at')
         .eq('conversation_id', conversation.id)
-        .order('created_at', { ascending: true })
-        .limit(50);
+        .order('created_at', { ascending: true }).limit(50);
 
-      if (msgError) {
-        console.error('Messages fetch error:', msgError);
-        return c.json({ error: 'server_error' }, 500);
-      }
-
-      // Shape messages for frontend
       const shaped = (messages || []).map(m => ({
-        id: m.id,
-        role: m.role,
-        content: m.content,
+        id: m.id, role: m.role, content: m.content,
         card_type: m.metadata?.card_type || null,
         card_data: m.metadata?.card_data || {},
         created_at: m.created_at,
       }));
 
-      return c.json({
-        conversation_id: conversation.id,
-        messages: shaped,
-      });
-
+      return c.json({ conversation_id: conversation.id, messages: shaped });
     } catch (error) {
       console.error('AI conversation error:', error);
-      return c.json({ error: 'server_error', message: error.message }, 500);
+      return c.json({ error: 'server_error' }, 500);
     }
   });
 
@@ -392,228 +353,170 @@ export function registerAIRoutes(app, supabase) {
     try {
       const auth = await authenticate(c);
       if (!auth) return c.json({ error: 'unauthorized' }, 401);
-
       const { userId, organisationId } = auth;
 
-      // Rate limit
-      if (!checkRateLimit(organisationId)) {
-        return c.json({ error: 'rate_limited' }, 429);
-      }
+      if (!checkRateLimit(organisationId)) return c.json({ error: 'rate_limited' }, 429);
 
       const body = await c.req.json();
       const userMessage = body.message?.trim();
       const conversationId = body.conversation_id;
+      if (!userMessage) return c.json({ error: 'empty_message' }, 400);
+      if (userMessage.length > 2000) return c.json({ error: 'message_too_long' }, 400);
+      if (!conversationId) return c.json({ error: 'missing_conversation_id' }, 400);
 
-      if (!userMessage || userMessage.length === 0) {
-        return c.json({ error: 'empty_message' }, 400);
-      }
-      if (userMessage.length > 2000) {
-        return c.json({ error: 'message_too_long' }, 400);
-      }
-      if (!conversationId) {
-        return c.json({ error: 'missing_conversation_id' }, 400);
-      }
+      // 1. Save user message
+      const { error: saveErr } = await supabase.from('messages').insert({
+        organisation_id: organisationId, conversation_id: conversationId,
+        role: 'user', content: userMessage, tokens_input: 0, tokens_output: 0,
+      });
+      if (saveErr) return c.json({ error: 'server_error' }, 500);
 
-      // 1. Save user message to DB
-      const { data: savedUserMsg, error: saveErr } = await supabase
-        .from('messages')
-        .insert({
-          organisation_id: organisationId,
-          conversation_id: conversationId,
-          role: 'user',
-          content: userMessage,
-          tokens_input: 0,
-          tokens_output: 0,
-        })
-        .select('id')
-        .single();
-
-      if (saveErr) {
-        console.error('Failed to save user message:', saveErr);
-        return c.json({ error: 'server_error' }, 500);
-      }
-
-      // 2. Assemble context — 3 layers
-      // Layer 1: Global ai_context
+      // 2. Context assembly
       let globalContext = '';
       try {
         const { data: ctxRows } = await supabase
-          .from('ai_context')
-          .select('context_key, context_value')
-          .eq('organisation_id', organisationId)
-          .eq('scope', 'global')
-          .eq('is_active', true)
-          .is('deleted_at', null);
-        if (ctxRows && ctxRows.length > 0) {
-          globalContext = ctxRows.map(r => {
-            try { return `${r.context_key}: ${r.context_value}`; }
-            catch { return ''; }
-          }).filter(Boolean).join('\n');
+          .from('ai_context').select('context_key, context_value')
+          .eq('organisation_id', organisationId).eq('scope', 'global')
+          .eq('is_active', true).is('deleted_at', null);
+        if (ctxRows?.length > 0) {
+          globalContext = ctxRows.map(r => `${r.context_key}: ${r.context_value}`).join('\n');
         }
-      } catch (err) {
-        console.warn('ai_context fetch failed:', err.message);
-      }
+      } catch {}
 
-      // Layer 3: Last 15 messages from conversation
       const { data: recentMsgs } = await supabase
-        .from('messages')
-        .select('role, content')
+        .from('messages').select('role, content')
         .eq('conversation_id', conversationId)
-        .order('created_at', { ascending: false })
-        .limit(15);
-
+        .order('created_at', { ascending: false }).limit(15);
       const history = (recentMsgs || []).reverse().map(m => ({
-        role: m.role === 'user' ? 'user' : 'assistant',
-        content: m.content || '',
+        role: m.role === 'user' ? 'user' : 'assistant', content: m.content || '',
       }));
 
-      // 3. Build OpenAI messages
-      const systemContent = SYSTEM_PROMPT +
-        (globalContext ? `\n\nBusiness context:\n${globalContext}` : '');
+      const systemContent = SYSTEM_PROMPT + (globalContext ? `\n\nBusiness context:\n${globalContext}` : '');
+      const aiMessages = [{ role: 'system', content: systemContent }, ...history];
 
-      const aiMessages = [
-        { role: 'system', content: systemContent },
-        ...history,
-      ];
-
-      // 4. Call OpenAI with function calling
+      // 3. Call OpenAI — STRICT tool_choice='required'
       const client = getOpenAI();
-      if (!client) {
-        return c.json({ error: 'ai_error', message: 'AI not configured' }, 500);
-      }
+      if (!client) return c.json({ error: 'ai_error', message: 'AI not configured' }, 500);
+
+      let tokensInput = 0, tokensOutput = 0;
+      let toolName = null;
+      let toolResult = null;
+      let responseText = '';
+      let cardType = 'query_response';
+      let cardData = {};
 
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 8000);
 
-      let completion;
-      let tokensInput = 0;
-      let tokensOutput = 0;
-
       try {
-        completion = await client.chat.completions.create({
+        const completion = await client.chat.completions.create({
           model: 'gpt-4o-mini',
           messages: aiMessages,
           tools: TOOLS,
-          tool_choice: 'auto',
+          tool_choice: 'required',
           temperature: 0.3,
         }, { signal: controller.signal });
         clearTimeout(timeoutId);
+        tokensInput += completion.usage?.prompt_tokens || 0;
+        tokensOutput += completion.usage?.completion_tokens || 0;
 
-        tokensInput = completion.usage?.prompt_tokens || 0;
-        tokensOutput = completion.usage?.completion_tokens || 0;
+        const msg = completion.choices[0].message;
+
+        if (msg.tool_calls && msg.tool_calls.length > 0) {
+          // Execute the first tool call
+          const tc = msg.tool_calls[0];
+          toolName = tc.function.name;
+          let toolArgs = {};
+          try { toolArgs = JSON.parse(tc.function.arguments || '{}'); } catch {}
+
+          console.log('🔧 [AI] Tool called:', toolName, 'args:', JSON.stringify(toolArgs));
+          toolResult = await executeTool(toolName, toolArgs, supabase, organisationId);
+          console.log('🔧 [AI] Tool result card_type:', toolResult.card_type);
+
+          // Deterministic card_type from tool, not from AI
+          cardType = toolResult.card_type || TOOL_CARD_TYPE_MAP[toolName] || 'query_response';
+          cardData = toolResult.data || {};
+
+          // Second call — AI formats the data into plain language
+          const formatMessages = [
+            ...aiMessages,
+            msg,
+            { role: 'tool', tool_call_id: tc.id, content: JSON.stringify(toolResult.data) },
+          ];
+
+          const controller2 = new AbortController();
+          const timeoutId2 = setTimeout(() => controller2.abort(), 8000);
+          try {
+            const comp2 = await client.chat.completions.create({
+              model: 'gpt-4o-mini',
+              messages: formatMessages,
+              temperature: 0.3,
+            }, { signal: controller2.signal });
+            clearTimeout(timeoutId2);
+            tokensInput += comp2.usage?.prompt_tokens || 0;
+            tokensOutput += comp2.usage?.completion_tokens || 0;
+            responseText = comp2.choices[0].message.content || '';
+          } catch {
+            clearTimeout(timeoutId2);
+            responseText = `Here are the results from ${toolName}.`;
+          }
+
+          // Handle multiple tool calls if present
+          for (let i = 1; i < msg.tool_calls.length; i++) {
+            const extraTc = msg.tool_calls[i];
+            const extraName = extraTc.function.name;
+            let extraArgs = {};
+            try { extraArgs = JSON.parse(extraTc.function.arguments || '{}'); } catch {}
+            try { await executeTool(extraName, extraArgs, supabase, organisationId); } catch {}
+          }
+
+        } else {
+          // Model didn't call a tool despite required — use content as-is
+          responseText = msg.content || 'I could not process that request.';
+        }
       } catch (aiErr) {
         clearTimeout(timeoutId);
         console.error('OpenAI call failed:', aiErr.message);
-
-        // Log failure
         try {
           await supabase.from('ai_usage_log').insert({
-            organisation_id: organisationId,
-            user_id: userId,
-            conversation_id: conversationId,
-            model: 'gpt-4o-mini',
-            operation: 'chat',
-            tokens_input: 0,
-            tokens_output: 0,
-            cost_usd: 0,
-            duration_ms: Date.now() - startTime,
-            status: 'failed',
-            error_message: aiErr.message,
+            organisation_id: organisationId, user_id: userId, conversation_id: conversationId,
+            model: 'gpt-4o-mini', operation: 'chat', tokens_input: 0, tokens_output: 0,
+            cost_usd: 0, duration_ms: Date.now() - startTime, status: 'failed', error_message: aiErr.message,
           });
         } catch {}
-
         return c.json({ error: 'ai_error', message: 'AI temporarily unavailable' }, 500);
       }
 
-      // 5. Handle tool calls if any
-      let assistantMessage = completion.choices[0].message;
-      let finalContent = assistantMessage.content || '';
-
-      if (assistantMessage.tool_calls && assistantMessage.tool_calls.length > 0) {
-        // Execute each tool
-        const toolMessages = [
-          ...aiMessages,
-          assistantMessage,
-        ];
-
-        for (const toolCall of assistantMessage.tool_calls) {
-          const toolName = toolCall.function.name;
-          let toolArgs = {};
-          try { toolArgs = JSON.parse(toolCall.function.arguments || '{}'); } catch {}
-
-          const result = await executeTool(toolName, toolArgs, supabase, organisationId);
-
-          toolMessages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: JSON.stringify(result),
-          });
+      // Clean up response text — strip JSON wrapper if AI returned JSON
+      try {
+        const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          const parsed = JSON.parse(jsonMatch[0]);
+          if (parsed.response_text) responseText = parsed.response_text;
         }
+      } catch {}
 
-        // Second call — AI formats the tool results
-        const controller2 = new AbortController();
-        const timeoutId2 = setTimeout(() => controller2.abort(), 8000);
+      // 4. Save assistant message with deterministic card_type
+      const { data: savedMsg } = await supabase.from('messages').insert({
+        organisation_id: organisationId, conversation_id: conversationId,
+        role: 'assistant', content: responseText,
+        metadata: { card_type: cardType, card_data: cardData },
+        tokens_input: tokensInput, tokens_output: tokensOutput,
+      }).select('id').single();
 
-        try {
-          const completion2 = await client.chat.completions.create({
-            model: 'gpt-4o-mini',
-            messages: toolMessages,
-            temperature: 0.3,
-          }, { signal: controller2.signal });
-          clearTimeout(timeoutId2);
-
-          tokensInput += completion2.usage?.prompt_tokens || 0;
-          tokensOutput += completion2.usage?.completion_tokens || 0;
-          finalContent = completion2.choices[0].message.content || '';
-        } catch (err2) {
-          clearTimeout(timeoutId2);
-          console.error('OpenAI formatting call failed:', err2.message);
-          finalContent = '{"response_text":"I retrieved the data but couldn\'t format it. Please try again.","card_type":"query_response","card_data":{}}';
-        }
-      }
-
-      // 6. Parse AI response
-      const { responseText, cardType, cardData } = parseAIResponse(finalContent);
-
-      // 7. Save assistant message to DB
-      const { data: savedAssistantMsg } = await supabase
-        .from('messages')
-        .insert({
-          organisation_id: organisationId,
-          conversation_id: conversationId,
-          role: 'assistant',
-          content: responseText,
-          metadata: { card_type: cardType, card_data: cardData },
-          tokens_input: tokensInput,
-          tokens_output: tokensOutput,
-        })
-        .select('id')
-        .single();
-
-      // 8. Write ai_usage_log
+      // 5. Write ai_usage_log
       const durationMs = Date.now() - startTime;
       const costUsd = (tokensInput * 0.00015 / 1000) + (tokensOutput * 0.00060 / 1000);
-
       try {
         await supabase.from('ai_usage_log').insert({
-          organisation_id: organisationId,
-          user_id: userId,
-          conversation_id: conversationId,
-          model: 'gpt-4o-mini',
-          operation: 'chat',
-          tokens_input: tokensInput,
-          tokens_output: tokensOutput,
-          cost_usd: costUsd,
-          duration_ms: durationMs,
-          status: 'success',
+          organisation_id: organisationId, user_id: userId, conversation_id: conversationId,
+          model: 'gpt-4o-mini', operation: 'chat', tokens_input: tokensInput, tokens_output: tokensOutput,
+          cost_usd: costUsd, duration_ms: durationMs, status: 'success',
         });
-      } catch (logErr) {
-        console.warn('ai_usage_log write failed:', logErr.message);
-      }
+      } catch {}
 
-      // 9. Return response
       return c.json({
-        message_id: savedAssistantMsg?.id || null,
+        message_id: savedMsg?.id || null,
         response_text: responseText,
         card_type: cardType,
         card_data: cardData,
@@ -631,48 +534,29 @@ export function registerAIRoutes(app, supabase) {
     try {
       const auth = await authenticate(c);
       if (!auth) return c.json({ error: 'unauthorized' }, 401);
-
       const body = await c.req.json();
       const customerIds = body.customer_ids;
-
-      if (!customerIds || !Array.isArray(customerIds) || customerIds.length === 0) {
+      if (!customerIds || !Array.isArray(customerIds) || customerIds.length === 0)
         return c.json({ error: 'invalid_request' }, 400);
-      }
 
       const { data: customers } = await supabase
-        .from('customers')
-        .select('id, name, phone, outstanding_balance')
-        .in('id', customerIds);
-
-      if (!customers || customers.length === 0) {
-        return c.json({ sent: 0, failed: 0, whatsapp_urls: [] });
-      }
+        .from('customers').select('id, name, phone, outstanding_balance').in('id', customerIds);
+      if (!customers?.length) return c.json({ sent: 0, failed: 0, whatsapp_urls: [] });
 
       const whatsappUrls = [];
-      let sent = 0;
-      let failed = 0;
-
+      let sent = 0, failed = 0;
       for (const cust of customers) {
         if (cust.phone) {
           const phone = cust.phone.replace(/[^0-9]/g, '');
           const text = encodeURIComponent(
             `Hi ${cust.name}, this is a friendly reminder about your outstanding balance of ₹${(cust.outstanding_balance || 0).toLocaleString('en-IN')}. Please let us know if you have any questions.`
           );
-          whatsappUrls.push({
-            customer_id: cust.id,
-            customer_name: cust.name,
-            url: `https://wa.me/${phone}?text=${text}`,
-          });
+          whatsappUrls.push({ customer_id: cust.id, customer_name: cust.name, url: `https://wa.me/${phone}?text=${text}` });
           sent++;
-        } else {
-          failed++;
-        }
+        } else { failed++; }
       }
-
       return c.json({ sent, failed, whatsapp_urls: whatsappUrls });
-
     } catch (error) {
-      console.error('Send bulk reminders error:', error);
       return c.json({ error: 'server_error' }, 500);
     }
   });
@@ -682,24 +566,15 @@ export function registerAIRoutes(app, supabase) {
     try {
       const auth = await authenticate(c);
       if (!auth) return c.json({ error: 'unauthorized' }, 401);
-
       const { data: accounts } = await supabase
-        .from('bank_accounts')
-        .select('id, name, current_balance, bank_name')
+        .from('bank_accounts').select('id, name, current_balance, bank_name')
         .eq('organisation_id', auth.organisationId);
-
       const total = (accounts || []).reduce((s, a) => s + (a.current_balance || 0), 0);
-
       return c.json({
-        accounts: (accounts || []).map(a => ({
-          name: a.name || a.bank_name,
-          balance: a.current_balance || 0,
-        })),
+        accounts: (accounts || []).map(a => ({ name: a.name || a.bank_name, balance: a.current_balance || 0 })),
         total,
       });
-
     } catch (error) {
-      console.error('Bank summary error:', error);
       return c.json({ error: 'server_error' }, 500);
     }
   });
