@@ -1612,6 +1612,289 @@ app.delete('/api/chat/:customer_id/spark/:draft_id', async (c) => {
 });
 
 
+// ══════════════════════════════════════════════════════════════
+// FLOW 3B — CUSTOMER REPORT ROUTES
+// ══════════════════════════════════════════════════════════════
+
+// ─── GET /api/customer/:customer_id/report ──────────────────
+app.get('/api/customer/:customer_id/report', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+    const customerId = c.req.param('customer_id');
+
+    // Q1: Customer
+    const customer = await validateCustomer(customerId, organisationId);
+    if (!customer) return c.json({ error: 'customer_not_found' }, 404);
+
+    const nameParts = (customer.name || '').split(' ').filter(Boolean);
+    const initials = nameParts.map(p => p[0]).join('').toUpperCase().slice(0, 2);
+    const avatarColor = customer.custom_fields?.avatar_color || '#075E54';
+    const healthScore = customer.custom_fields?.health_score ?? null;
+    let healthLabel = 'Moderate';
+    if (healthScore !== null) {
+      if (healthScore >= 80) healthLabel = 'Good';
+      else if (healthScore < 40) healthLabel = 'At Risk';
+    }
+
+    // Q2: All invoices for this customer
+    const { data: invoices } = await supabase
+      .from('invoices')
+      .select('id, total_amount, amount_paid, status, created_at, updated_at, due_date')
+      .eq('organisation_id', organisationId)
+      .eq('customer_id', customerId)
+      .order('created_at', { ascending: true });
+
+    const allInvoices = invoices || [];
+    const paidInvoices = allInvoices.filter(i => i.status === 'paid');
+    const now = new Date();
+    const twelveMonthsAgo = new Date(now.getFullYear() - 1, now.getMonth(), now.getDate());
+    const invoices12mo = allInvoices.filter(i => new Date(i.created_at) > twelveMonthsAgo);
+
+    // Computed summary
+    const lifetimeValue = paidInvoices.reduce((s, i) => s + (i.total_amount || 0), 0);
+    const totalOrders12mo = invoices12mo.length;
+    const avgOrderValue = allInvoices.length > 0
+      ? allInvoices.reduce((s, i) => s + (i.total_amount || 0), 0) / allInvoices.length : null;
+
+    // Key metrics
+    const totalOrders = allInvoices.length;
+
+    // Payment delay: AVG(updated_at - due_date) WHERE status='paid'
+    let paymentDelayAvg = null;
+    if (paidInvoices.length > 0) {
+      const delays = paidInvoices
+        .filter(i => i.updated_at && i.due_date)
+        .map(i => (new Date(i.updated_at).getTime() - new Date(i.due_date).getTime()) / 86400000);
+      if (delays.length > 0) {
+        paymentDelayAvg = Math.round(delays.reduce((s, d) => s + d, 0) / delays.length);
+      }
+    }
+
+    // Last order date
+    const lastOrderDate = allInvoices.length > 0
+      ? allInvoices[allInvoices.length - 1].created_at : null;
+
+    // Order frequency: AVG days between consecutive invoice created_at
+    let orderFrequencyDays = null;
+    if (allInvoices.length >= 2) {
+      const gaps = [];
+      for (let i = 1; i < allInvoices.length; i++) {
+        const gap = (new Date(allInvoices[i].created_at).getTime() - new Date(allInvoices[i - 1].created_at).getTime()) / 86400000;
+        gaps.push(gap);
+      }
+      orderFrequencyDays = Math.round(gaps.reduce((s, g) => s + g, 0) / gaps.length);
+    }
+
+    // Q3: Bank transactions via invoice IDs
+    let totalPaymentsReceived = null;
+    const invoiceIds = allInvoices.map(i => i.id);
+    if (invoiceIds.length > 0) {
+      try {
+        const { data: txns } = await supabase
+          .from('bank_transactions')
+          .select('amount')
+          .eq('reference_type', 'invoice')
+          .in('reference_id', invoiceIds)
+          .is('deleted_at', null);
+        if (txns && txns.length > 0) {
+          totalPaymentsReceived = txns.reduce((s, t) => s + (t.amount || 0), 0);
+        }
+      } catch {}
+    }
+
+    // Q3b: Profit contribution via invoice_items + products
+    let profitContributionPct = null;
+    if (invoiceIds.length > 0) {
+      try {
+        const { data: items } = await supabase
+          .from('invoice_items')
+          .select('quantity, line_total, product_id')
+          .in('invoice_id', invoiceIds);
+
+        if (items && items.length > 0) {
+          const productIds = [...new Set(items.map(i => i.product_id).filter(Boolean))];
+          let prodMap = {};
+          if (productIds.length > 0) {
+            const { data: products } = await supabase
+              .from('products').select('id, cost_price').in('id', productIds);
+            (products || []).forEach(p => { prodMap[p.id] = p.cost_price; });
+          }
+
+          let totalCost = 0;
+          let totalRevenue = 0;
+          let hasCostData = false;
+          items.forEach(item => {
+            totalRevenue += item.line_total || 0;
+            const cp = prodMap[item.product_id];
+            if (cp && cp > 0) {
+              totalCost += (item.quantity || 0) * cp;
+              hasCostData = true;
+            }
+          });
+
+          if (hasCostData && totalRevenue > 0) {
+            profitContributionPct = Math.round(((totalRevenue - totalCost) / totalRevenue) * 100);
+          }
+        }
+      } catch {}
+    }
+
+    // Invoice cleared percentage
+    const allTotal = allInvoices.reduce((s, i) => s + (i.total_amount || 0), 0);
+    const paidTotal = paidInvoices.reduce((s, i) => s + (i.total_amount || 0), 0);
+    const invoiceClearedPct = allTotal > 0 ? Math.round((paidTotal / allTotal) * 100) : 0;
+
+    // Q4: Entity memory for behavior insights
+    let behaviorInsights = [];
+    try {
+      const { data: memories } = await supabase
+        .from('entity_memory')
+        .select('memory_key, memory_value')
+        .eq('organisation_id', organisationId)
+        .eq('entity_type', 'customer')
+        .eq('entity_id', customerId)
+        .is('deleted_at', null);
+      behaviorInsights = memories || [];
+    } catch {}
+
+    // Q5: AI Smart Analysis (with timeout — non-blocking)
+    let aiAnalysis = [];
+    try {
+      const client = getOpenAI();
+      if (client) {
+        const contextData = {
+          customer_name: customer.name,
+          outstanding_balance: customer.outstanding_balance || 0,
+          order_frequency_days: orderFrequencyDays,
+          last_order_date: lastOrderDate,
+          total_orders: totalOrders,
+          lifetime_value: lifetimeValue,
+          health_score: healthScore,
+          avg_order_value: avgOrderValue ? Math.round(avgOrderValue) : null,
+          payment_delay_avg_days: paymentDelayAvg,
+          total_payments_received: totalPaymentsReceived,
+          profit_contribution_pct: profitContributionPct,
+          invoice_cleared_pct: invoiceClearedPct,
+        };
+
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 6000);
+
+        const completion = await client.chat.completions.create({
+          model: 'gpt-4o-mini',
+          messages: [
+            {
+              role: 'system',
+              content: `Based on this customer data, generate exactly 3 short business insights for the owner. Do not invent facts. Use only the data provided. Keep each insight under 15 words. Output ONLY JSON: {"insights":[{"text":"...","highlight":false},{"text":"...","highlight":false},{"text":"...","highlight":true}]}`,
+            },
+            { role: 'user', content: JSON.stringify(contextData) },
+          ],
+          temperature: 0.3,
+        }, { signal: controller.signal });
+        clearTimeout(timeoutId);
+
+        const aiText = completion.choices[0].message.content || '';
+        try {
+          const jsonMatch = aiText.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            const parsed = JSON.parse(jsonMatch[0]);
+            if (Array.isArray(parsed.insights)) {
+              aiAnalysis = parsed.insights.filter(i => i && typeof i.text === 'string').slice(0, 3);
+            }
+          }
+        } catch {}
+
+        // Log usage
+        try {
+          await supabase.from('ai_usage_log').insert({
+            organisation_id: organisationId, user_id: auth.userId,
+            model: 'gpt-4o-mini', operation: 'customer_report',
+            tokens_input: completion.usage?.prompt_tokens || 0,
+            tokens_output: completion.usage?.completion_tokens || 0,
+            cost_usd: ((completion.usage?.prompt_tokens || 0) * 0.00015 / 1000) + ((completion.usage?.completion_tokens || 0) * 0.00060 / 1000),
+            duration_ms: 0, status: 'success',
+          });
+        } catch {}
+      }
+    } catch (aiErr) {
+      // AI timeout or failure — return empty, don't block report
+      console.warn('AI Smart Analysis failed:', aiErr.message);
+      aiAnalysis = [];
+    }
+
+    return c.json({
+      customer: {
+        id: customer.id, name: customer.name, initials, avatar_color: avatarColor,
+        outstanding_balance: customer.outstanding_balance || 0,
+        health_score: healthScore, health_label: healthLabel,
+        status: customer.status || 'active',
+      },
+      summary: {
+        lifetime_value: lifetimeValue,
+        total_orders_12mo: totalOrders12mo,
+        avg_order_value: avgOrderValue !== null ? Math.round(avgOrderValue) : null,
+      },
+      metrics: {
+        total_orders: totalOrders,
+        payment_delay_avg_days: paymentDelayAvg,
+        last_order_date: lastOrderDate,
+        order_frequency_days: orderFrequencyDays,
+      },
+      financial: {
+        total_payments_received: totalPaymentsReceived,
+        profit_contribution_pct: profitContributionPct,
+        invoice_cleared_pct: invoiceClearedPct,
+      },
+      behavior_insights: behaviorInsights,
+      ai_analysis: aiAnalysis,
+    });
+
+  } catch (error) {
+    console.error('GET /api/customer/report error:', error);
+    return c.json({ error: 'server_error' }, 500);
+  }
+});
+
+// ─── GET /api/customer/:customer_id/history ─────────────────
+app.get('/api/customer/:customer_id/history', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+    const customerId = c.req.param('customer_id');
+
+    const customer = await validateCustomer(customerId, organisationId);
+    if (!customer) return c.json({ error: 'customer_not_found' }, 404);
+
+    const { data: invoices } = await supabase
+      .from('invoices')
+      .select('id, total_amount, amount_paid, status, created_at, invoice_number')
+      .eq('organisation_id', organisationId)
+      .eq('customer_id', customerId)
+      .order('created_at', { ascending: false })
+      .limit(50);
+
+    const transactions = (invoices || []).map(inv => ({
+      type: 'invoice',
+      id: inv.id,
+      invoice_number: inv.invoice_number,
+      amount: inv.total_amount,
+      amount_paid: inv.amount_paid || 0,
+      date: inv.created_at,
+      status: inv.status,
+    }));
+
+    return c.json({ transactions });
+
+  } catch (error) {
+    console.error('GET /api/customer/history error:', error);
+    return c.json({ error: 'server_error' }, 500);
+  }
+});
+
+
 // Export supabase client for use in other modules
 export { supabase };
 

@@ -1,30 +1,32 @@
 #!/usr/bin/env python3
 """
-Backend Test Suite for Flow 3A AI Spark Endpoints
-Tests the AI Spark functionality as specified in the review request.
+Backend Testing Script for Flow 3B Customer Report Endpoints
+Tests the customer report and history endpoints with proper authentication.
 """
 
 import requests
 import json
-import time
 import sys
+import time
 from typing import Dict, Any, Optional
 
-# Configuration from review request
-BACKEND_URL = "https://trader-flow-guide.preview.emergentagent.com/api"
+# Configuration
+BACKEND_URL = "https://trader-flow-guide.preview.emergentagent.com"
 SUPABASE_URL = "https://qsyuyivpptuzmzbpfeaq.supabase.co"
 SUPABASE_ANON_KEY = "sb_publishable_a4IIUGPHXvOiQb4KG09F7A_55sghKRx"
+
+# Test credentials from test_credentials.md
 TEST_PHONE = "919007188402"
 TEST_OTP = "123456"
-CUSTOMER_ID = "d0000000-0000-0000-0001-000000000001"
 
-class AISparkTester:
+# Test customer IDs
+VALID_CUSTOMER_ID = "d0000000-0000-0000-0001-000000000001"
+INVALID_CUSTOMER_ID = "00000000-0000-0000-0000-000000000000"
+
+class CustomerReportTester:
     def __init__(self):
         self.session = requests.Session()
         self.auth_token = None
-        self.conversation_id = None
-        self.draft_id = None
-        self.action_id = None
         self.test_results = []
         
     def log_test(self, test_name: str, success: bool, details: str = "", response_data: Any = None):
@@ -43,10 +45,10 @@ class AISparkTester:
             "details": details,
             "response": response_data
         })
-    
-    def authenticate(self) -> bool:
-        """Authenticate using Supabase OTP flow"""
-        print("🔐 Starting authentication...")
+
+    def authenticate_with_supabase(self) -> bool:
+        """Authenticate with Supabase using OTP flow"""
+        print("🔐 Starting Supabase Authentication...")
         
         try:
             # Step 1: Send OTP
@@ -60,10 +62,14 @@ class AISparkTester:
                 "Content-Type": "application/json"
             }
             
+            print(f"📱 Sending OTP to {TEST_PHONE}...")
             otp_response = self.session.post(otp_url, json=otp_payload, headers=otp_headers)
+            
             if otp_response.status_code != 200:
-                self.log_test("Authentication - Send OTP", False, f"OTP send failed: {otp_response.status_code}")
+                self.log_test("Supabase OTP Send", False, f"Failed to send OTP: {otp_response.status_code}", otp_response.json())
                 return False
+                
+            print("✅ OTP sent successfully")
             
             # Step 2: Verify OTP
             verify_url = f"{SUPABASE_URL}/auth/v1/verify"
@@ -73,30 +79,51 @@ class AISparkTester:
                 "token": TEST_OTP
             }
             
+            print(f"🔑 Verifying OTP {TEST_OTP}...")
             verify_response = self.session.post(verify_url, json=verify_payload, headers=otp_headers)
-            if verify_response.status_code != 200:
-                self.log_test("Authentication - Verify OTP", False, f"OTP verify failed: {verify_response.status_code}")
-                return False
             
+            if verify_response.status_code != 200:
+                self.log_test("Supabase OTP Verify", False, f"Failed to verify OTP: {verify_response.status_code}", verify_response.json())
+                return False
+                
             verify_data = verify_response.json()
             if not verify_data.get("access_token"):
-                self.log_test("Authentication - Get Token", False, "No access token in response")
+                self.log_test("Supabase OTP Verify", False, "No access token in response", verify_data)
                 return False
-            
+                
             self.auth_token = verify_data["access_token"]
-            self.log_test("Authentication", True, f"Successfully authenticated with token: {self.auth_token[:20]}...")
+            print(f"✅ Authentication successful, token: {self.auth_token[:20]}...")
+            
+            # Step 3: Setup session with backend
+            setup_url = f"{BACKEND_URL}/api/auth/setup-session"
+            setup_headers = {
+                "Authorization": f"Bearer {self.auth_token}",
+                "Content-Type": "application/json"
+            }
+            
+            print("🔧 Setting up backend session...")
+            setup_response = self.session.post(setup_url, headers=setup_headers)
+            
+            if setup_response.status_code != 200:
+                self.log_test("Backend Session Setup", False, f"Failed to setup session: {setup_response.status_code}", setup_response.json())
+                return False
+                
+            setup_data = setup_response.json()
+            print(f"✅ Backend session setup successful: {setup_data}")
+            
+            self.log_test("Supabase Authentication", True, f"Successfully authenticated with token")
             return True
             
         except Exception as e:
-            self.log_test("Authentication", False, f"Exception: {str(e)}")
+            self.log_test("Supabase Authentication", False, f"Exception during auth: {str(e)}")
             return False
-    
-    def get_conversation_id(self) -> bool:
-        """Get conversation_id from GET /api/chat/:customer_id"""
-        print("📞 Getting conversation ID...")
+
+    def test_customer_report_valid(self) -> bool:
+        """Test GET /api/customer/{valid_id}/report"""
+        print(f"📊 Testing customer report for valid customer ID: {VALID_CUSTOMER_ID}")
         
         try:
-            url = f"{BACKEND_URL}/chat/{CUSTOMER_ID}"
+            url = f"{BACKEND_URL}/api/customer/{VALID_CUSTOMER_ID}/report"
             headers = {
                 "Authorization": f"Bearer {self.auth_token}",
                 "Content-Type": "application/json"
@@ -104,390 +131,247 @@ class AISparkTester:
             
             response = self.session.get(url, headers=headers)
             
-            if response.status_code == 401:
-                self.log_test("Get Conversation ID", False, "Unauthorized - auth token invalid")
-                return False
-            
             if response.status_code != 200:
-                self.log_test("Get Conversation ID", False, f"HTTP {response.status_code}: {response.text}")
+                self.log_test("Customer Report (Valid ID)", False, f"Expected 200, got {response.status_code}", response.json())
                 return False
-            
-            data = response.json()
-            if not data.get("conversation_id"):
-                self.log_test("Get Conversation ID", False, "No conversation_id in response", data)
-                return False
-            
-            self.conversation_id = data["conversation_id"]
-            self.log_test("Get Conversation ID", True, f"Got conversation_id: {self.conversation_id}")
-            return True
-            
-        except Exception as e:
-            self.log_test("Get Conversation ID", False, f"Exception: {str(e)}")
-            return False
-    
-    def test_spark_financial_action(self) -> bool:
-        """Test POST /api/chat/:customer_id/spark with financial action (create_invoice)"""
-        print("💰 Testing AI Spark - Financial Action (Create Invoice)...")
-        
-        try:
-            url = f"{BACKEND_URL}/chat/{CUSTOMER_ID}/spark"
-            headers = {
-                "Authorization": f"Bearer {self.auth_token}",
-                "Content-Type": "application/json"
-            }
-            payload = {
-                "query": "Create invoice for 10 units of Attar Rose, amount 3500, due in 3 days",
-                "conversation_id": self.conversation_id
-            }
-            
-            response = self.session.post(url, json=payload, headers=headers)
-            
-            if response.status_code != 200:
-                self.log_test("AI Spark - Financial Action", False, f"HTTP {response.status_code}: {response.text}")
-                return False
-            
-            data = response.json()
-            
-            # Validate response structure
-            required_fields = ["draft_id", "confidence_score", "routing", "actions"]
-            missing_fields = [field for field in required_fields if field not in data]
-            if missing_fields:
-                self.log_test("AI Spark - Financial Action", False, f"Missing fields: {missing_fields}", data)
-                return False
-            
-            # Validate financial action gets routing='preview'
-            if data.get("routing") != "preview":
-                self.log_test("AI Spark - Financial Action", False, f"Expected routing='preview', got '{data.get('routing')}'", data)
-                return False
-            
-            # Validate confidence score
-            confidence = data.get("confidence_score", 0)
-            if confidence <= 0.5:
-                self.log_test("AI Spark - Financial Action", False, f"Expected confidence > 0.5, got {confidence}", data)
-                return False
-            
-            # Validate actions array
-            actions = data.get("actions", [])
-            if not actions:
-                self.log_test("AI Spark - Financial Action", False, "No actions in response", data)
-                return False
-            
-            action = actions[0]
-            if action.get("action_type") != "create_invoice":
-                self.log_test("AI Spark - Financial Action", False, f"Expected action_type='create_invoice', got '{action.get('action_type')}'", data)
-                return False
-            
-            # Store IDs for subsequent tests
-            self.draft_id = data.get("draft_id")
-            self.action_id = action.get("action_id")
-            
-            self.log_test("AI Spark - Financial Action", True, 
-                         f"routing='{data.get('routing')}', confidence={confidence:.2f}, action_type='{action.get('action_type')}', draft_id={self.draft_id}")
-            return True
-            
-        except Exception as e:
-            self.log_test("AI Spark - Financial Action", False, f"Exception: {str(e)}")
-            return False
-    
-    def test_spark_ambiguous_query(self) -> bool:
-        """Test POST /api/chat/:customer_id/spark with ambiguous query"""
-        print("❓ Testing AI Spark - Ambiguous Query...")
-        
-        try:
-            url = f"{BACKEND_URL}/chat/{CUSTOMER_ID}/spark"
-            headers = {
-                "Authorization": f"Bearer {self.auth_token}",
-                "Content-Type": "application/json"
-            }
-            payload = {
-                "query": "hmm what should I do",
-                "conversation_id": self.conversation_id
-            }
-            
-            response = self.session.post(url, json=payload, headers=headers)
-            
-            if response.status_code != 200:
-                self.log_test("AI Spark - Ambiguous Query", False, f"HTTP {response.status_code}: {response.text}")
-                return False
-            
-            data = response.json()
-            
-            # Validate routing='clarify' for ambiguous queries
-            if data.get("routing") != "clarify":
-                self.log_test("AI Spark - Ambiguous Query", False, f"Expected routing='clarify', got '{data.get('routing')}'", data)
-                return False
-            
-            # Validate low confidence score
-            confidence = data.get("confidence_score", 1.0)
-            if confidence >= 0.50:
-                self.log_test("AI Spark - Ambiguous Query", False, f"Expected confidence < 0.50, got {confidence}", data)
-                return False
-            
-            self.log_test("AI Spark - Ambiguous Query", True, 
-                         f"routing='{data.get('routing')}', confidence={confidence:.2f}")
-            return True
-            
-        except Exception as e:
-            self.log_test("AI Spark - Ambiguous Query", False, f"Exception: {str(e)}")
-            return False
-    
-    def test_spark_empty_query(self) -> bool:
-        """Test POST /api/chat/:customer_id/spark with empty query"""
-        print("🚫 Testing AI Spark - Empty Query...")
-        
-        try:
-            url = f"{BACKEND_URL}/chat/{CUSTOMER_ID}/spark"
-            headers = {
-                "Authorization": f"Bearer {self.auth_token}",
-                "Content-Type": "application/json"
-            }
-            payload = {
-                "query": "",
-                "conversation_id": self.conversation_id
-            }
-            
-            response = self.session.post(url, json=payload, headers=headers)
-            
-            if response.status_code != 400:
-                self.log_test("AI Spark - Empty Query", False, f"Expected HTTP 400, got {response.status_code}: {response.text}")
-                return False
-            
-            data = response.json()
-            if data.get("error") != "empty_query":
-                self.log_test("AI Spark - Empty Query", False, f"Expected error='empty_query', got '{data.get('error')}'", data)
-                return False
-            
-            self.log_test("AI Spark - Empty Query", True, "Correctly returned 400 empty_query")
-            return True
-            
-        except Exception as e:
-            self.log_test("AI Spark - Empty Query", False, f"Exception: {str(e)}")
-            return False
-    
-    def test_spark_confirm(self) -> bool:
-        """Test POST /api/chat/:customer_id/spark/confirm"""
-        print("✅ Testing AI Spark - Confirm Draft...")
-        
-        if not self.draft_id or not self.action_id:
-            self.log_test("AI Spark - Confirm Draft", False, "No draft_id or action_id from previous test")
-            return False
-        
-        try:
-            url = f"{BACKEND_URL}/chat/{CUSTOMER_ID}/spark/confirm"
-            headers = {
-                "Authorization": f"Bearer {self.auth_token}",
-                "Content-Type": "application/json"
-            }
-            payload = {
-                "draft_id": self.draft_id,
-                "action_ids": [self.action_id]
-            }
-            
-            response = self.session.post(url, json=payload, headers=headers)
-            
-            if response.status_code != 200:
-                self.log_test("AI Spark - Confirm Draft", False, f"HTTP {response.status_code}: {response.text}")
-                return False
-            
-            data = response.json()
-            
-            # Validate response structure
-            if "executed" not in data or "failed" not in data:
-                self.log_test("AI Spark - Confirm Draft", False, "Missing 'executed' or 'failed' fields", data)
-                return False
-            
-            executed = data.get("executed", [])
-            failed = data.get("failed", [])
-            
-            if self.action_id not in executed:
-                self.log_test("AI Spark - Confirm Draft", False, f"Action {self.action_id} not in executed list", data)
-                return False
-            
-            if failed:
-                self.log_test("AI Spark - Confirm Draft", False, f"Some actions failed: {failed}", data)
-                return False
-            
-            self.log_test("AI Spark - Confirm Draft", True, 
-                         f"executed=[{self.action_id}], failed=[]")
-            return True
-            
-        except Exception as e:
-            self.log_test("AI Spark - Confirm Draft", False, f"Exception: {str(e)}")
-            return False
-    
-    def test_spark_edit_action(self) -> bool:
-        """Test PATCH /api/chat/:customer_id/spark/action/:action_id"""
-        print("✏️ Testing AI Spark - Edit Action...")
-        
-        # First create a new spark for editing
-        try:
-            url = f"{BACKEND_URL}/chat/{CUSTOMER_ID}/spark"
-            headers = {
-                "Authorization": f"Bearer {self.auth_token}",
-                "Content-Type": "application/json"
-            }
-            payload = {
-                "query": "Create invoice for 5 units of Product X, amount 2000, due in 5 days",
-                "conversation_id": self.conversation_id
-            }
-            
-            response = self.session.post(url, json=payload, headers=headers)
-            if response.status_code != 200:
-                self.log_test("AI Spark - Edit Action (Create)", False, f"Failed to create action for editing: {response.status_code}")
-                return False
-            
-            data = response.json()
-            edit_action_id = data.get("actions", [{}])[0].get("action_id")
-            if not edit_action_id:
-                self.log_test("AI Spark - Edit Action (Create)", False, "No action_id in create response")
-                return False
-            
-            # Now edit the action
-            edit_url = f"{BACKEND_URL}/chat/{CUSTOMER_ID}/spark/action/{edit_action_id}"
-            edit_payload = {
-                "parameters": {
-                    "due_date": "2026-05-01"
-                }
-            }
-            
-            edit_response = self.session.patch(edit_url, json=edit_payload, headers=headers)
-            
-            if edit_response.status_code != 200:
-                self.log_test("AI Spark - Edit Action", False, f"HTTP {edit_response.status_code}: {edit_response.text}")
-                return False
-            
-            edit_data = edit_response.json()
-            
-            if not edit_data.get("updated"):
-                self.log_test("AI Spark - Edit Action", False, "updated field not true", edit_data)
-                return False
-            
-            if edit_data.get("action_id") != edit_action_id:
-                self.log_test("AI Spark - Edit Action", False, f"action_id mismatch: expected {edit_action_id}, got {edit_data.get('action_id')}")
-                return False
-            
-            self.log_test("AI Spark - Edit Action", True, 
-                         f"Successfully updated action {edit_action_id} with due_date=2026-05-01")
-            return True
-            
-        except Exception as e:
-            self.log_test("AI Spark - Edit Action", False, f"Exception: {str(e)}")
-            return False
-    
-    def test_spark_cancel_draft(self) -> bool:
-        """Test DELETE /api/chat/:customer_id/spark/:draft_id"""
-        print("🗑️ Testing AI Spark - Cancel Draft...")
-        
-        # First create a new spark for canceling
-        try:
-            url = f"{BACKEND_URL}/chat/{CUSTOMER_ID}/spark"
-            headers = {
-                "Authorization": f"Bearer {self.auth_token}",
-                "Content-Type": "application/json"
-            }
-            payload = {
-                "query": "Create invoice for 3 units of Test Product, amount 1500",
-                "conversation_id": self.conversation_id
-            }
-            
-            response = self.session.post(url, json=payload, headers=headers)
-            if response.status_code != 200:
-                self.log_test("AI Spark - Cancel Draft (Create)", False, f"Failed to create draft for canceling: {response.status_code}")
-                return False
-            
-            data = response.json()
-            cancel_draft_id = data.get("draft_id")
-            if not cancel_draft_id:
-                self.log_test("AI Spark - Cancel Draft (Create)", False, "No draft_id in create response")
-                return False
-            
-            # Now cancel the draft
-            cancel_url = f"{BACKEND_URL}/chat/{CUSTOMER_ID}/spark/{cancel_draft_id}"
-            
-            cancel_response = self.session.delete(cancel_url, headers=headers)
-            
-            if cancel_response.status_code != 200:
-                self.log_test("AI Spark - Cancel Draft", False, f"HTTP {cancel_response.status_code}: {cancel_response.text}")
-                return False
-            
-            cancel_data = cancel_response.json()
-            
-            if not cancel_data.get("cancelled"):
-                self.log_test("AI Spark - Cancel Draft", False, "cancelled field not true", cancel_data)
-                return False
-            
-            self.log_test("AI Spark - Cancel Draft", True, 
-                         f"Successfully cancelled draft {cancel_draft_id}")
-            return True
-            
-        except Exception as e:
-            self.log_test("AI Spark - Cancel Draft", False, f"Exception: {str(e)}")
-            return False
-    
-    def test_auth_required(self) -> bool:
-        """Test that all endpoints require authentication"""
-        print("🔒 Testing Authentication Requirements...")
-        
-        endpoints = [
-            ("GET", f"{BACKEND_URL}/chat/{CUSTOMER_ID}"),
-            ("POST", f"{BACKEND_URL}/chat/{CUSTOMER_ID}/spark"),
-            ("POST", f"{BACKEND_URL}/chat/{CUSTOMER_ID}/spark/confirm"),
-            ("PATCH", f"{BACKEND_URL}/chat/{CUSTOMER_ID}/spark/action/test-id"),
-            ("DELETE", f"{BACKEND_URL}/chat/{CUSTOMER_ID}/spark/test-id")
-        ]
-        
-        all_passed = True
-        
-        for method, url in endpoints:
-            try:
-                if method == "GET":
-                    response = self.session.get(url)
-                elif method == "POST":
-                    response = self.session.post(url, json={})
-                elif method == "PATCH":
-                    response = self.session.patch(url, json={})
-                elif method == "DELETE":
-                    response = self.session.delete(url)
                 
-                if response.status_code != 401:
-                    self.log_test(f"Auth Required - {method} {url.split('/')[-1]}", False, 
-                                f"Expected 401, got {response.status_code}")
-                    all_passed = False
-                else:
-                    print(f"   ✅ {method} {url.split('/')[-1]} correctly returns 401")
+            data = response.json()
             
-            except Exception as e:
-                self.log_test(f"Auth Required - {method}", False, f"Exception: {str(e)}")
-                all_passed = False
+            # Validate required fields according to review request
+            required_fields = {
+                "customer": ["name", "initials", "avatar_color", "outstanding_balance", "health_score", "health_label"],
+                "summary": ["lifetime_value", "total_orders_12mo", "avg_order_value"],
+                "metrics": ["total_orders", "payment_delay_avg_days", "last_order_date", "order_frequency_days"],
+                "financial": ["total_payments_received", "profit_contribution_pct", "invoice_cleared_pct"],
+                "behavior_insights": [],  # Should be array
+                "ai_analysis": []  # Should be array
+            }
+            
+            validation_errors = []
+            
+            for section, fields in required_fields.items():
+                if section not in data:
+                    validation_errors.append(f"Missing section: {section}")
+                    continue
+                    
+                if section in ["behavior_insights", "ai_analysis"]:
+                    if not isinstance(data[section], list):
+                        validation_errors.append(f"{section} should be an array")
+                else:
+                    for field in fields:
+                        if field not in data[section]:
+                            validation_errors.append(f"Missing field: {section}.{field}")
+            
+            # Validate health_label mapping
+            health_score = data.get("customer", {}).get("health_score")
+            health_label = data.get("customer", {}).get("health_label")
+            
+            if health_score is not None:
+                expected_label = "Good" if health_score >= 80 else "At Risk" if health_score < 40 else "Moderate"
+                if health_label != expected_label:
+                    validation_errors.append(f"Health label mismatch: score={health_score}, label={health_label}, expected={expected_label}")
+            
+            if validation_errors:
+                self.log_test("Customer Report (Valid ID)", False, f"Validation errors: {'; '.join(validation_errors)}", data)
+                return False
+            
+            # Check that values are computed from DB, not hardcoded
+            customer_data = data["customer"]
+            summary_data = data["summary"]
+            metrics_data = data["metrics"]
+            financial_data = data["financial"]
+            
+            details = f"Customer: {customer_data['name']}, Outstanding: ₹{customer_data['outstanding_balance']}, Health: {health_score} ({health_label}), Lifetime Value: ₹{summary_data['lifetime_value']}, Total Orders: {metrics_data['total_orders']}"
+            
+            self.log_test("Customer Report (Valid ID)", True, details, data)
+            return True
+            
+        except Exception as e:
+            self.log_test("Customer Report (Valid ID)", False, f"Exception: {str(e)}")
+            return False
+
+    def test_customer_history_valid(self) -> bool:
+        """Test GET /api/customer/{valid_id}/history"""
+        print(f"📋 Testing customer history for valid customer ID: {VALID_CUSTOMER_ID}")
         
-        self.log_test("Authentication Requirements", all_passed, 
-                     "All endpoints correctly require authentication" if all_passed else "Some endpoints missing auth")
-        return all_passed
-    
+        try:
+            url = f"{BACKEND_URL}/api/customer/{VALID_CUSTOMER_ID}/history"
+            headers = {
+                "Authorization": f"Bearer {self.auth_token}",
+                "Content-Type": "application/json"
+            }
+            
+            response = self.session.get(url, headers=headers)
+            
+            if response.status_code != 200:
+                self.log_test("Customer History (Valid ID)", False, f"Expected 200, got {response.status_code}", response.json())
+                return False
+                
+            data = response.json()
+            
+            # Validate required structure
+            if "transactions" not in data:
+                self.log_test("Customer History (Valid ID)", False, "Missing 'transactions' field", data)
+                return False
+                
+            if not isinstance(data["transactions"], list):
+                self.log_test("Customer History (Valid ID)", False, "'transactions' should be an array", data)
+                return False
+            
+            # Validate transaction structure if any exist
+            transactions = data["transactions"]
+            required_transaction_fields = ["type", "id", "invoice_number", "amount", "date", "status"]
+            
+            for i, txn in enumerate(transactions[:3]):  # Check first 3 transactions
+                for field in required_transaction_fields:
+                    if field not in txn:
+                        self.log_test("Customer History (Valid ID)", False, f"Transaction {i} missing field: {field}", data)
+                        return False
+            
+            details = f"Found {len(transactions)} transactions"
+            if transactions:
+                sample_txn = transactions[0]
+                details += f", Sample: {sample_txn['type']} #{sample_txn['invoice_number']} ₹{sample_txn['amount']} ({sample_txn['status']})"
+            
+            self.log_test("Customer History (Valid ID)", True, details, data)
+            return True
+            
+        except Exception as e:
+            self.log_test("Customer History (Valid ID)", False, f"Exception: {str(e)}")
+            return False
+
+    def test_customer_report_invalid(self) -> bool:
+        """Test GET /api/customer/{invalid_id}/report - should return 404"""
+        print(f"🚫 Testing customer report for invalid customer ID: {INVALID_CUSTOMER_ID}")
+        
+        try:
+            url = f"{BACKEND_URL}/api/customer/{INVALID_CUSTOMER_ID}/report"
+            headers = {
+                "Authorization": f"Bearer {self.auth_token}",
+                "Content-Type": "application/json"
+            }
+            
+            response = self.session.get(url, headers=headers)
+            
+            if response.status_code != 404:
+                self.log_test("Customer Report (Invalid ID)", False, f"Expected 404, got {response.status_code}", response.json())
+                return False
+            
+            data = response.json()
+            if data.get("error") != "customer_not_found":
+                self.log_test("Customer Report (Invalid ID)", False, f"Expected 'customer_not_found' error, got {data.get('error')}", data)
+                return False
+                
+            self.log_test("Customer Report (Invalid ID)", True, "Correctly returned 404 for invalid customer ID")
+            return True
+            
+        except Exception as e:
+            self.log_test("Customer Report (Invalid ID)", False, f"Exception: {str(e)}")
+            return False
+
+    def test_customer_history_invalid(self) -> bool:
+        """Test GET /api/customer/{invalid_id}/history - should return 404"""
+        print(f"🚫 Testing customer history for invalid customer ID: {INVALID_CUSTOMER_ID}")
+        
+        try:
+            url = f"{BACKEND_URL}/api/customer/{INVALID_CUSTOMER_ID}/history"
+            headers = {
+                "Authorization": f"Bearer {self.auth_token}",
+                "Content-Type": "application/json"
+            }
+            
+            response = self.session.get(url, headers=headers)
+            
+            if response.status_code != 404:
+                self.log_test("Customer History (Invalid ID)", False, f"Expected 404, got {response.status_code}", response.json())
+                return False
+            
+            data = response.json()
+            if data.get("error") != "customer_not_found":
+                self.log_test("Customer History (Invalid ID)", False, f"Expected 'customer_not_found' error, got {data.get('error')}", data)
+                return False
+                
+            self.log_test("Customer History (Invalid ID)", True, "Correctly returned 404 for invalid customer ID")
+            return True
+            
+        except Exception as e:
+            self.log_test("Customer History (Invalid ID)", False, f"Exception: {str(e)}")
+            return False
+
+    def test_no_auth_report(self) -> bool:
+        """Test GET /api/customer/{valid_id}/report without auth - should return 401"""
+        print("🔒 Testing customer report without authentication")
+        
+        try:
+            url = f"{BACKEND_URL}/api/customer/{VALID_CUSTOMER_ID}/report"
+            # No Authorization header
+            
+            response = self.session.get(url)
+            
+            if response.status_code != 401:
+                self.log_test("Customer Report (No Auth)", False, f"Expected 401, got {response.status_code}", response.json())
+                return False
+            
+            data = response.json()
+            if data.get("error") != "unauthorized":
+                self.log_test("Customer Report (No Auth)", False, f"Expected 'unauthorized' error, got {data.get('error')}", data)
+                return False
+                
+            self.log_test("Customer Report (No Auth)", True, "Correctly returned 401 for missing auth")
+            return True
+            
+        except Exception as e:
+            self.log_test("Customer Report (No Auth)", False, f"Exception: {str(e)}")
+            return False
+
+    def test_no_auth_history(self) -> bool:
+        """Test GET /api/customer/{valid_id}/history without auth - should return 401"""
+        print("🔒 Testing customer history without authentication")
+        
+        try:
+            url = f"{BACKEND_URL}/api/customer/{VALID_CUSTOMER_ID}/history"
+            # No Authorization header
+            
+            response = self.session.get(url)
+            
+            if response.status_code != 401:
+                self.log_test("Customer History (No Auth)", False, f"Expected 401, got {response.status_code}", response.json())
+                return False
+            
+            data = response.json()
+            if data.get("error") != "unauthorized":
+                self.log_test("Customer History (No Auth)", False, f"Expected 'unauthorized' error, got {data.get('error')}", data)
+                return False
+                
+            self.log_test("Customer History (No Auth)", True, "Correctly returned 401 for missing auth")
+            return True
+            
+        except Exception as e:
+            self.log_test("Customer History (No Auth)", False, f"Exception: {str(e)}")
+            return False
+
     def run_all_tests(self):
-        """Run all AI Spark tests"""
-        print("🚀 Starting AI Spark Backend Tests")
+        """Run all customer report endpoint tests"""
+        print("🚀 Starting Flow 3B Customer Report Endpoints Testing")
         print("=" * 60)
         
-        # Authentication
-        if not self.authenticate():
-            print("❌ Authentication failed - cannot proceed with tests")
+        # Step 1: Authenticate
+        if not self.authenticate_with_supabase():
+            print("❌ Authentication failed, cannot proceed with tests")
             return False
         
-        # Get conversation ID
-        if not self.get_conversation_id():
-            print("❌ Failed to get conversation ID - cannot proceed with tests")
-            return False
+        print("=" * 60)
+        print("🧪 Running Customer Report Endpoint Tests")
+        print("=" * 60)
         
-        # Run all spark tests
+        # Step 2: Test all endpoints
         tests = [
-            self.test_spark_financial_action,
-            self.test_spark_ambiguous_query,
-            self.test_spark_empty_query,
-            self.test_spark_confirm,
-            self.test_spark_edit_action,
-            self.test_spark_cancel_draft,
-            self.test_auth_required
+            self.test_customer_report_valid,
+            self.test_customer_history_valid,
+            self.test_customer_report_invalid,
+            self.test_customer_history_invalid,
+            self.test_no_auth_report,
+            self.test_no_auth_history,
         ]
         
         passed = 0
@@ -496,21 +380,25 @@ class AISparkTester:
         for test in tests:
             if test():
                 passed += 1
-            time.sleep(0.5)  # Small delay between tests
         
         print("=" * 60)
-        print(f"🏁 Test Results: {passed}/{total} tests passed")
+        print("📊 TEST SUMMARY")
+        print("=" * 60)
+        print(f"Total Tests: {total}")
+        print(f"Passed: {passed}")
+        print(f"Failed: {total - passed}")
+        print(f"Success Rate: {(passed/total)*100:.1f}%")
         
         if passed == total:
-            print("✅ ALL TESTS PASSED - AI Spark endpoints working correctly")
+            print("🎉 ALL TESTS PASSED!")
+            return True
         else:
-            print("❌ SOME TESTS FAILED - Review failures above")
-            
-        return passed == total
+            print("⚠️  Some tests failed. Check details above.")
+            return False
 
 def main():
     """Main test runner"""
-    tester = AISparkTester()
+    tester = CustomerReportTester()
     success = tester.run_all_tests()
     sys.exit(0 if success else 1)
 

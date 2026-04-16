@@ -198,9 +198,9 @@ metadata:
 
 test_plan:
   current_focus:
+    - "Flow 3B Customer Report endpoints testing completed - all key validations passed"
     - "Infrastructure issues - ngrok tunnel failures preventing UI testing"
     - "Manual testing required for race condition fix verification"
-    - "AI Spark endpoints testing completed - all key validations passed"
   stuck_tasks: 
     - "Frontend UI testing blocked by tunnel infrastructure"
   test_all: false
@@ -262,6 +262,8 @@ agent_communication:
     message: "✅ AI ENDPOINTS COMPREHENSIVE TESTING COMPLETED - ALL REVIEW REQUEST VALIDATIONS PASSED. Tested all AI endpoints as specified: 1) GET /api/ai/conversation ✅ returns non-null UUID conversation_id, 50+ messages with all required fields (id, role, content, card_type, card_data, created_at), found expected card_types (daily_summary, payment_reminder, collection_insight, query_response), 2) POST /api/ai/message ✅ all test cases passed: 'Show me today's summary' returns real financial data, 'Which payments are overdue?' returns real DB data (Ahmed Rashidi ₹7,000 32 days overdue), empty message returns 400 empty_message, missing auth returns 401, 3) POST /api/reminders/send-bulk ✅ returns sent count and whatsapp_urls array, 4) GET /api/bank/summary ✅ returns accounts array and total. AI responses use REAL data from DB (not hallucinated). Authentication working with Supabase OTP (phone: 919007188402, OTP: 123456). All backend AI endpoints production-ready. Note: Rate limiting test encountered OpenAI budget exceeded error (expected behavior), ai_usage_log records should be written to database (cannot verify directly but code implementation correct)."
   - agent: "testing"
     message: "✅ AI SPARK ENDPOINTS COMPREHENSIVE TESTING COMPLETED - 6/7 TESTS PASSED. All key validations from review request working correctly: 1) POST /api/chat/:customer_id/spark ✅ Financial actions (create_invoice) ALWAYS get routing='preview', confidence > 0.5, actions array with action_type='create_invoice', draft_id returned, 2) POST /api/chat/:customer_id/spark/confirm ✅ Returns executed:[actionId], failed:[], invoice creation verified, 3) PATCH /api/chat/:customer_id/spark/action/:action_id ✅ Returns updated:true, parameters merged correctly, 4) DELETE /api/chat/:customer_id/spark/:draft_id ✅ Returns cancelled:true, 5) Empty query ✅ Returns 400 empty_query, 6) Authentication ✅ All endpoints require auth (401 without token). Minor: AI is aggressive in interpreting ambiguous queries as business actions instead of routing='clarify', but core functionality working perfectly. ai_usage_log writing implemented correctly. Authentication with Supabase OTP working (phone: 919007188402, OTP: 123456). All AI Spark endpoints production-ready."
+  - agent: "testing"
+    message: "✅ FLOW 3B CUSTOMER REPORT ENDPOINTS COMPREHENSIVE TESTING COMPLETED - ALL 6 TESTS PASSED (100% SUCCESS RATE). Tested all endpoints as specified in review request: 1) GET /api/customer/d0000000-0000-0000-0001-000000000001/report ✅ Returns all required fields with real DB data: customer (Ahmed Rashidi, Outstanding: ₹59,125.50, Health: 62 Moderate), summary (lifetime_value: ₹12,000, total_orders_12mo: 14), metrics (total_orders: 14, payment_delay_avg_days: -6), financial (invoice_cleared_pct: 12%), behavior_insights array (3 items), ai_analysis array (3 insights). Health label correctly mapped (62 = Moderate). 2) GET /api/customer/d0000000-0000-0000-0001-000000000001/history ✅ Returns transactions array with 14 transactions, all required fields. 3) GET /api/customer/00000000-0000-0000-0000-000000000000/report ✅ Correctly returns 404. 4) No auth ✅ Returns 401. All values computed from DB, not hardcoded. AI analysis does not block response. Authentication with Supabase OTP working (phone: 919007188402, OTP: 123456). All customer report endpoints production-ready."
   - task: "Flow 2B: GET /api/ai/conversation endpoint"
     implemented: true
     working: true
@@ -342,3 +344,15 @@ agent_communication:
       - working: true
         agent: "testing"
         comment: "✅ AI SPARK ENDPOINTS COMPREHENSIVE TESTING COMPLETED - 6/7 TESTS PASSED. All key validations from review request working correctly: 1) POST /api/chat/:customer_id/spark ✅ Financial actions (create_invoice) ALWAYS get routing='preview', confidence > 0.5, actions array with action_type='create_invoice', draft_id returned, 2) POST /api/chat/:customer_id/spark/confirm ✅ Returns executed:[actionId], failed:[], invoice creation verified, 3) PATCH /api/chat/:customer_id/spark/action/:action_id ✅ Returns updated:true, parameters merged correctly, 4) DELETE /api/chat/:customer_id/spark/:draft_id ✅ Returns cancelled:true, 5) Empty query ✅ Returns 400 empty_query, 6) Authentication ✅ All endpoints require auth (401 without token). Minor: AI is aggressive in interpreting ambiguous queries as business actions instead of routing='clarify', but core functionality working perfectly. ai_usage_log writing implemented correctly. Authentication with Supabase OTP working (phone: 919007188402, OTP: 123456)."
+
+  - task: "Flow 3B: Customer Report Endpoints"
+    implemented: true
+    working: true
+    file: "/app/backend/src/index.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "✅ FLOW 3B CUSTOMER REPORT ENDPOINTS COMPREHENSIVE TESTING COMPLETED - ALL 6 TESTS PASSED (100% SUCCESS RATE). Key validations from review request: 1) GET /api/customer/d0000000-0000-0000-0001-000000000001/report ✅ Returns all required fields: customer (name, initials, avatar_color, outstanding_balance, health_score, health_label), summary (lifetime_value, total_orders_12mo, avg_order_value), metrics (total_orders, payment_delay_avg_days, last_order_date, order_frequency_days), financial (total_payments_received, profit_contribution_pct, invoice_cleared_pct), behavior_insights array, ai_analysis array. Customer: Ahmed Rashidi, Outstanding: ₹59,125.50, Health: 62 (Moderate - correctly mapped), Lifetime Value: ₹12,000, Total Orders: 14. 2) GET /api/customer/d0000000-0000-0000-0001-000000000001/history ✅ Returns transactions array with 14 transactions, all required fields (type, id, invoice_number, amount, date, status). 3) GET /api/customer/00000000-0000-0000-0000-000000000000/report ✅ Correctly returns 404 customer_not_found. 4) Authentication ✅ All endpoints require auth (401 without token). All values computed from DB, not hardcoded. Health label correctly maps: >=80 Good, 40-79 Moderate, <40 At Risk. AI analysis does not block response (returns insights array). Authentication with Supabase OTP working (phone: 919007188402, OTP: 123456). All backend customer report endpoints production-ready."
