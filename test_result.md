@@ -220,6 +220,25 @@ test_plan:
         agent: "testing"
         comment: "✅ Code analysis confirms comprehensive race condition fix implementation: Sequential SecureStore awaits with individual logging (lines 190-199), storage verification before proceeding (lines 202-218), Supabase setSession for in-memory state (lines 221-234), loading gate in navigation guard with isCheckingAuth state (lines 23-27, 96-103). All 5 steps properly implemented. ❌ UI testing blocked by infrastructure issues: ngrok tunnel failures causing 502 errors, expo service failing to start tunnel. Backend (Node.js) running correctly on port 8001. REQUIRES MANUAL TESTING once infrastructure resolved."
 
+
+  - task: "Flow 2: GET /api/home endpoint"
+    implemented: true
+    working: true
+    file: "/app/backend/src/index.js"
+    stuck_count: 1
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: false
+        agent: "user"
+        comment: "User reported /api/home returns empty conversations despite 4+ active conversations in DB. Debug logs added but not tested."
+      - working: true
+        agent: "main"
+        comment: "Root cause: tags query selected non-existent created_by column (Postgres 42703). Fix: Removed created_by from select, added deleted_at IS NULL filter. API returns all 8 conversations, 7 filter tabs, and insight strip. Verified via curl."
+      - working: true
+        agent: "testing"
+        comment: "✅ Comprehensive backend API testing completed successfully. All endpoints working correctly: GET /api/health returns {status: 'ok'}, POST /api/auth/setup-session properly validates tokens and returns organisation_id/user_id/role/is_new_user, GET /api/home returns exactly 8 conversations with all required fields (customer_id, name, initials, avatar_color, last_message, last_message_at, outstanding_amount, is_overdue, unread_count, health_score), 7 filter tabs with correct counts (Dues: 5, Quotes: 2, Invoiced: 3, To Deliver: 2, Favorites: 1), insight_strip with content, conversations sorted by last_message_at DESC. Filter endpoint GET /api/home?filter=<tag_id> working correctly (tested with Dues tag, returned 5 filtered conversations). All error cases (missing/invalid tokens) properly return 401. Authentication flow with Supabase working perfectly using test credentials phone 919007188402 and OTP 123456."
+
 agent_communication:
   - agent: "main"
     message: "Race condition fix complete. Applied 5-step sequence: sequential storage awaits → storage verification → in-memory state update → delay → navigation. Added loading gate in layout to prevent premature redirects. Comprehensive logging added at both verification points (OTP handler + auth guard). Ready for manual testing. DO NOT PROCEED TO FLOW 2 until OTP flow consistently lands on /home."
@@ -229,3 +248,7 @@ agent_communication:
     message: "✅ Frontend authentication flow code analysis completed. All components properly implemented: login screen with phone validation, OTP screen with auto-verify and error handling, session management with SecureStore, navigation logic. Fixed linting error in home.tsx. UI testing blocked by infrastructure issues (ngrok tunnel 502 errors, AsyncStorage web compatibility). Code implementation is comprehensive and follows requirements. Note: Implementation uses real Supabase OTP instead of demo OTP 123456 mentioned in review request."
   - agent: "testing"
     message: "✅ Race condition fix code analysis completed. Implementation follows exact 5-step sequence: 1) Sequential SecureStore awaits with individual logging, 2) Storage verification before proceeding, 3) Supabase setSession for in-memory state, 4) Navigation to /home, 5) Loading gate in navigation guard. All steps properly implemented with comprehensive logging. ❌ UI testing blocked by persistent ngrok tunnel failures (502 errors). Backend running correctly. CRITICAL: Manual testing required to verify OTP flow lands on /home consistently. Infrastructure issues prevent automated verification."
+  - agent: "main"
+    message: "Fixed /api/home backend bug. Root cause: tags query selected non-existent created_by column from tags table (Postgres 42703), causing filterTabs to return empty array. Conversations were working but filter tabs were empty. Fix: removed created_by from SELECT, added deleted_at IS NULL filter. API now returns: 8 conversations with full data, 7 filter tabs with counts, and insight strip. Verified via curl. Need testing agent to validate all /api/home scenarios."
+  - agent: "testing"
+    message: "✅ COMPREHENSIVE BACKEND API TESTING COMPLETED - ALL TESTS PASSED. Tested all endpoints as requested: 1) GET /api/health ✅ returns {status: 'ok'}, 2) POST /api/auth/setup-session ✅ validates tokens and returns organisation_id/user_id/role/is_new_user, 3) GET /api/home ✅ MAIN FOCUS - returns exactly 8 conversations with all required fields, 7 filter tabs with correct counts (Dues: 5, Quotes: 2, etc.), insight_strip with content, conversations sorted by last_message_at DESC, 4) GET /api/home?filter=<tag_id> ✅ filtering works correctly (tested with Dues tag), 5) Error cases ✅ missing/invalid tokens return 401. Authentication with Supabase working perfectly using test credentials. All key validations from review request satisfied: 8 conversations returned, filter_tabs has 7 items, all required conversation fields present, proper sorting, correct filter counts. Backend is production-ready."
