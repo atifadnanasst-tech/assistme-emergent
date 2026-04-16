@@ -9,7 +9,7 @@ import {
   Animated,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter, useLocalSearchParams } from 'expo-router';
+import { useRouter, useLocalSearchParams, useSegments } from 'expo-router';
 import { supabase } from '../lib/supabase';
 import { authService } from '../lib/auth';
 
@@ -17,6 +17,7 @@ const TIMER_DURATION = 28; // seconds
 
 export default function OTPScreen() {
   const router = useRouter();
+  const segments = useSegments();
   const { phone } = useLocalSearchParams<{ phone: string }>();
   
   const [otp, setOtp] = useState(['', '', '', '', '', '']);
@@ -81,6 +82,10 @@ export default function OTPScreen() {
     setError('');
 
     try {
+      console.log('🔐 [OTP] ========== VERIFY OTP START ==========');
+      console.log('🔐 [OTP] Phone:', phone);
+      console.log('🔐 [OTP] OTP String:', otpString);
+      
       // Verify OTP with Supabase
       const { data, error: verifyError } = await supabase.auth.verifyOtp({
         phone: phone!,
@@ -88,25 +93,59 @@ export default function OTPScreen() {
         type: 'sms',
       });
 
+      // ISSUE 2 LOGGING: Full verifyOtp response
+      console.log('📊 [OTP] Full verifyOtp response:', {
+        hasData: !!data,
+        hasSession: !!data?.session,
+        hasUser: !!data?.user,
+        hasError: !!verifyError,
+        session: data?.session ? {
+          access_token: data.session.access_token?.substring(0, 20) + '...',
+          refresh_token: data.session.refresh_token?.substring(0, 20) + '...',
+          expires_at: data.session.expires_at,
+          token_type: data.session.token_type,
+        } : null,
+        user: data?.user ? {
+          id: data.user.id,
+          phone: data.user.phone,
+        } : null,
+        error: verifyError ? {
+          message: verifyError.message,
+          status: verifyError.status,
+        } : null,
+      });
+
       if (verifyError) {
+        console.error('❌ [OTP] Verification error:', verifyError);
+        
         // Handle specific errors
         if (verifyError.message.includes('expired')) {
+          // EXPIRED OTP: Lock boxes, show resend only
           setError('OTP expired. Tap Resend.');
+          setLoading(false);
+          // Note: Boxes remain filled and locked - only Resend available
+          return;
         } else if (verifyError.message.includes('invalid')) {
+          // WRONG OTP: Shake, clear, allow retry
           setError('Incorrect OTP. Try again.');
+          shakeAnimation();
+          setTimeout(() => {
+            setOtp(['', '', '', '', '', '']);
+            inputRefs.current[0]?.focus();
+          }, 500);
+          setLoading(false);
+          return;
         } else {
+          // UNKNOWN ERROR: Shake and clear
           setError(verifyError.message || 'Verification failed. Try again.');
+          shakeAnimation();
+          setTimeout(() => {
+            setOtp(['', '', '', '', '', '']);
+            inputRefs.current[0]?.focus();
+          }, 500);
+          setLoading(false);
+          return;
         }
-        
-        // Shake animation and clear
-        shakeAnimation();
-        setTimeout(() => {
-          setOtp(['', '', '', '', '', '']);
-          inputRefs.current[0]?.focus();
-        }, 500);
-        
-        setLoading(false);
-        return;
       }
 
       if (!data.session) {
@@ -134,6 +173,13 @@ export default function OTPScreen() {
 
       const setupData = await setupResponse.json();
 
+      // ISSUE 2 LOGGING: Full setup-session response
+      console.log('📊 [OTP] Full setup-session response:', {
+        status: setupResponse.status,
+        statusText: setupResponse.statusText,
+        data: setupData,
+      });
+
       console.log('✅ [OTP] Backend setup-session successful:', {
         organisation_id: setupData.organisation_id,
         user_id: setupData.user_id,
@@ -155,6 +201,12 @@ export default function OTPScreen() {
       // STEP 2: Verify tokens are actually stored before proceeding
       const storedToken = await authService.getAccessToken();
       const storedOrgId = await authService.getOrganisationId();
+      
+      // ISSUE 2 LOGGING: Value of SecureStore immediately after storing
+      console.log('📊 [OTP] SecureStore verification immediately after storing:');
+      console.log('  - Token exists:', !!storedToken);
+      console.log('  - Token (first 20 chars):', storedToken?.substring(0, 20) + '...');
+      console.log('  - Org ID:', storedOrgId);
       console.log('🔍 [OTP] Verification - Token stored:', !!storedToken);
       console.log('🔍 [OTP] Verification - Org ID stored:', storedOrgId);
 
@@ -181,9 +233,18 @@ export default function OTPScreen() {
 
       console.log('✅ [OTP] Supabase session set in memory');
 
+      // ISSUE 2 LOGGING: Immediately before navigation
+      console.log('📊 [OTP] ========== ABOUT TO NAVIGATE ==========');
+      console.log('📊 [OTP] Current route segment:', segments[0]);
+      console.log('📊 [OTP] Token stored:', !!storedToken);
+      console.log('📊 [OTP] Org ID stored:', storedOrgId);
+      console.log('📊 [OTP] Calling router.replace("/home")...');
+      
       // Navigate to home (proper await sequencing - no delay needed)
       console.log('🚀 [OTP] Navigating to /home...');
       router.replace('/home');
+      
+      console.log('📊 [OTP] ========== NAVIGATION CALLED ==========');
     } catch (err) {
       console.error('Verify OTP error:', err);
       setError('Something went wrong. Please try again.');
