@@ -198,16 +198,8 @@ setTimeout(() => {
     setSparkMode(false);
     setSparkProcessing(true);
 
-    // Show owner instruction in chat as outgoing message
-    const tempId = `spark-${Date.now()}`;
-    const sparkMsg: ChatMessage = {
-      id: tempId, role: 'assistant', content: `✨ ${text}`,
-      created_at: new Date().toISOString(), sender_type: 'owner',
-      visibility: 'both', message_type: 'text', card_type: null,
-      card_data: {}, preview_text: text.substring(0, 50),
-    };
-    setMessages(prev => [...prev, sparkMsg]);
-    setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
+    // Do NOT add instruction to messages — it is NOT a chat message to the customer.
+    // The sparkProcessing indicator shows the owner that AI is working.
 
     try {
       const token = await getToken();
@@ -261,13 +253,7 @@ setTimeout(() => {
       }
     } catch (err: any) {
       if (err.name !== 'AbortError') {
-        const errorMsg: ChatMessage = {
-          id: `err-${Date.now()}`, role: 'assistant', content: "Could not fully process request. Try again.",
-          created_at: new Date().toISOString(), sender_type: 'ai',
-          visibility: 'both', message_type: 'text', card_type: null,
-          card_data: {}, preview_text: 'AI error',
-        };
-        setMessages(prev => [...prev, errorMsg]);
+        Alert.alert('Spark Error', 'Could not process your request. Try again.');
       }
     } finally {
       setSparkProcessing(false);
@@ -590,8 +576,15 @@ setTimeout(() => {
 
       {/* Input bar */}
       <View style={[styles.inputBarWrapper, { paddingBottom: keyboardVisible ? 0 : insets.bottom }]}>
+        {/* Spark processing indicator */}
+        {sparkProcessing && (
+          <View style={styles.sparkProcessingBar}>
+            <ActivityIndicator size="small" color="#075E54" />
+            <Text style={styles.sparkProcessingText}>AI is analyzing your request...</Text>
+          </View>
+        )}
         {/* Spark mode indicator */}
-        {sparkMode && (
+        {sparkMode && !sparkProcessing && (
           <View style={styles.sparkIndicator}>
             <Ionicons name="sparkles" size={16} color="#075E54" />
             <Text style={styles.sparkIndicatorText}>AI Spark Mode — type a natural language instruction</Text>
@@ -894,6 +887,11 @@ const styles = StyleSheet.create({
     paddingVertical: 8, paddingHorizontal: 14, gap: 8,
   },
   sparkIndicatorText: { flex: 1, fontSize: 12, color: '#075E54', fontWeight: '500' },
+  sparkProcessingBar: {
+    flexDirection: 'row', alignItems: 'center', backgroundColor: '#E0F2F1',
+    paddingVertical: 10, paddingHorizontal: 14, gap: 10,
+  },
+  sparkProcessingText: { fontSize: 13, color: '#00796B', fontWeight: '500' },
   inputIconBtn: { padding: 6 },
   textInput: { flex: 1, fontSize: 15, color: '#333', maxHeight: 100, paddingVertical: 8 },
   rightCapsule: { alignItems: 'center', gap: 6 },
