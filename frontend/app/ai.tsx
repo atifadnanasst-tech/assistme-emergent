@@ -88,6 +88,9 @@ export default function AIScreen() {
 
       if (data.messages && data.messages.length > 0) {
         setMessages(data.messages);
+setTimeout(() => {
+  flatListRef.current?.scrollToEnd({ animated: false });
+}, 100);
       } else {
         // Welcome message (E1 — only static message allowed)
         setMessages([{

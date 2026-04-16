@@ -755,6 +755,7 @@ app.get('/api/chat/:customer_id', async (c) => {
         .from('messages')
         .select('id, role, content, metadata, created_at')
         .eq('conversation_id', conversation.id)
+        .is('deleted_at', null)
         .order('created_at', { ascending: true })
         .limit(50);
 

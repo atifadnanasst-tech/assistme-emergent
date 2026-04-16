@@ -95,6 +95,9 @@ export default function CustomerChatScreen() {
       setConversationId(data.conversation_id);
       setCustomer(data.customer);
       setMessages(data.messages || []);
+setTimeout(() => {
+  flatListRef.current?.scrollToEnd({ animated: false });
+}, 100);
     } catch (err: any) {
       if (err.name !== 'AbortError') console.error('Load chat error:', err);
     } finally {
