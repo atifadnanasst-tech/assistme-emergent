@@ -1256,16 +1256,15 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
       routing = 'auto_confirm';
     }
 
-    // If clarifying, send AI question in chat and return
+    // If clarifying, send AI question in chat (owner-only) and return
     if (routing === 'clarify') {
       const clarifyContent = parsed.reasoning || "I'm not sure what you'd like me to do. Could you be more specific?";
       await supabase.from('messages').insert({
         organisation_id: organisationId, conversation_id: conversationId,
-        role: 'assistant', content: clarifyContent,
+        role: 'system', content: clarifyContent,
         metadata: {
-          sender_type: 'ai', visibility: 'both', message_type: 'text',
+          sender_type: 'ai', visibility: 'owner_only', message_type: 'spark_clarify',
           read_by_owner: true, preview_text: clarifyContent.substring(0, 50),
-          ai_raw_response: JSON.stringify(parsed),
         },
         tokens_input: 0, tokens_output: 0,
       });

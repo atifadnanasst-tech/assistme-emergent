@@ -448,7 +448,10 @@ setTimeout(() => {
     let content = null;
     if (item.message_type === 'invoice_card' || item.card_type === 'invoice_card') {
       content = renderInvoiceCard(item);
-    } else if (item.role === 'system' || item.message_type === 'system_alert') {
+    } else if (item.role === 'system' || item.message_type === 'system_alert' || item.message_type === 'spark_clarify') {
+      content = renderSystemAlert(item);
+    } else if (item.visibility === 'owner_only' && item.sender_type === 'ai') {
+      // AI-only messages (e.g. spark reasoning) — render as subtle system note, not green bubble
       content = renderSystemAlert(item);
     } else if (item.role === 'user') {
       content = renderIncomingMessage(item);
@@ -574,6 +577,13 @@ setTimeout(() => {
         )}
       </View>
 
+      {/* Spark FAB — floating above input bar, right side */}
+      {!sparkMode && !sparkProcessing && inputText.trim().length === 0 && (
+        <TouchableOpacity style={styles.sparkFab} onPress={() => setSparkMode(true)}>
+          <Ionicons name="sparkles" size={22} color="#FFF" />
+        </TouchableOpacity>
+      )}
+
       {/* Input bar */}
       <View style={[styles.inputBarWrapper, { paddingBottom: keyboardVisible ? 0 : insets.bottom }]}>
         {/* Spark processing indicator */}
@@ -619,38 +629,20 @@ setTimeout(() => {
             )}
           </View>
 
-          <View style={styles.rightCapsule}>
-            {sparkMode ? (
-              <TouchableOpacity
-                style={[styles.sendBtn, styles.sparkSendBtn]}
-                onPress={handleSpark}
-                disabled={sparkProcessing || inputText.trim().length === 0}
-              >
-                {sparkProcessing ? (
-                  <ActivityIndicator size="small" color="#FFF" />
-                ) : (
-                  <Ionicons name="send" size={20} color="#FFF" />
-                )}
-              </TouchableOpacity>
-            ) : inputText.trim().length > 0 ? (
-              <TouchableOpacity style={styles.sendBtn} onPress={handleSend} disabled={sending}>
-                {sending ? (
-                  <ActivityIndicator size="small" color="#FFF" />
-                ) : (
-                  <Ionicons name="send" size={20} color="#FFF" />
-                )}
-              </TouchableOpacity>
-            ) : (
-              <>
-                <TouchableOpacity style={styles.sparkBtn} onPress={() => setSparkMode(true)}>
-                  <Ionicons name="sparkles" size={22} color="#FFF" />
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.micBtn}>
-                  <Ionicons name="mic" size={20} color="#CCC" />
-                </TouchableOpacity>
-              </>
-            )}
-          </View>
+          {/* Send button — only shows when there's text or in spark mode */}
+          {(sparkMode || inputText.trim().length > 0) && (
+            <TouchableOpacity
+              style={[styles.sendBtn, sparkMode && styles.sparkSendBtn]}
+              onPress={sparkMode ? handleSpark : handleSend}
+              disabled={sparkMode ? (sparkProcessing || inputText.trim().length === 0) : sending}
+            >
+              {(sending || sparkProcessing) ? (
+                <ActivityIndicator size="small" color="#FFF" />
+              ) : (
+                <Ionicons name="send" size={20} color="#FFF" />
+              )}
+            </TouchableOpacity>
+          )}
         </View>
       </View>
 
@@ -874,10 +866,10 @@ const styles = StyleSheet.create({
 
   // Input bar
   inputBarWrapper: { backgroundColor: '#F0F0F0' },
-  inputRow: { flexDirection: 'row', alignItems: 'flex-end', padding: 6, gap: 6, backgroundColor: '#F0F0F0' },
+  inputRow: { flexDirection: 'row', alignItems: 'flex-end', paddingVertical: 4, paddingHorizontal: 6, gap: 6, backgroundColor: '#F0F0F0' },
   inputPill: {
     flex: 1, flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF',
-    borderRadius: 24, paddingHorizontal: 8, minHeight: 48,
+    borderRadius: 24, paddingHorizontal: 8, minHeight: 44,
   },
   inputPillSpark: {
     borderWidth: 1.5, borderColor: '#075E54', backgroundColor: '#F0FAF8',
@@ -893,22 +885,20 @@ const styles = StyleSheet.create({
   },
   sparkProcessingText: { fontSize: 13, color: '#00796B', fontWeight: '500' },
   inputIconBtn: { padding: 6 },
-  textInput: { flex: 1, fontSize: 15, color: '#333', maxHeight: 100, paddingVertical: 8 },
-  rightCapsule: { alignItems: 'center', gap: 6 },
-  sparkBtn: {
-    width: 48, height: 48, borderRadius: 24, backgroundColor: '#075E54',
-    justifyContent: 'center', alignItems: 'center',
-  },
+  textInput: { flex: 1, fontSize: 15, color: '#333', maxHeight: 100, paddingVertical: 6 },
   sendBtn: {
-    width: 48, height: 48, borderRadius: 24, backgroundColor: '#075E54',
+    width: 44, height: 44, borderRadius: 22, backgroundColor: '#075E54',
     justifyContent: 'center', alignItems: 'center',
   },
   sparkSendBtn: {
     backgroundColor: '#00796B',
   },
-  micBtn: {
-    width: 36, height: 36, borderRadius: 18, backgroundColor: '#E0E0E0',
+  sparkFab: {
+    position: 'absolute', right: 16, bottom: 70, zIndex: 20,
+    width: 52, height: 52, borderRadius: 26, backgroundColor: '#075E54',
     justifyContent: 'center', alignItems: 'center',
+    elevation: 6, shadowColor: '#000', shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.25, shadowRadius: 4,
   },
 
   // Menu overlay
