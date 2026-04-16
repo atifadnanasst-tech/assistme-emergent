@@ -5,7 +5,7 @@ import dotenv from 'dotenv';
 import { createClient } from '@supabase/supabase-js';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { registerAIRoutes } from './ai-routes.js';
+import { registerAIRoutes, getOpenAI } from './ai-routes.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -1060,6 +1060,553 @@ app.post('/api/payments', async (c) => {
 
   } catch (error) {
     console.error('POST /api/payments error:', error);
+    return c.json({ error: 'server_error' }, 500);
+  }
+});
+
+
+// ══════════════════════════════════════════════════════════════
+// FLOW 3A — AI SPARK ROUTES
+// ══════════════════════════════════════════════════════════════
+
+const SPARK_SYSTEM_PROMPT = `You are an action extraction assistant for an Indian MSME trader.
+The customer is already identified from context — do not ask who.
+Available data: customers(id, name, phone, outstanding_balance),
+products(id, name, sku, selling_price), invoices(id, status, total_amount),
+tasks(id, entity_id, entity_type, due_date)
+
+Extract the owner's intent and output ONLY this JSON — no other text:
+{
+  "intent": "create_invoice | schedule_delivery | set_reminder | record_payment | query | ambiguous",
+  "confidence_score": 0.0,
+  "entities": {
+    "product_name": "string or null",
+    "quantity": null,
+    "amount": null,
+    "due_date": "string or null",
+    "delivery_date": "string or null"
+  },
+  "reasoning": "one sentence explaining confidence score"
+}
+If intent is unclear → output ambiguous with confidence_score < 0.50.
+No markdown. No preamble. JSON only.`;
+
+const FINANCIAL_INTENTS = ['create_invoice', 'record_payment', 'set_reminder'];
+const ALLOWED_INTENTS = ['create_invoice', 'schedule_delivery', 'set_reminder', 'record_payment', 'query', 'ambiguous'];
+
+function parseSparkResponse(text) {
+  try {
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return { intent: 'ambiguous', confidence_score: 0.0, entities: {}, reasoning: 'Could not parse response' };
+    const parsed = JSON.parse(jsonMatch[0]);
+    let intent = parsed.intent || 'ambiguous';
+    if (!ALLOWED_INTENTS.includes(intent)) intent = 'ambiguous';
+    let confidence = parseFloat(parsed.confidence_score) || 0.0;
+    if (confidence < 0 || confidence > 1) confidence = 0.0;
+    return {
+      intent,
+      confidence_score: confidence,
+      entities: (typeof parsed.entities === 'object' && parsed.entities) ? parsed.entities : {},
+      reasoning: parsed.reasoning || '',
+    };
+  } catch {
+    return { intent: 'ambiguous', confidence_score: 0.0, entities: {}, reasoning: 'Parse error' };
+  }
+}
+
+// ─── POST /api/chat/:customer_id/spark ─────────────────────
+app.post('/api/chat/:customer_id/spark', async (c) => {
+  const startTime = Date.now();
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { userId, organisationId } = auth;
+    const customerId = c.req.param('customer_id');
+
+    const customer = await validateCustomer(customerId, organisationId);
+    if (!customer) return c.json({ error: 'customer_not_found' }, 404);
+
+    const body = await c.req.json();
+    const query = body.query?.trim();
+    const conversationId = body.conversation_id;
+    if (!query) return c.json({ error: 'empty_query' }, 400);
+    if (!conversationId) return c.json({ error: 'missing_conversation_id' }, 400);
+
+    // Validate conversation belongs to org
+    const { data: conv } = await supabase
+      .from('conversations').select('id')
+      .eq('id', conversationId).eq('organisation_id', organisationId).maybeSingle();
+    if (!conv) return c.json({ error: 'conversation_not_found' }, 404);
+
+    // Layer 1: ai_context (global)
+    let globalContext = '';
+    try {
+      const { data: ctxRows } = await supabase
+        .from('ai_context').select('context_key, context_value')
+        .eq('organisation_id', organisationId).eq('scope', 'global')
+        .eq('is_active', true).is('deleted_at', null);
+      if (ctxRows?.length > 0) {
+        globalContext = ctxRows.map(r => `${r.context_key}: ${r.context_value}`).join('\n');
+      }
+    } catch {}
+
+    // Layer 2: entity_memory for this customer
+    let customerMemory = '';
+    try {
+      const { data: memories } = await supabase
+        .from('entity_memory').select('memory_key, memory_value')
+        .eq('organisation_id', organisationId).eq('entity_type', 'customer')
+        .eq('entity_id', customerId).is('deleted_at', null);
+      if (memories?.length > 0) {
+        customerMemory = memories.map(m => `${m.memory_key}: ${m.memory_value}`).join('\n');
+      }
+    } catch {}
+
+    // Layer 3: last 15 messages
+    const { data: recentMsgs } = await supabase
+      .from('messages').select('role, content')
+      .eq('conversation_id', conversationId)
+      .order('created_at', { ascending: false }).limit(15);
+    const recentText = (recentMsgs || []).reverse()
+      .map(m => `${m.role}: ${(m.content || '').substring(0, 200)}`).join('\n');
+
+    // Build OpenAI messages
+    const userMessage = `Customer: ${customer.name}\nOwner instruction: ${query}\nRecent context: ${recentText}\nCustomer memory: ${customerMemory || 'none'}`;
+    const systemContent = SPARK_SYSTEM_PROMPT + (globalContext ? `\n\nBusiness context:\n${globalContext}` : '');
+
+    const client = getOpenAI();
+    if (!client) return c.json({ error: 'ai_error', message: 'AI not configured' }, 500);
+
+    let tokensInput = 0, tokensOutput = 0;
+    let parsed = { intent: 'ambiguous', confidence_score: 0.0, entities: {}, reasoning: '' };
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+    try {
+      const completion = await client.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [
+          { role: 'system', content: systemContent },
+          { role: 'user', content: userMessage },
+        ],
+        temperature: 0.2,
+      }, { signal: controller.signal });
+      clearTimeout(timeoutId);
+      tokensInput = completion.usage?.prompt_tokens || 0;
+      tokensOutput = completion.usage?.completion_tokens || 0;
+      parsed = parseSparkResponse(completion.choices[0].message.content || '');
+    } catch (aiErr) {
+      clearTimeout(timeoutId);
+      console.error('Spark OpenAI call failed:', aiErr.message);
+      // Log failure
+      try {
+        await supabase.from('ai_usage_log').insert({
+          organisation_id: organisationId, user_id: userId, conversation_id: conversationId,
+          model: 'gpt-4o-mini', operation: 'spark', tokens_input: 0, tokens_output: 0,
+          cost_usd: 0, duration_ms: Date.now() - startTime, status: 'failed', error_message: aiErr.message,
+        });
+      } catch {}
+      return c.json({ error: 'ai_error', message: 'AI temporarily unavailable' }, 500);
+    }
+
+    // Write ai_usage_log (success)
+    const durationMs = Date.now() - startTime;
+    const costUsd = (tokensInput * 0.00015 / 1000) + (tokensOutput * 0.00060 / 1000);
+    try {
+      await supabase.from('ai_usage_log').insert({
+        organisation_id: organisationId, user_id: userId, conversation_id: conversationId,
+        model: 'gpt-4o-mini', operation: 'spark', tokens_input: tokensInput, tokens_output: tokensOutput,
+        cost_usd: costUsd, duration_ms: durationMs, status: 'success',
+      });
+    } catch {}
+
+    // Product resolution if product_name is present
+    let resolvedProduct = null;
+    if (parsed.entities.product_name) {
+      const { data: products } = await supabase
+        .from('products').select('id, name, selling_price')
+        .eq('organisation_id', organisationId)
+        .ilike('name', `%${parsed.entities.product_name}%`).limit(5);
+      if (products?.length === 1) {
+        resolvedProduct = products[0];
+        parsed.confidence_score = Math.min(1.0, parsed.confidence_score + 0.2);
+      } else if (products?.length > 1) {
+        // Multiple — reduce confidence
+        parsed.confidence_score = Math.max(0, parsed.confidence_score - 0.15);
+      } else {
+        parsed.confidence_score = Math.max(0, parsed.confidence_score - 0.3);
+      }
+    }
+
+    // Compute amount if not provided
+    let amount = parsed.entities.amount;
+    if (!amount && resolvedProduct && parsed.entities.quantity) {
+      amount = resolvedProduct.selling_price * parsed.entities.quantity;
+    }
+
+    // Confidence routing
+    const isFinancial = FINANCIAL_INTENTS.includes(parsed.intent);
+    let routing = 'preview'; // default
+    if (parsed.intent === 'ambiguous' || parsed.confidence_score < 0.50) {
+      routing = 'clarify';
+    } else if (parsed.confidence_score > 0.85 && !isFinancial) {
+      routing = 'auto_confirm';
+    }
+
+    // If clarifying, send AI question in chat and return
+    if (routing === 'clarify') {
+      const clarifyContent = parsed.reasoning || "I'm not sure what you'd like me to do. Could you be more specific?";
+      await supabase.from('messages').insert({
+        organisation_id: organisationId, conversation_id: conversationId,
+        role: 'assistant', content: clarifyContent,
+        metadata: {
+          sender_type: 'ai', visibility: 'owner_only', message_type: 'text',
+          read_by_owner: true, preview_text: clarifyContent.substring(0, 50),
+          ai_raw_response: JSON.stringify(parsed),
+        },
+        tokens_input: 0, tokens_output: 0,
+      });
+      return c.json({
+        routing: 'clarify',
+        message: clarifyContent,
+        confidence_score: parsed.confidence_score,
+        actions: [],
+      });
+    }
+
+    // Build action parameters
+    const actionParams = {
+      customer_id: customerId,
+      customer_name: customer.name,
+      product_name: resolvedProduct?.name || parsed.entities.product_name || null,
+      product_id: resolvedProduct?.id || null,
+      quantity: parsed.entities.quantity || null,
+      amount: amount || null,
+      unit_price: resolvedProduct?.selling_price || null,
+      due_date: parsed.entities.due_date || null,
+      delivery_date: parsed.entities.delivery_date || null,
+    };
+
+    // Save draft to ai_actions
+    const { data: savedAction, error: actionErr } = await supabase
+      .from('ai_actions')
+      .insert({
+        organisation_id: organisationId,
+        action_name: `${parsed.intent.replace(/_/g, ' ')} for ${customer.name}`,
+        action_type: parsed.intent,
+        prompt_template: query,
+        parameters: actionParams,
+        confidence_score: parsed.confidence_score,
+        status: routing === 'auto_confirm' ? 'approved' : 'pending',
+      })
+      .select('id')
+      .single();
+
+    if (actionErr) {
+      console.error('Save ai_action failed:', actionErr);
+      return c.json({ error: 'server_error' }, 500);
+    }
+
+    // Get entity_memory insight for preview
+    let aiInsight = null;
+    try {
+      const { data: insights } = await supabase
+        .from('entity_memory').select('memory_key, memory_value')
+        .eq('organisation_id', organisationId).eq('entity_type', 'customer')
+        .eq('entity_id', customerId).is('deleted_at', null).limit(3);
+      if (insights?.length > 0) {
+        aiInsight = insights.map(i => `${i.memory_key}: ${i.memory_value}`).join('. ');
+      }
+    } catch {}
+
+    // Build details string
+    let details = '';
+    if (actionParams.quantity && actionParams.product_name) {
+      details += `${actionParams.quantity} × ${actionParams.product_name}`;
+    }
+    if (actionParams.amount) details += ` · Amount: ₹${actionParams.amount.toLocaleString('en-IN')}`;
+    if (actionParams.due_date) details += ` · Due: ${actionParams.due_date}`;
+    if (actionParams.delivery_date) details += ` · Delivery: ${actionParams.delivery_date}`;
+
+    return c.json({
+      draft_id: savedAction.id,
+      confidence_score: parsed.confidence_score,
+      routing,
+      actions: [{
+        action_id: savedAction.id,
+        action_type: parsed.intent,
+        details: details || `${parsed.intent} for ${customer.name}`,
+        parameters: actionParams,
+        editable: true,
+      }],
+      ai_insight: aiInsight,
+    });
+
+  } catch (error) {
+    console.error('POST /api/chat/spark error:', error);
+    return c.json({ error: 'server_error' }, 500);
+  }
+});
+
+// ─── POST /api/chat/:customer_id/spark/confirm ─────────────
+app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { userId, organisationId } = auth;
+    const customerId = c.req.param('customer_id');
+
+    const customer = await validateCustomer(customerId, organisationId);
+    if (!customer) return c.json({ error: 'customer_not_found' }, 404);
+
+    const body = await c.req.json();
+    const { draft_id, action_ids } = body;
+    if (!draft_id || !action_ids?.length) return c.json({ error: 'missing_fields' }, 400);
+
+    const executed = [];
+    const failed = [];
+
+    for (const actionId of action_ids) {
+      // Fetch action
+      const { data: action } = await supabase
+        .from('ai_actions').select('*')
+        .eq('id', actionId).eq('organisation_id', organisationId).maybeSingle();
+
+      if (!action || (action.status !== 'pending' && action.status !== 'approved')) {
+        failed.push(actionId);
+        continue;
+      }
+
+      const params = action.parameters || {};
+
+      try {
+        switch (action.action_type) {
+          case 'create_invoice': {
+            // Get next invoice number
+            const { count: invCount } = await supabase
+              .from('invoices').select('*', { count: 'exact', head: true })
+              .eq('organisation_id', organisationId);
+            const invoiceNumber = ((invCount || 0) + 1).toString();
+
+            const subtotal = params.amount || 0;
+            const taxAmount = 0;
+            const totalAmount = subtotal + taxAmount;
+
+            const { data: newInvoice, error: invErr } = await supabase
+              .from('invoices').insert({
+                organisation_id: organisationId,
+                customer_id: customerId,
+                invoice_number: invoiceNumber,
+                status: 'sent',
+                issue_date: new Date().toISOString().split('T')[0],
+                due_date: params.due_date || new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0],
+                currency: 'INR',
+                subtotal, tax_amount: taxAmount, total_amount: totalAmount,
+                amount_due: totalAmount, amount_paid: 0,
+              }).select('id').single();
+
+            if (invErr) { console.error('Create invoice failed:', invErr); failed.push(actionId); continue; }
+
+            // Insert invoice items
+            if (params.product_name) {
+              await supabase.from('invoice_items').insert({
+                organisation_id: organisationId,
+                invoice_id: newInvoice.id,
+                description: params.product_name,
+                quantity: params.quantity || 1,
+                unit_price: params.unit_price || params.amount || 0,
+                tax_rate: 0,
+                line_total: subtotal,
+                sort_order: 1,
+              });
+            }
+
+            // Insert invoice card message in chat
+            const { data: conv } = await supabase
+              .from('conversations').select('id')
+              .eq('organisation_id', organisationId).eq('entity_type', 'customer')
+              .eq('entity_id', customerId).eq('status', 'active').maybeSingle();
+
+            if (conv) {
+              const itemsSummary = params.product_name
+                ? `${params.product_name} × ${params.quantity || 1}`
+                : 'Items';
+
+              await supabase.from('messages').insert({
+                organisation_id: organisationId,
+                conversation_id: conv.id,
+                role: 'tool',
+                content: `Invoice #${invoiceNumber} created`,
+                metadata: {
+                  sender_type: 'system',
+                  visibility: 'both',
+                  message_type: 'invoice_card',
+                  read_by_owner: true,
+                  preview_text: `Invoice #${invoiceNumber} created`,
+                  card_type: 'invoice_card',
+                  card_data: {
+                    invoice_id: newInvoice.id,
+                    invoice_number: invoiceNumber,
+                    total_amount: totalAmount,
+                    due_date: params.due_date || new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0],
+                    status: 'sent',
+                    items_summary: itemsSummary,
+                  },
+                },
+                tokens_input: 0, tokens_output: 0,
+              });
+            }
+
+            // Update customer outstanding balance
+            await supabase.from('customers')
+              .update({ outstanding_balance: (customer.outstanding_balance || 0) + totalAmount })
+              .eq('id', customerId).eq('organisation_id', organisationId);
+
+            executed.push(actionId);
+            break;
+          }
+
+          case 'schedule_delivery': {
+            await supabase.from('tasks').insert({
+              organisation_id: organisationId,
+              title: `Delivery for ${customer.name}`,
+              description: params.product_name ? `Deliver ${params.quantity || ''} ${params.product_name}` : 'Scheduled delivery',
+              status: 'pending',
+              priority: 'medium',
+              created_by: userId,
+              due_date: params.delivery_date || params.due_date || new Date(Date.now() + 86400000).toISOString().split('T')[0],
+              entity_type: 'delivery',
+              entity_id: customerId,
+            });
+            executed.push(actionId);
+            break;
+          }
+
+          case 'set_reminder': {
+            // Build wa.me reminder link
+            const phone = (customer.phone || '').replace(/[^0-9]/g, '');
+            if (phone) {
+              const text = encodeURIComponent(
+                `Hi ${customer.name}, this is a reminder about your pending payment. Please arrange at your earliest convenience.`
+              );
+              // Save reminder message to chat
+              const { data: conv } = await supabase
+                .from('conversations').select('id')
+                .eq('organisation_id', organisationId).eq('entity_type', 'customer')
+                .eq('entity_id', customerId).eq('status', 'active').maybeSingle();
+              if (conv) {
+                await supabase.from('messages').insert({
+                  organisation_id: organisationId, conversation_id: conv.id,
+                  role: 'assistant', content: `Payment reminder scheduled for ${customer.name}`,
+                  metadata: {
+                    sender_type: 'ai', visibility: 'both', message_type: 'text',
+                    read_by_owner: true, preview_text: `Reminder scheduled for ${customer.name}`,
+                    ai_raw_response: JSON.stringify(params),
+                  },
+                  tokens_input: 0, tokens_output: 0,
+                });
+              }
+            }
+            executed.push(actionId);
+            break;
+          }
+
+          case 'record_payment': {
+            if (params.amount && params.amount > 0) {
+              // Find latest unpaid invoice for this customer
+              const { data: inv } = await supabase
+                .from('invoices').select('id, total_amount, amount_paid')
+                .eq('organisation_id', organisationId).eq('customer_id', customerId)
+                .neq('status', 'paid').order('created_at', { ascending: false }).limit(1).maybeSingle();
+              if (inv) {
+                const newPaid = (inv.amount_paid || 0) + params.amount;
+                const newStatus = newPaid >= (inv.total_amount || 0) ? 'paid' : 'partial';
+                await supabase.from('invoices').update({ amount_paid: newPaid, status: newStatus })
+                  .eq('id', inv.id).eq('organisation_id', organisationId);
+                const newBalance = Math.max(0, (customer.outstanding_balance || 0) - params.amount);
+                await supabase.from('customers').update({ outstanding_balance: newBalance })
+                  .eq('id', customerId).eq('organisation_id', organisationId);
+                // entity_memory
+                try {
+                  await supabase.from('entity_memory').insert({
+                    organisation_id: organisationId, entity_type: 'customer', entity_id: customerId,
+                    memory_key: 'last_payment_amount', memory_value: params.amount.toString(), confidence: 1.0,
+                  });
+                } catch {}
+              }
+            }
+            executed.push(actionId);
+            break;
+          }
+
+          default:
+            failed.push(actionId);
+        }
+
+        // Mark action as executed
+        if (executed.includes(actionId)) {
+          await supabase.from('ai_actions').update({ status: 'executed' }).eq('id', actionId);
+        }
+      } catch (execErr) {
+        console.error(`Action ${actionId} execution failed:`, execErr);
+        failed.push(actionId);
+      }
+    }
+
+    return c.json({ executed, failed });
+
+  } catch (error) {
+    console.error('POST /api/chat/spark/confirm error:', error);
+    return c.json({ error: 'server_error' }, 500);
+  }
+});
+
+// ─── PATCH /api/chat/:customer_id/spark/action/:action_id ──
+app.patch('/api/chat/:customer_id/spark/action/:action_id', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const actionId = c.req.param('action_id');
+
+    const body = await c.req.json();
+    const newParams = body.parameters;
+    if (!newParams) return c.json({ error: 'missing_parameters' }, 400);
+
+    const { data: action } = await supabase
+      .from('ai_actions').select('id, parameters')
+      .eq('id', actionId).eq('organisation_id', auth.organisationId).maybeSingle();
+    if (!action) return c.json({ error: 'action_not_found' }, 404);
+
+    const merged = { ...(action.parameters || {}), ...newParams };
+    const { error: updateErr } = await supabase
+      .from('ai_actions').update({ parameters: merged }).eq('id', actionId);
+    if (updateErr) return c.json({ error: 'server_error' }, 500);
+
+    return c.json({ action_id: actionId, updated: true });
+
+  } catch (error) {
+    console.error('PATCH /api/chat/spark/action error:', error);
+    return c.json({ error: 'server_error' }, 500);
+  }
+});
+
+// ─── DELETE /api/chat/:customer_id/spark/:draft_id ─────────
+app.delete('/api/chat/:customer_id/spark/:draft_id', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const draftId = c.req.param('draft_id');
+
+    const { error: updateErr } = await supabase
+      .from('ai_actions').update({ status: 'rejected' })
+      .eq('id', draftId).eq('organisation_id', auth.organisationId);
+    if (updateErr) return c.json({ error: 'server_error' }, 500);
+
+    return c.json({ cancelled: true });
+
+  } catch (error) {
+    console.error('DELETE /api/chat/spark error:', error);
     return c.json({ error: 'server_error' }, 500);
   }
 });

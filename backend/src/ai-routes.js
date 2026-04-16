@@ -362,6 +362,7 @@ async function executeTool(toolName, args, supabase, organisationId) {
 }
 
 // ── Register AI routes ───────────────────────────────────────
+export { getOpenAI };
 export function registerAIRoutes(app, supabase) {
 
   async function authenticate(c) {
