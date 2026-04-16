@@ -5,6 +5,7 @@ import dotenv from 'dotenv';
 import { createClient } from '@supabase/supabase-js';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { registerAIRoutes } from './ai-routes.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -668,6 +669,12 @@ app.post('/api/tags', async (c) => {
 
 // Export supabase client for use in other modules
 export { supabase };
+
+// Register AI routes (Flow 2B)
+if (supabase) {
+  registerAIRoutes(app, supabase);
+  console.log('✅ AI routes registered');
+}
 
 // Start server
 const port = 8001;
