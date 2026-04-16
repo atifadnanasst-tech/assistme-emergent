@@ -1073,25 +1073,32 @@ app.post('/api/payments', async (c) => {
 
 const SPARK_SYSTEM_PROMPT = `You are an action extraction assistant for an Indian MSME trader.
 The customer is already identified from context — do not ask who.
-Available data: customers(id, name, phone, outstanding_balance),
-products(id, name, sku, selling_price), invoices(id, status, total_amount),
-tasks(id, entity_id, entity_type, due_date)
+Today's date: ${new Date().toISOString().split('T')[0]}
 
-Extract the owner's intent and output ONLY this JSON — no other text:
+Extract ALL actions from the owner's instruction. Output ONLY this JSON — no other text:
 {
-  "intent": "create_invoice | schedule_delivery | set_reminder | record_payment | query | ambiguous",
-  "confidence_score": 0.0,
-  "entities": {
-    "product_name": "string or null",
-    "quantity": null,
-    "amount": null,
-    "due_date": "string or null",
-    "delivery_date": "string or null"
-  },
-  "reasoning": "one sentence explaining confidence score"
+  "actions": [
+    {
+      "action_type": "create_invoice | schedule_delivery | set_reminder | record_payment",
+      "entities": {
+        "product_name": "string or null",
+        "quantity": number or null,
+        "amount": number or null,
+        "due_date": "YYYY-MM-DD or null",
+        "delivery_date": "YYYY-MM-DD or null"
+      }
+    }
+  ],
+  "confidence_score": 0.0 to 1.0,
+  "reasoning": "one sentence"
 }
-If intent is unclear → output ambiguous with confidence_score < 0.50.
-No markdown. No preamble. JSON only.`;
+Rules:
+- Extract EVERY action mentioned (invoice, delivery, reminder, payment — can be multiple)
+- Resolve relative dates: "tomorrow" = next day, "7 din baad" = +7 days, "kal" = tomorrow
+- If owner says "payment reminder in 7 days", action_type = set_reminder, due_date = today + 7 days
+- If owner says "delivery kal", action_type = schedule_delivery, delivery_date = tomorrow
+- If intent is truly unclear, return empty actions array with confidence_score < 0.50
+- No markdown. No preamble. JSON only.`;
 
 const FINANCIAL_INTENTS = ['create_invoice', 'record_payment', 'set_reminder'];
 const ALLOWED_INTENTS = ['create_invoice', 'schedule_delivery', 'set_reminder', 'record_payment', 'query', 'ambiguous'];
@@ -1099,20 +1106,39 @@ const ALLOWED_INTENTS = ['create_invoice', 'schedule_delivery', 'set_reminder', 
 function parseSparkResponse(text) {
   try {
     const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) return { intent: 'ambiguous', confidence_score: 0.0, entities: {}, reasoning: 'Could not parse response' };
+    if (!jsonMatch) return { actions: [], confidence_score: 0.0, reasoning: 'Could not parse response' };
     const parsed = JSON.parse(jsonMatch[0]);
+
+    // Handle new multi-action format
+    if (Array.isArray(parsed.actions)) {
+      const validActions = parsed.actions
+        .filter(a => a && ALLOWED_INTENTS.includes(a.action_type))
+        .map(a => ({
+          action_type: a.action_type,
+          entities: (typeof a.entities === 'object' && a.entities) ? a.entities : {},
+        }));
+      return {
+        actions: validActions,
+        confidence_score: Math.min(1.0, Math.max(0, parseFloat(parsed.confidence_score) || 0.0)),
+        reasoning: parsed.reasoning || '',
+      };
+    }
+
+    // Fallback: old single-intent format
     let intent = parsed.intent || 'ambiguous';
     if (!ALLOWED_INTENTS.includes(intent)) intent = 'ambiguous';
     let confidence = parseFloat(parsed.confidence_score) || 0.0;
     if (confidence < 0 || confidence > 1) confidence = 0.0;
     return {
-      intent,
+      actions: intent !== 'ambiguous' ? [{
+        action_type: intent,
+        entities: (typeof parsed.entities === 'object' && parsed.entities) ? parsed.entities : {},
+      }] : [],
       confidence_score: confidence,
-      entities: (typeof parsed.entities === 'object' && parsed.entities) ? parsed.entities : {},
       reasoning: parsed.reasoning || '',
     };
   } catch {
-    return { intent: 'ambiguous', confidence_score: 0.0, entities: {}, reasoning: 'Parse error' };
+    return { actions: [], confidence_score: 0.0, reasoning: 'Parse error' };
   }
 }
 
@@ -1223,90 +1249,105 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
       });
     } catch {}
 
-    // Product resolution if product_name is present
+    // Product resolution for actions with product_name
     let resolvedProduct = null;
-    if (parsed.entities.product_name) {
+    const firstProductAction = parsed.actions.find(a => a.entities?.product_name);
+    if (firstProductAction?.entities?.product_name) {
       const { data: products } = await supabase
         .from('products').select('id, name, selling_price')
         .eq('organisation_id', organisationId)
-        .ilike('name', `%${parsed.entities.product_name}%`).limit(5);
-      if (products?.length === 1) {
-        resolvedProduct = products[0];
-        parsed.confidence_score = Math.min(1.0, parsed.confidence_score + 0.2);
-      } else if (products?.length > 1) {
-        // Multiple — reduce confidence
-        parsed.confidence_score = Math.max(0, parsed.confidence_score - 0.15);
-      } else {
-        parsed.confidence_score = Math.max(0, parsed.confidence_score - 0.3);
+        .ilike('name', `%${firstProductAction.entities.product_name}%`).limit(5);
+      if (products?.length >= 1) {
+        resolvedProduct = products[0]; // Best match
       }
     }
 
-    // Compute amount if not provided
-    let amount = parsed.entities.amount;
-    if (!amount && resolvedProduct && parsed.entities.quantity) {
-      amount = resolvedProduct.selling_price * parsed.entities.quantity;
-    }
+    // Routing: if we have ANY valid actions → always preview. Only clarify when zero actions.
+    const hasActions = parsed.actions.length > 0;
+    let routing = hasActions ? 'preview' : 'clarify';
 
-    // Confidence routing
-    const isFinancial = FINANCIAL_INTENTS.includes(parsed.intent);
-    let routing = 'preview'; // default
-    if (parsed.intent === 'ambiguous' || parsed.confidence_score < 0.50) {
-      routing = 'clarify';
-    } else if (parsed.confidence_score > 0.85 && !isFinancial) {
-      routing = 'auto_confirm';
-    }
-
-    // If clarifying, send AI question in chat (owner-only) and return
+    // If no actions extracted, return clarification (no DB insert)
     if (routing === 'clarify') {
-      const clarifyContent = parsed.reasoning || "I'm not sure what you'd like me to do. Could you be more specific?";
-      await supabase.from('messages').insert({
-        organisation_id: organisationId, conversation_id: conversationId,
-        role: 'system', content: clarifyContent,
-        metadata: {
-          sender_type: 'ai', visibility: 'owner_only', message_type: 'spark_clarify',
-          read_by_owner: true, preview_text: clarifyContent.substring(0, 50),
-        },
-        tokens_input: 0, tokens_output: 0,
-      });
       return c.json({
         routing: 'clarify',
-        message: clarifyContent,
+        message: parsed.reasoning || "I'm not sure what you'd like me to do. Could you be more specific?",
         confidence_score: parsed.confidence_score,
         actions: [],
       });
     }
 
-    // Build action parameters
-    const actionParams = {
-      customer_id: customerId,
-      customer_name: customer.name,
-      product_name: resolvedProduct?.name || parsed.entities.product_name || null,
-      product_id: resolvedProduct?.id || null,
-      quantity: parsed.entities.quantity || null,
-      amount: amount || null,
-      unit_price: resolvedProduct?.selling_price || null,
-      due_date: parsed.entities.due_date || null,
-      delivery_date: parsed.entities.delivery_date || null,
-    };
+    // Build and save each action as a separate ai_actions record
+    const responseActions = [];
+    let draftId = null;
 
-    // Save draft to ai_actions
-    const { data: savedAction, error: actionErr } = await supabase
-      .from('ai_actions')
-      .insert({
-        organisation_id: organisationId,
-        action_name: `${parsed.intent.replace(/_/g, ' ')} for ${customer.name}`,
-        action_type: parsed.intent,
-        prompt_template: query,
+    for (const action of parsed.actions) {
+      const ent = action.entities || {};
+      // Compute amount from product price if not given
+      let amount = ent.amount;
+      if (!amount && resolvedProduct && ent.quantity) {
+        amount = resolvedProduct.selling_price * ent.quantity;
+      }
+
+      const actionParams = {
+        customer_id: customerId,
+        customer_name: customer.name,
+        product_name: resolvedProduct?.name || ent.product_name || null,
+        product_id: resolvedProduct?.id || null,
+        quantity: ent.quantity || null,
+        amount: amount || null,
+        unit_price: resolvedProduct?.selling_price || null,
+        due_date: ent.due_date || null,
+        delivery_date: ent.delivery_date || null,
+      };
+
+      const { data: savedAction, error: actionErr } = await supabase
+        .from('ai_actions')
+        .insert({
+          organisation_id: organisationId,
+          action_name: `${action.action_type.replace(/_/g, ' ')} for ${customer.name}`,
+          action_type: action.action_type,
+          prompt_template: query,
+          parameters: actionParams,
+          confidence_score: parsed.confidence_score,
+          status: 'pending',
+        })
+        .select('id')
+        .single();
+
+      if (actionErr) {
+        console.error('Save ai_action failed:', actionErr);
+        continue;
+      }
+
+      if (!draftId) draftId = savedAction.id; // First action ID as draft_id
+
+      // Build details string
+      let details = '';
+      if (action.action_type === 'create_invoice') {
+        if (ent.quantity && (resolvedProduct?.name || ent.product_name)) {
+          details = `${ent.quantity} × ${resolvedProduct?.name || ent.product_name}`;
+        }
+        if (amount) details += (details ? '\n' : '') + `Amount: ₹${amount.toLocaleString('en-IN')}`;
+        if (ent.due_date) details += `   Due: ${ent.due_date}`;
+      } else if (action.action_type === 'schedule_delivery') {
+        details = `Schedule: ${ent.delivery_date || 'TBD'}`;
+      } else if (action.action_type === 'set_reminder') {
+        details = `Send on: ${ent.due_date || 'TBD'}`;
+      } else if (action.action_type === 'record_payment') {
+        details = amount ? `₹${amount.toLocaleString('en-IN')}` : 'Amount TBD';
+      }
+
+      responseActions.push({
+        action_id: savedAction.id,
+        action_type: action.action_type,
+        details: details || `${action.action_type.replace(/_/g, ' ')} for ${customer.name}`,
         parameters: actionParams,
-        confidence_score: parsed.confidence_score,
-        status: routing === 'auto_confirm' ? 'approved' : 'pending',
-      })
-      .select('id')
-      .single();
+        editable: true,
+      });
+    }
 
-    if (actionErr) {
-      console.error('Save ai_action failed:', actionErr);
-      return c.json({ error: 'server_error' }, 500);
+    if (responseActions.length === 0) {
+      return c.json({ routing: 'clarify', message: 'Could not create actions. Try again.', confidence_score: 0, actions: [] });
     }
 
     // Get entity_memory insight for preview
@@ -1321,26 +1362,11 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
       }
     } catch {}
 
-    // Build details string
-    let details = '';
-    if (actionParams.quantity && actionParams.product_name) {
-      details += `${actionParams.quantity} × ${actionParams.product_name}`;
-    }
-    if (actionParams.amount) details += ` · Amount: ₹${actionParams.amount.toLocaleString('en-IN')}`;
-    if (actionParams.due_date) details += ` · Due: ${actionParams.due_date}`;
-    if (actionParams.delivery_date) details += ` · Delivery: ${actionParams.delivery_date}`;
-
     return c.json({
-      draft_id: savedAction.id,
+      draft_id: draftId,
       confidence_score: parsed.confidence_score,
-      routing,
-      actions: [{
-        action_id: savedAction.id,
-        action_type: parsed.intent,
-        details: details || `${parsed.intent} for ${customer.name}`,
-        parameters: actionParams,
-        editable: true,
-      }],
+      routing: 'preview',
+      actions: responseActions,
       ai_insight: aiInsight,
     });
 
