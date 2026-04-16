@@ -1,382 +1,292 @@
 #!/usr/bin/env python3
 """
-AssistMe Backend API Testing Suite
-Tests the Node.js + Hono + Supabase backend endpoints
+Backend API Testing for AssistMe
+Focus: GET /api/home endpoint validations as per review request
 """
 
 import requests
 import json
-import time
+import sys
 from typing import Dict, Any, Optional
 
-# Configuration from environment files
+# Configuration
 BACKEND_URL = "https://trader-flow-guide.preview.emergentagent.com"
 SUPABASE_URL = "https://qsyuyivpptuzmzbpfeaq.supabase.co"
 SUPABASE_ANON_KEY = "sb_publishable_a4IIUGPHXvOiQb4KG09F7A_55sghKRx"
-
-# Test credentials from test_credentials.md
 TEST_PHONE = "919007188402"
 TEST_OTP = "123456"
 
-class BackendTester:
+class TestResult:
     def __init__(self):
-        self.access_token = None
-        self.session = requests.Session()
-        self.session.headers.update({
-            'Content-Type': 'application/json',
-            'User-Agent': 'AssistMe-Backend-Test/1.0'
-        })
+        self.passed = 0
+        self.failed = 0
+        self.errors = []
         
-    def log(self, message: str, level: str = "INFO"):
-        """Log test messages with timestamp"""
-        timestamp = time.strftime("%H:%M:%S")
-        print(f"[{timestamp}] {level}: {message}")
+    def success(self, message: str):
+        print(f"✅ {message}")
+        self.passed += 1
         
-    def authenticate_with_supabase(self) -> bool:
-        """
-        Authenticate with Supabase directly to get access token
-        Following the review request instructions
-        """
-        try:
-            self.log("🔐 Starting Supabase authentication...")
-            
-            # Step 1: Send OTP
-            otp_url = f"{SUPABASE_URL}/auth/v1/otp"
-            otp_payload = {
-                "phone": TEST_PHONE,
-                "create_user": True
-            }
-            otp_headers = {
-                "apikey": SUPABASE_ANON_KEY,
-                "Content-Type": "application/json"
-            }
-            
-            self.log(f"📱 Sending OTP to phone: {TEST_PHONE}")
-            otp_response = requests.post(otp_url, json=otp_payload, headers=otp_headers)
-            
-            if otp_response.status_code != 200:
-                self.log(f"❌ OTP send failed: {otp_response.status_code} - {otp_response.text}", "ERROR")
-                return False
-                
-            self.log("✅ OTP sent successfully")
-            
-            # Step 2: Verify OTP
-            verify_url = f"{SUPABASE_URL}/auth/v1/verify"
-            verify_payload = {
-                "phone": TEST_PHONE,
-                "token": TEST_OTP,
-                "type": "sms"
-            }
-            
-            self.log(f"🔑 Verifying OTP: {TEST_OTP}")
-            verify_response = requests.post(verify_url, json=verify_payload, headers=otp_headers)
-            
-            if verify_response.status_code != 200:
-                self.log(f"❌ OTP verification failed: {verify_response.status_code} - {verify_response.text}", "ERROR")
-                return False
-                
-            verify_data = verify_response.json()
-            
-            # Extract access token from response
-            if 'access_token' in verify_data:
-                self.access_token = verify_data['access_token']
-                self.log("✅ Authentication successful - access token obtained")
-                return True
-            else:
-                self.log(f"❌ No access token in response: {verify_data}", "ERROR")
-                return False
-                
-        except Exception as e:
-            self.log(f"❌ Authentication error: {str(e)}", "ERROR")
-            return False
+    def failure(self, message: str):
+        print(f"❌ {message}")
+        self.failed += 1
+        self.errors.append(message)
+        
+    def info(self, message: str):
+        print(f"ℹ️  {message}")
+
+def get_supabase_token() -> Optional[str]:
+    """Get Supabase auth token using OTP flow"""
+    print("\n🔐 Getting Supabase authentication token...")
     
-    def test_health_endpoint(self) -> bool:
-        """Test GET /api/health endpoint"""
-        try:
-            self.log("🏥 Testing health endpoint...")
-            
-            response = self.session.get(f"{BACKEND_URL}/api/health")
-            
-            if response.status_code != 200:
-                self.log(f"❌ Health check failed: {response.status_code} - {response.text}", "ERROR")
-                return False
-                
-            data = response.json()
-            
-            if data.get('status') != 'ok':
-                self.log(f"❌ Health check status not 'ok': {data}", "ERROR")
-                return False
-                
-            self.log("✅ Health endpoint working correctly")
-            return True
-            
-        except Exception as e:
-            self.log(f"❌ Health endpoint error: {str(e)}", "ERROR")
-            return False
+    # Step 1: Send OTP
+    otp_url = f"{SUPABASE_URL}/auth/v1/otp"
+    otp_payload = {
+        "phone": TEST_PHONE,
+        "options": {
+            "channel": "sms"
+        }
+    }
+    otp_headers = {
+        "apikey": SUPABASE_ANON_KEY,
+        "Content-Type": "application/json"
+    }
     
-    def test_setup_session_endpoint(self) -> bool:
-        """Test POST /api/auth/setup-session endpoint"""
-        try:
-            self.log("🔧 Testing setup-session endpoint...")
-            
-            if not self.access_token:
-                self.log("❌ No access token available for setup-session test", "ERROR")
-                return False
-            
-            headers = {
-                'Authorization': f'Bearer {self.access_token}',
-                'Content-Type': 'application/json'
-            }
-            
-            response = self.session.post(f"{BACKEND_URL}/api/auth/setup-session", headers=headers)
-            
-            if response.status_code != 200:
-                self.log(f"❌ Setup session failed: {response.status_code} - {response.text}", "ERROR")
-                return False
-                
-            data = response.json()
-            
-            # Validate required fields
-            required_fields = ['organisation_id', 'user_id', 'role', 'is_new_user']
-            for field in required_fields:
-                if field not in data:
-                    self.log(f"❌ Missing required field '{field}' in setup-session response", "ERROR")
-                    return False
-            
-            self.log(f"✅ Setup session successful - User ID: {data['user_id']}, Org ID: {data['organisation_id']}")
-            return True
-            
-        except Exception as e:
-            self.log(f"❌ Setup session error: {str(e)}", "ERROR")
-            return False
-    
-    def test_home_endpoint(self) -> Dict[str, Any]:
-        """Test GET /api/home endpoint - MAIN FOCUS"""
-        try:
-            self.log("🏠 Testing home endpoint (MAIN FOCUS)...")
-            
-            if not self.access_token:
-                self.log("❌ No access token available for home test", "ERROR")
-                return {"success": False, "error": "No access token"}
-            
-            headers = {
-                'Authorization': f'Bearer {self.access_token}',
-                'Content-Type': 'application/json'
-            }
-            
-            response = self.session.get(f"{BACKEND_URL}/api/home", headers=headers)
-            
-            if response.status_code != 200:
-                self.log(f"❌ Home endpoint failed: {response.status_code} - {response.text}", "ERROR")
-                return {"success": False, "error": f"HTTP {response.status_code}"}
-                
-            data = response.json()
-            
-            # Validate structure
-            required_top_level = ['insight_strip', 'filter_tabs', 'conversations']
-            for field in required_top_level:
-                if field not in data:
-                    self.log(f"❌ Missing required field '{field}' in home response", "ERROR")
-                    return {"success": False, "error": f"Missing {field}"}
-            
-            # Validate filter_tabs
-            filter_tabs = data['filter_tabs']
-            if not isinstance(filter_tabs, list):
-                self.log("❌ filter_tabs is not an array", "ERROR")
-                return {"success": False, "error": "filter_tabs not array"}
-            
-            if len(filter_tabs) == 0:
-                self.log("❌ filter_tabs is empty - should have 7 items", "ERROR")
-                return {"success": False, "error": "filter_tabs empty"}
-            
-            self.log(f"📊 Filter tabs count: {len(filter_tabs)}")
-            
-            # Expected tags from system setup
-            expected_tags = ['All', 'Dues', 'Quotes', 'Invoiced', 'To Deliver', 'Challans']
-            found_tags = [tab['name'] for tab in filter_tabs if 'name' in tab]
-            
-            for expected_tag in expected_tags:
-                if expected_tag not in found_tags:
-                    self.log(f"⚠️  Expected tag '{expected_tag}' not found in filter_tabs", "WARN")
-            
-            # Validate conversations
-            conversations = data['conversations']
-            if not isinstance(conversations, list):
-                self.log("❌ conversations is not an array", "ERROR")
-                return {"success": False, "error": "conversations not array"}
-            
-            self.log(f"💬 Conversations count: {len(conversations)}")
-            
-            if len(conversations) == 0:
-                self.log("⚠️  No conversations returned - expected 8 conversations", "WARN")
-            
-            # Validate conversation structure
-            required_conv_fields = ['customer_id', 'name', 'initials', 'avatar_color', 
-                                  'last_message', 'last_message_at', 'outstanding_amount', 
-                                  'is_overdue', 'unread_count', 'health_score']
-            
-            for i, conv in enumerate(conversations[:3]):  # Check first 3 conversations
-                for field in required_conv_fields:
-                    if field not in conv:
-                        self.log(f"❌ Conversation {i} missing field '{field}'", "ERROR")
-                        return {"success": False, "error": f"Conversation missing {field}"}
-            
-            # Check sorting (should be by last_message_at DESC)
-            if len(conversations) > 1:
-                first_time = conversations[0].get('last_message_at')
-                second_time = conversations[1].get('last_message_at')
-                if first_time and second_time and first_time < second_time:
-                    self.log("⚠️  Conversations may not be sorted by last_message_at DESC", "WARN")
-            
-            self.log("✅ Home endpoint structure validation passed")
-            return {"success": True, "data": data, "filter_tabs": filter_tabs}
-            
-        except Exception as e:
-            self.log(f"❌ Home endpoint error: {str(e)}", "ERROR")
-            return {"success": False, "error": str(e)}
-    
-    def test_home_filter_endpoint(self, filter_tabs: list) -> bool:
-        """Test GET /api/home?filter=<tag_id> endpoint"""
-        try:
-            if not filter_tabs or len(filter_tabs) == 0:
-                self.log("⚠️  No filter tabs available to test filtering", "WARN")
-                return True  # Not a failure, just no data to test
-            
-            # Test with first non-"All" tag
-            test_tag = None
-            for tab in filter_tabs:
-                if tab.get('name') != 'All' and 'id' in tab:
-                    test_tag = tab
-                    break
-            
-            if not test_tag:
-                self.log("⚠️  No suitable tag found for filter testing", "WARN")
-                return True
-            
-            self.log(f"🔍 Testing filter endpoint with tag: {test_tag['name']} (ID: {test_tag['id']})")
-            
-            headers = {
-                'Authorization': f'Bearer {self.access_token}',
-                'Content-Type': 'application/json'
-            }
-            
-            response = self.session.get(f"{BACKEND_URL}/api/home?filter={test_tag['id']}", headers=headers)
-            
-            if response.status_code != 200:
-                self.log(f"❌ Filter endpoint failed: {response.status_code} - {response.text}", "ERROR")
-                return False
-                
-            data = response.json()
-            
-            # Should have same structure as base home endpoint
-            if 'conversations' not in data:
-                self.log("❌ Filter response missing conversations", "ERROR")
-                return False
-            
-            filtered_conversations = data['conversations']
-            self.log(f"📊 Filtered conversations count: {len(filtered_conversations)}")
-            
-            self.log("✅ Filter endpoint working correctly")
-            return True
-            
-        except Exception as e:
-            self.log(f"❌ Filter endpoint error: {str(e)}", "ERROR")
-            return False
-    
-    def test_error_cases(self) -> bool:
-        """Test error cases with missing/invalid tokens"""
-        try:
-            self.log("🚫 Testing error cases...")
-            
-            # Test 1: Missing Authorization header
-            response = self.session.get(f"{BACKEND_URL}/api/home")
-            if response.status_code != 401:
-                self.log(f"❌ Expected 401 for missing auth, got {response.status_code}", "ERROR")
-                return False
-            
-            # Test 2: Invalid Bearer token format
-            headers = {'Authorization': 'InvalidFormat'}
-            response = self.session.get(f"{BACKEND_URL}/api/home", headers=headers)
-            if response.status_code != 401:
-                self.log(f"❌ Expected 401 for invalid format, got {response.status_code}", "ERROR")
-                return False
-            
-            # Test 3: Invalid token
-            headers = {'Authorization': 'Bearer invalid_token_12345'}
-            response = self.session.get(f"{BACKEND_URL}/api/home", headers=headers)
-            if response.status_code != 401:
-                self.log(f"❌ Expected 401 for invalid token, got {response.status_code}", "ERROR")
-                return False
-            
-            self.log("✅ Error cases handled correctly")
-            return True
-            
-        except Exception as e:
-            self.log(f"❌ Error cases test failed: {str(e)}", "ERROR")
-            return False
-    
-    def run_all_tests(self) -> Dict[str, bool]:
-        """Run all backend tests"""
-        results = {}
+    try:
+        otp_response = requests.post(otp_url, json=otp_payload, headers=otp_headers)
+        print(f"📱 OTP request status: {otp_response.status_code}")
         
-        self.log("🚀 Starting AssistMe Backend API Tests")
-        self.log(f"🌐 Backend URL: {BACKEND_URL}")
-        self.log(f"🔗 Supabase URL: {SUPABASE_URL}")
+        if otp_response.status_code != 200:
+            print(f"❌ OTP request failed: {otp_response.text}")
+            return None
+            
+        # Step 2: Verify OTP
+        verify_url = f"{SUPABASE_URL}/auth/v1/verify"
+        verify_payload = {
+            "type": "sms",
+            "phone": TEST_PHONE,
+            "token": TEST_OTP
+        }
         
-        # Step 1: Authenticate
-        auth_success = self.authenticate_with_supabase()
-        results['authentication'] = auth_success
+        verify_response = requests.post(verify_url, json=verify_payload, headers=otp_headers)
+        print(f"🔑 OTP verification status: {verify_response.status_code}")
         
-        if not auth_success:
-            self.log("❌ Authentication failed - skipping other tests", "ERROR")
-            return results
+        if verify_response.status_code != 200:
+            print(f"❌ OTP verification failed: {verify_response.text}")
+            return None
+            
+        verify_data = verify_response.json()
+        access_token = verify_data.get("access_token")
         
-        # Step 2: Test health endpoint
-        results['health'] = self.test_health_endpoint()
-        
-        # Step 3: Test setup-session endpoint
-        results['setup_session'] = self.test_setup_session_endpoint()
-        
-        # Step 4: Test home endpoint (MAIN FOCUS)
-        home_result = self.test_home_endpoint()
-        results['home'] = home_result['success']
-        
-        # Step 5: Test filter endpoint if home worked
-        if home_result['success'] and 'filter_tabs' in home_result:
-            results['home_filter'] = self.test_home_filter_endpoint(home_result['filter_tabs'])
+        if access_token:
+            print(f"✅ Successfully obtained auth token")
+            return access_token
         else:
-            results['home_filter'] = False
+            print(f"❌ No access token in response: {verify_data}")
+            return None
+            
+    except Exception as e:
+        print(f"❌ Authentication error: {str(e)}")
+        return None
+
+def test_health_endpoint(result: TestResult):
+    """Test the health endpoint"""
+    print("\n🏥 Testing Health Endpoint...")
+    
+    try:
+        response = requests.get(f"{BACKEND_URL}/api/health", timeout=10)
         
-        # Step 6: Test error cases
-        results['error_cases'] = self.test_error_cases()
+        if response.status_code == 200:
+            data = response.json()
+            if data.get("status") == "ok":
+                result.success("Health endpoint returns correct status")
+            else:
+                result.failure(f"Health endpoint status incorrect: {data}")
+        else:
+            result.failure(f"Health endpoint failed: {response.status_code} - {response.text}")
+            
+    except Exception as e:
+        result.failure(f"Health endpoint error: {str(e)}")
+
+def test_home_endpoint_validations(token: str, result: TestResult):
+    """Test the specific validations for GET /api/home"""
+    print("\n🏠 Testing Home Endpoint Validations...")
+    
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+    
+    try:
+        response = requests.get(f"{BACKEND_URL}/api/home", headers=headers, timeout=15)
         
-        return results
+        if response.status_code != 200:
+            result.failure(f"Home endpoint failed: {response.status_code} - {response.text}")
+            return
+            
+        data = response.json()
+        result.info(f"Home endpoint response received (status: {response.status_code})")
+        
+        # Validation 1: subscription_plan field
+        if "subscription_plan" in data:
+            subscription_plan = data["subscription_plan"]
+            if subscription_plan == "pro":
+                result.success("subscription_plan field present with value 'pro'")
+            else:
+                result.failure(f"subscription_plan value incorrect: expected 'pro', got '{subscription_plan}'")
+        else:
+            result.failure("subscription_plan field missing from response")
+            
+        # Validation 2: language field
+        if "language" in data:
+            language = data["language"]
+            if language == "English":
+                result.success("language field present with value 'English'")
+            else:
+                result.failure(f"language value incorrect: expected 'English', got '{language}'")
+        else:
+            result.failure("language field missing from response")
+            
+        # Validation 3: conversations count
+        conversations = data.get("conversations", [])
+        if len(conversations) == 8:
+            result.success(f"conversations count correct: {len(conversations)}")
+        else:
+            result.failure(f"conversations count incorrect: expected 8, got {len(conversations)}")
+            
+        # Validation 4: filter_tabs count
+        filter_tabs = data.get("filter_tabs", [])
+        if len(filter_tabs) == 7:
+            result.success(f"filter_tabs count correct: {len(filter_tabs)}")
+        else:
+            result.failure(f"filter_tabs count incorrect: expected 7, got {len(filter_tabs)}")
+            
+        # Validation 5: unread_count for specific customers
+        print("\n📊 Checking unread_count for specific customers...")
+        
+        ahmed_found = False
+        mohammed_found = False
+        
+        for conv in conversations:
+            customer_name = conv.get("name", "")
+            unread_count = conv.get("unread_count", 0)
+            
+            if "Ahmed Rashidi" in customer_name:
+                ahmed_found = True
+                if unread_count == 1:
+                    result.success(f"Ahmed Rashidi unread_count correct: {unread_count}")
+                else:
+                    result.failure(f"Ahmed Rashidi unread_count incorrect: expected 1, got {unread_count}")
+                    
+            elif "Mohammed Farooq" in customer_name:
+                mohammed_found = True
+                if unread_count == 1:
+                    result.success(f"Mohammed Farooq unread_count correct: {unread_count}")
+                else:
+                    result.failure(f"Mohammed Farooq unread_count incorrect: expected 1, got {unread_count}")
+                    
+            else:
+                # All other customers should have unread_count = 0
+                if unread_count == 0:
+                    result.info(f"{customer_name}: unread_count = 0 ✓")
+                else:
+                    result.failure(f"{customer_name}: unread_count should be 0, got {unread_count}")
+        
+        if not ahmed_found:
+            result.failure("Ahmed Rashidi not found in conversations")
+        if not mohammed_found:
+            result.failure("Mohammed Farooq not found in conversations")
+            
+        # Additional validation: Check response structure
+        required_fields = ["insight_strip", "filter_tabs", "conversations", "subscription_plan", "language"]
+        for field in required_fields:
+            if field in data:
+                result.info(f"Required field '{field}' present")
+            else:
+                result.failure(f"Required field '{field}' missing")
+                
+        # Print sample conversation for debugging
+        if conversations:
+            print(f"\n📝 Sample conversation structure:")
+            sample = conversations[0]
+            for key, value in sample.items():
+                print(f"  {key}: {value}")
+                
+    except Exception as e:
+        result.failure(f"Home endpoint test error: {str(e)}")
+
+def test_setup_session_endpoint(token: str, result: TestResult):
+    """Test the setup session endpoint"""
+    print("\n🔧 Testing Setup Session Endpoint...")
+    
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+    
+    try:
+        response = requests.post(f"{BACKEND_URL}/api/auth/setup-session", headers=headers, timeout=10)
+        
+        if response.status_code == 200:
+            data = response.json()
+            required_fields = ["organisation_id", "user_id", "role", "is_new_user"]
+            
+            all_present = True
+            for field in required_fields:
+                if field in data:
+                    result.info(f"Setup session field '{field}': {data[field]}")
+                else:
+                    result.failure(f"Setup session missing field: {field}")
+                    all_present = False
+                    
+            if all_present:
+                result.success("Setup session endpoint returns all required fields")
+        else:
+            result.failure(f"Setup session failed: {response.status_code} - {response.text}")
+            
+    except Exception as e:
+        result.failure(f"Setup session error: {str(e)}")
 
 def main():
     """Main test execution"""
-    tester = BackendTester()
-    results = tester.run_all_tests()
+    print("🚀 Starting AssistMe Backend API Tests")
+    print(f"🌐 Backend URL: {BACKEND_URL}")
+    print(f"📱 Test Phone: {TEST_PHONE}")
+    print(f"🔑 Test OTP: {TEST_OTP}")
     
-    print("\n" + "="*60)
-    print("📋 TEST RESULTS SUMMARY")
-    print("="*60)
+    result = TestResult()
     
-    total_tests = len(results)
-    passed_tests = sum(1 for result in results.values() if result)
+    # Test 1: Health endpoint (no auth required)
+    test_health_endpoint(result)
     
-    for test_name, passed in results.items():
-        status = "✅ PASS" if passed else "❌ FAIL"
-        print(f"{test_name.replace('_', ' ').title()}: {status}")
+    # Test 2: Get authentication token
+    token = get_supabase_token()
+    if not token:
+        result.failure("Failed to obtain authentication token")
+        print(f"\n📊 Test Results: {result.passed} passed, {result.failed} failed")
+        return 1
+        
+    # Test 3: Setup session endpoint
+    test_setup_session_endpoint(token, result)
     
-    print(f"\nOverall: {passed_tests}/{total_tests} tests passed")
+    # Test 4: Home endpoint validations (main focus)
+    test_home_endpoint_validations(token, result)
     
-    if passed_tests == total_tests:
-        print("🎉 All tests passed!")
-        return True
+    # Final results
+    print(f"\n📊 Test Results Summary:")
+    print(f"✅ Passed: {result.passed}")
+    print(f"❌ Failed: {result.failed}")
+    
+    if result.errors:
+        print(f"\n🚨 Failed Tests:")
+        for error in result.errors:
+            print(f"  - {error}")
+    
+    if result.failed == 0:
+        print(f"\n🎉 All tests passed!")
+        return 0
     else:
-        print("⚠️  Some tests failed - check logs above")
-        return False
+        print(f"\n⚠️  {result.failed} test(s) failed")
+        return 1
 
 if __name__ == "__main__":
-    success = main()
-    exit(0 if success else 1)
+    sys.exit(main())

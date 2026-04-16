@@ -235,7 +235,7 @@ app.get('/api/home', async (c) => {
     // Get organisation_id from user record
     const { data: userRecord, error: userRecordError } = await supabase
       .from('users')
-      .select('organisation_id')
+      .select('organisation_id, preferences')
       .eq('auth_id', authId)
       .single();
 
@@ -247,7 +247,28 @@ app.get('/api/home', async (c) => {
     const filterTagId = c.req.query('filter');
     const limit = parseInt(c.req.query('limit') || '50', 10);
 
+    // Fetch organisation-level fields (subscription_plan)
+    let subscriptionPlan = 'free';
+    try {
+      const { data: orgRecord } = await supabase
+        .from('organisations')
+        .select('subscription_plan')
+        .eq('id', organisationId)
+        .single();
+      if (orgRecord) {
+        subscriptionPlan = orgRecord.subscription_plan || 'free';
+      }
+    } catch (err) {
+      console.warn('Failed to fetch organisation:', err);
+    }
+
+    // Extract language preference
+    const language = (userRecord.preferences && typeof userRecord.preferences === 'object')
+      ? userRecord.preferences.language || null
+      : null;
+
     console.log('🔍 [HOME] Step 1: Organisation ID extracted:', organisationId);
+    console.log('🔍 [HOME] Plan:', subscriptionPlan, '| Language:', language);
     console.log('🔍 [HOME] Filter tag:', filterTagId || 'none (all)');
 
     // Query 1: Get filter tabs (tags)
@@ -475,30 +496,21 @@ app.get('/api/home', async (c) => {
       // Count unread messages
       let unreadCount = 0;
       try {
-        const { count, error: unreadError } = await supabase
+        const { data: userMsgs, error: unreadError } = await supabase
           .from('messages')
-          .select('*', { count: 'exact', head: true })
+          .select('metadata')
           .eq('conversation_id', conv.id)
           .eq('role', 'user');
 
-        if (!unreadError && count) {
-          // Filter by read_by_owner metadata
-          const { data: unreadMsgs } = await supabase
-            .from('messages')
-            .select('metadata')
-            .eq('conversation_id', conv.id)
-            .eq('role', 'user');
-
-          if (unreadMsgs) {
-            unreadCount = unreadMsgs.filter(m => {
-              try {
-                return m.metadata?.read_by_owner === false;
-              } catch {
-                return false;
-              }
-            }).length;
-          }
+        if (!unreadError && userMsgs) {
+          unreadCount = userMsgs.filter(m => {
+            const rbo = m.metadata?.read_by_owner;
+            // Unread = read_by_owner is absent, null, false, or string "false"
+            return rbo !== true && rbo !== 'true';
+          }).length;
         }
+
+        console.log('🔍 [HOME] Unread for conv', conv.id.slice(-4), ':', unreadCount, '/', (userMsgs?.length || 0));
       } catch (err) {
         console.warn('Unread count query failed:', err);
       }
@@ -539,6 +551,8 @@ app.get('/api/home', async (c) => {
       insight_strip: insightStrip,
       filter_tabs: filterTabs,
       conversations: limitedConversations,
+      subscription_plan: subscriptionPlan,
+      language: language,
     });
 
   } catch (error) {

@@ -46,6 +46,8 @@ interface HomeData {
   insight_strip: InsightStrip | null;
   filter_tabs: FilterTab[];
   conversations: Conversation[];
+  subscription_plan?: string;
+  language?: string | null;
 }
 
 export default function HomeScreen() {
@@ -531,6 +533,11 @@ export default function HomeScreen() {
               <TouchableOpacity style={styles.sheetItem} onPress={() => { setShowToolsSheet(false); router.push('/settings/billing'); }}>
                 <Ionicons name="card-outline" size={24} color="#667781" />
                 <Text style={styles.sheetItemText}>Subscription & billing</Text>
+                {homeData?.subscription_plan && (
+                  <View style={styles.planBadge}>
+                    <Text style={styles.planBadgeText}>{homeData.subscription_plan.toUpperCase()}</Text>
+                  </View>
+                )}
                 <Ionicons name="chevron-forward" size={20} color="#CCCCCC" />
               </TouchableOpacity>
 
@@ -570,11 +577,13 @@ export default function HomeScreen() {
                 <Ionicons name="chevron-forward" size={20} color="#CCCCCC" />
               </TouchableOpacity>
 
-              <TouchableOpacity style={styles.sheetItem} onPress={() => { setShowToolsSheet(false); router.push('/settings/language'); }}>
-                <Ionicons name="language-outline" size={24} color="#667781" />
-                <Text style={styles.sheetItemText}>Language</Text>
-                <Ionicons name="chevron-forward" size={20} color="#CCCCCC" />
-              </TouchableOpacity>
+              <View style={styles.sheetItem}>
+                <Ionicons name="language-outline" size={24} color="#BBBBBB" />
+                <Text style={styles.sheetItemTextDisabled}>Language</Text>
+                {homeData?.language && (
+                  <Text style={styles.sheetItemValueDisabled}>{homeData.language}</Text>
+                )}
+              </View>
 
               <TouchableOpacity style={styles.sheetItem} onPress={() => { setShowToolsSheet(false); router.push('/settings/disclaimer'); }}>
                 <Ionicons name="document-text-outline" size={24} color="#667781" />
@@ -806,7 +815,7 @@ const styles = StyleSheet.create({
   fab: {
     position: 'absolute',
     right: 16,
-    bottom: 90,
+    bottom: 100,
     width: 56,
     height: 56,
     backgroundColor: '#075E54',
@@ -942,6 +951,29 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 16,
     color: '#333333',
+  },
+  sheetItemTextDisabled: {
+    flex: 1,
+    fontSize: 16,
+    color: '#BBBBBB',
+  },
+  sheetItemValueDisabled: {
+    fontSize: 14,
+    color: '#BBBBBB',
+    marginRight: 4,
+  },
+  planBadge: {
+    backgroundColor: '#075E54',
+    borderRadius: 4,
+    paddingVertical: 2,
+    paddingHorizontal: 8,
+    marginRight: 8,
+  },
+  planBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#FFFFFF',
+    letterSpacing: 0.5,
   },
   sheetDivider: {
     height: 1,
