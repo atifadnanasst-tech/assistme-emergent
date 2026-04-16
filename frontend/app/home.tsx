@@ -293,8 +293,8 @@ export default function HomeScreen() {
             </Text>
           </TouchableOpacity>
 
-          {/* Other tabs */}
-          {filterTabs.map((tab) => (
+          {/* Other tabs (skip "All" since it's hardcoded above) */}
+          {filterTabs.filter((tab) => tab.name !== 'All').map((tab) => (
             <TouchableOpacity
               key={tab.id}
               style={[
