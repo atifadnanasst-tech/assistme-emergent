@@ -66,7 +66,7 @@ const TOOLS = [
     type: 'function',
     function: {
       name: 'get_daily_summary',
-      description: 'Get today\'s business summary: pending payments total, deliveries due, expiring quotes. Call this for "summary", "how is business", "today\'s status" etc.',
+      description: 'Get today\'s business summary: pending payments total, deliveries due, expiring quotes. Call this for "summary", "how is business", "today\'s status", "aaj ka", "aaj", "today\'s status", "business mein kya hai" etc.',
       parameters: { type: 'object', properties: {}, required: [] },
     },
   },
@@ -74,7 +74,7 @@ const TOOLS = [
     type: 'function',
     function: {
       name: 'get_overdue_payments',
-      description: 'Get ALL overdue invoices with customer name, amount, days overdue. Call this for "overdue", "pending payments", "who owes me", "payment reminders" etc.',
+      description: 'Get ALL overdue invoices with customer name, amount, days overdue. Call this for "overdue", "pending payments", "who owes me", "payment reminders", "due", "baaki", "payment baaki", "unpaid", "kaun si payment" etc.',
       parameters: { type: 'object', properties: {}, required: [] },
     },
   },
@@ -406,7 +406,7 @@ export function registerAIRoutes(app, supabase) {
       let cardData = {};
 
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 8000);
+      const timeoutId = setTimeout(() => controller.abort(), 20000);
 
       try {
         const completion = await client.chat.completions.create({
@@ -445,7 +445,7 @@ export function registerAIRoutes(app, supabase) {
           ];
 
           const controller2 = new AbortController();
-          const timeoutId2 = setTimeout(() => controller2.abort(), 8000);
+          const timeoutId2 = setTimeout(() => controller2.abort(), 20000);
           try {
             const comp2 = await client.chat.completions.create({
               model: 'gpt-4o-mini',
@@ -471,8 +471,74 @@ export function registerAIRoutes(app, supabase) {
           }
 
         } else {
-          // Model didn't call a tool despite required — use content as-is
-          responseText = msg.content || 'I could not process that request.';
+          // No tool call — retry once with explicit enforcement message
+          console.warn('⚠️ [AI] No tool call on first attempt. Retrying with enforcement...');
+          const retryMessages = [
+            ...aiMessages,
+            { role: 'system', content: 'You MUST call one of the available tools. Do not answer directly.' },
+          ];
+
+          const controllerRetry = new AbortController();
+          const timeoutRetry = setTimeout(() => controllerRetry.abort(), 20000);
+          let retryGotTool = false;
+
+          try {
+            const retryCompletion = await client.chat.completions.create({
+              model: 'gpt-4o-mini',
+              messages: retryMessages,
+              tools: TOOLS,
+              tool_choice: 'required',
+              temperature: 0.3,
+            }, { signal: controllerRetry.signal });
+            clearTimeout(timeoutRetry);
+            tokensInput += retryCompletion.usage?.prompt_tokens || 0;
+            tokensOutput += retryCompletion.usage?.completion_tokens || 0;
+
+            const retryMsg = retryCompletion.choices[0].message;
+
+            if (retryMsg.tool_calls && retryMsg.tool_calls.length > 0) {
+              retryGotTool = true;
+              const tc = retryMsg.tool_calls[0];
+              toolName = tc.function.name;
+              let toolArgs = {};
+              try { toolArgs = JSON.parse(tc.function.arguments || '{}'); } catch {}
+
+              console.log('🔧 [AI] Retry tool called:', toolName);
+              toolResult = await executeTool(toolName, toolArgs, supabase, organisationId);
+              cardType = toolResult.card_type || TOOL_CARD_TYPE_MAP[toolName] || 'query_response';
+              cardData = toolResult.data || {};
+
+              const formatMessages = [
+                ...retryMessages,
+                retryMsg,
+                { role: 'tool', tool_call_id: tc.id, content: JSON.stringify(toolResult.data) },
+              ];
+              const controller2 = new AbortController();
+              const timeoutId2 = setTimeout(() => controller2.abort(), 20000);
+              try {
+                const comp2 = await client.chat.completions.create({
+                  model: 'gpt-4o-mini', messages: formatMessages, temperature: 0.3,
+                }, { signal: controller2.signal });
+                clearTimeout(timeoutId2);
+                tokensInput += comp2.usage?.prompt_tokens || 0;
+                tokensOutput += comp2.usage?.completion_tokens || 0;
+                responseText = comp2.choices[0].message.content || '';
+              } catch {
+                clearTimeout(timeoutId2);
+                responseText = `Here are the results from ${toolName}.`;
+              }
+            }
+          } catch {
+            clearTimeout(timeoutRetry);
+          }
+
+          if (!retryGotTool) {
+            // Both attempts failed to produce a tool call — graceful fallback
+            console.warn(`⚠️ [AI] TOOL_ENFORCEMENT_FAILED | org=${organisationId} | message="${userMessage}" | time=${new Date().toISOString()}`);
+            responseText = "I'm not sure how to look that up right now. Try asking about payments, customers, inventory, or today's summary.";
+            cardType = 'query_response';
+            cardData = {};
+          }
         }
       } catch (aiErr) {
         clearTimeout(timeoutId);

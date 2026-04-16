@@ -169,7 +169,15 @@ export default function AIScreen() {
       const data = await res.json();
 
       if (data.error) {
-        Alert.alert('Error', "AI couldn't respond. Try again.");
+        setMessages(prev => [...prev, {
+  id: `error-${Date.now()}`,
+  role: 'assistant',
+  content: "I couldn't find matching data for that. Try asking about payments, summary, or customers.",
+  card_type: 'query_response',
+  card_data: {},
+  created_at: new Date().toISOString(),
+}]);
+setSendingState('idle');
         setSendingState('idle');
         return;
       }
@@ -191,7 +199,15 @@ export default function AIScreen() {
       if (error.name === 'AbortError') {
         Alert.alert('Timeout', "AI took too long. Try again.");
       } else {
-        Alert.alert('Error', "AI couldn't respond. Try again.");
+        setMessages(prev => [...prev, {
+  id: `error-${Date.now()}`,
+  role: 'assistant',
+  content: "I couldn't find matching data for that. Try asking about payments, summary, or customers.",
+  card_type: 'query_response',
+  card_data: {},
+  created_at: new Date().toISOString(),
+}]);
+setSendingState('idle');
       }
     } finally {
       setSendingState('idle');
@@ -411,7 +427,7 @@ export default function AIScreen() {
   return (
     <KeyboardAvoidingView
       style={styles.flex1}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       {/* Header */}
       <SafeAreaView style={styles.safeTop} edges={['top']}>
@@ -453,38 +469,40 @@ export default function AIScreen() {
         )}
       </View>
 
-      {/* Input bar */}
-      <View style={styles.inputBar}>
-        <TouchableOpacity style={styles.inputIconDisabled}>
-          <Ionicons name="attach" size={22} color="#CCCCCC" />
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.inputIconDisabled}>
-          <Ionicons name="camera-outline" size={22} color="#CCCCCC" />
-        </TouchableOpacity>
-        <TextInput
-          style={styles.textInput}
-          placeholder="Ask AI about your business..."
-          placeholderTextColor="#999999"
-          value={inputText}
-          onChangeText={setInputText}
-          editable={sendingState === 'idle'}
-          maxLength={2000}
-          multiline
-        />
-        {inputText.trim().length > 0 ? (
-          <TouchableOpacity
-            style={styles.sendButton}
-            onPress={handleSend}
-            disabled={sendingState !== 'idle'}
-          >
-            <Ionicons name="send" size={20} color="#FFFFFF" />
+      {/* Input bar — wrapped in SafeAreaView for bottom inset */}
+      <SafeAreaView style={styles.inputSafeArea} edges={['bottom']}>
+        <View style={styles.inputBar}>
+          <TextInput
+            style={styles.textInput}
+            placeholder="Ask AI about your business..."
+            placeholderTextColor="#999999"
+            value={inputText}
+            onChangeText={setInputText}
+            editable={sendingState === 'idle'}
+            maxLength={2000}
+            multiline
+          />
+          <TouchableOpacity style={styles.inputIconDisabled}>
+            <Ionicons name="attach" size={22} color="#CCCCCC" />
           </TouchableOpacity>
-        ) : (
-          <View style={styles.micButtonDisabled}>
-            <Ionicons name="mic" size={20} color="#CCCCCC" />
-          </View>
-        )}
-      </View>
+          <TouchableOpacity style={styles.inputIconDisabled}>
+            <Ionicons name="camera-outline" size={22} color="#CCCCCC" />
+          </TouchableOpacity>
+          {inputText.trim().length > 0 ? (
+            <TouchableOpacity
+              style={styles.sendButton}
+              onPress={handleSend}
+              disabled={sendingState !== 'idle'}
+            >
+              <Ionicons name="send" size={20} color="#FFFFFF" />
+            </TouchableOpacity>
+          ) : (
+            <View style={styles.micButtonDisabled}>
+              <Ionicons name="mic" size={20} color="#CCCCCC" />
+            </View>
+          )}
+        </View>
+      </SafeAreaView>
     </KeyboardAvoidingView>
   );
 }
@@ -652,6 +670,9 @@ const styles = StyleSheet.create({
   dot3: { opacity: 0.8 },
 
   // ── Input bar ──────────────────────────────────────────
+  inputSafeArea: {
+    backgroundColor: '#FFFFFF',
+  },
   inputBar: {
     flexDirection: 'row',
     alignItems: 'center',
