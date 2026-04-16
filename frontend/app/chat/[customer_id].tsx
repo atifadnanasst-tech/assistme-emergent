@@ -590,32 +590,58 @@ setTimeout(() => {
 
       {/* Input bar */}
       <View style={[styles.inputBarWrapper, { paddingBottom: keyboardVisible ? 0 : insets.bottom }]}>
+        {/* Spark mode indicator */}
+        {sparkMode && (
+          <View style={styles.sparkIndicator}>
+            <Ionicons name="sparkles" size={16} color="#075E54" />
+            <Text style={styles.sparkIndicatorText}>AI Spark Mode — type a natural language instruction</Text>
+            <TouchableOpacity onPress={() => { setSparkMode(false); setSparkInput(''); }} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <Ionicons name="close-circle" size={20} color="#999" />
+            </TouchableOpacity>
+          </View>
+        )}
         <View style={styles.inputRow}>
-          <View style={styles.inputPill}>
+          <View style={[styles.inputPill, sparkMode && styles.inputPillSpark]}>
             <TouchableOpacity style={styles.inputIconBtn}>
-              <Ionicons name="happy-outline" size={22} color="#667781" />
+              <Ionicons name={sparkMode ? 'sparkles' : 'happy-outline'} size={22} color={sparkMode ? '#075E54' : '#667781'} />
             </TouchableOpacity>
             <TextInput
               style={styles.textInput}
-              placeholder="Message or voice..."
-              placeholderTextColor="#999"
+              placeholder={sparkMode ? 'What would you like to do?' : 'Message or voice...'}
+              placeholderTextColor={sparkMode ? '#075E54' : '#999'}
               value={inputText}
               onChangeText={setInputText}
               multiline
               maxLength={2000}
             />
-            <TouchableOpacity style={styles.inputIconBtn}>
-              <Ionicons name="attach" size={22} color="#667781" />
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.inputIconBtn}>
-              <Ionicons name="camera-outline" size={22} color="#667781" />
-            </TouchableOpacity>
+            {!sparkMode && (
+              <>
+                <TouchableOpacity style={styles.inputIconBtn}>
+                  <Ionicons name="attach" size={22} color="#667781" />
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.inputIconBtn}>
+                  <Ionicons name="camera-outline" size={22} color="#667781" />
+                </TouchableOpacity>
+              </>
+            )}
           </View>
 
           <View style={styles.rightCapsule}>
-            {inputText.trim().length > 0 ? (
-              <TouchableOpacity style={styles.sendBtn} onPress={sparkMode ? handleSpark : handleSend} disabled={sending || sparkProcessing}>
-                {(sending || sparkProcessing) ? (
+            {sparkMode ? (
+              <TouchableOpacity
+                style={[styles.sendBtn, styles.sparkSendBtn]}
+                onPress={handleSpark}
+                disabled={sparkProcessing || inputText.trim().length === 0}
+              >
+                {sparkProcessing ? (
+                  <ActivityIndicator size="small" color="#FFF" />
+                ) : (
+                  <Ionicons name="send" size={20} color="#FFF" />
+                )}
+              </TouchableOpacity>
+            ) : inputText.trim().length > 0 ? (
+              <TouchableOpacity style={styles.sendBtn} onPress={handleSend} disabled={sending}>
+                {sending ? (
                   <ActivityIndicator size="small" color="#FFF" />
                 ) : (
                   <Ionicons name="send" size={20} color="#FFF" />
@@ -623,19 +649,9 @@ setTimeout(() => {
               </TouchableOpacity>
             ) : (
               <>
-                <TouchableOpacity style={styles.sparkBtn} onPress={() => {
-                if (sparkMode) {
-                  handleSpark();
-                } else {
-                  setSparkMode(true);
-                }
-              }}>
-                {sparkProcessing ? (
-                  <ActivityIndicator size="small" color="#FFF" />
-                ) : (
+                <TouchableOpacity style={styles.sparkBtn} onPress={() => setSparkMode(true)}>
                   <Ionicons name="sparkles" size={22} color="#FFF" />
-                )}
-              </TouchableOpacity>
+                </TouchableOpacity>
                 <TouchableOpacity style={styles.micBtn}>
                   <Ionicons name="mic" size={20} color="#CCC" />
                 </TouchableOpacity>
@@ -705,7 +721,20 @@ setTimeout(() => {
                   </Text>
                   <Text style={styles.actionDetails}>{action.details}</Text>
                 </View>
-                <TouchableOpacity style={styles.actionEditBtn}>
+                <TouchableOpacity style={styles.actionEditBtn} onPress={() => {
+                  if (action.action_type === 'create_invoice') {
+                    setPreviewVisible(false);
+                    const p = action.params || {};
+                    const params: Record<string, string> = {};
+                    if (p.items) params.items = JSON.stringify(p.items);
+                    if (p.due_date) params.due_date = p.due_date;
+                    if (p.delivery_date) params.delivery_date = p.delivery_date;
+                    if (p.notes) params.notes = p.notes;
+                    if (previewDraftId) params.draft_id = previewDraftId;
+                    if (action.action_id) params.action_id = action.action_id;
+                    router.push({ pathname: `/customer/${customer_id}/invoice`, params });
+                  }
+                }}>
                   <Text style={styles.actionEditText}>Edit</Text>
                 </TouchableOpacity>
               </View>
@@ -857,6 +886,14 @@ const styles = StyleSheet.create({
     flex: 1, flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF',
     borderRadius: 24, paddingHorizontal: 8, minHeight: 48,
   },
+  inputPillSpark: {
+    borderWidth: 1.5, borderColor: '#075E54', backgroundColor: '#F0FAF8',
+  },
+  sparkIndicator: {
+    flexDirection: 'row', alignItems: 'center', backgroundColor: '#E8F5E9',
+    paddingVertical: 8, paddingHorizontal: 14, gap: 8,
+  },
+  sparkIndicatorText: { flex: 1, fontSize: 12, color: '#075E54', fontWeight: '500' },
   inputIconBtn: { padding: 6 },
   textInput: { flex: 1, fontSize: 15, color: '#333', maxHeight: 100, paddingVertical: 8 },
   rightCapsule: { alignItems: 'center', gap: 6 },
@@ -867,6 +904,9 @@ const styles = StyleSheet.create({
   sendBtn: {
     width: 48, height: 48, borderRadius: 24, backgroundColor: '#075E54',
     justifyContent: 'center', alignItems: 'center',
+  },
+  sparkSendBtn: {
+    backgroundColor: '#00796B',
   },
   micBtn: {
     width: 36, height: 36, borderRadius: 18, backgroundColor: '#E0E0E0',
