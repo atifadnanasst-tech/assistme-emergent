@@ -2328,6 +2328,317 @@ app.post('/api/invoices/:invoice_id/share', async (c) => {
 });
 
 
+// ══════════════════════════════════════════════════════════════
+// FLOW 5 — SMART CATALOG ROUTES
+// ══════════════════════════════════════════════════════════════
+
+// ─── GET /api/catalog ───────────────────────────────────────
+app.get('/api/catalog', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+
+    const { data: org } = await supabase.from('organisations').select('id, name').eq('id', organisationId).single();
+    const { data: products } = await supabase.from('products')
+      .select('id, name, category, image_url, selling_price, cost_price, custom_fields, sku')
+      .eq('organisation_id', organisationId).eq('is_active', true).order('category').order('name');
+
+    const allProducts = (products || []).map(p => ({
+      id: p.id, name: p.name, category: p.category || 'Uncategorized',
+      image_url: p.image_url || null, selling_price: p.selling_price || 0,
+      cost_price: p.cost_price || 0, is_top_seller: p.custom_fields?.is_top_seller || false,
+      sku: p.sku || null,
+    }));
+    const categories = [...new Set(allProducts.map(p => p.category))];
+
+    // Top sellers: single aggregation query on invoice_items
+    let topSellerIds = new Set();
+    try {
+      const { data: salesData } = await supabase.from('invoice_items')
+        .select('product_id, invoices!inner(organisation_id)')
+        .eq('invoices.organisation_id', organisationId);
+      if (salesData && salesData.length > 0) {
+        const counts = {};
+        salesData.forEach(row => { counts[row.product_id] = (counts[row.product_id] || 0) + 1; });
+        const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+        sorted.slice(0, 10).forEach(([pid]) => topSellerIds.add(pid));
+      }
+    } catch {}
+
+    // Mark top sellers from query
+    allProducts.forEach(p => {
+      if (topSellerIds.has(p.id)) p.is_top_seller = true;
+    });
+
+    return c.json({ organisation: { id: org?.id, name: org?.name }, categories, products: allProducts });
+  } catch (error) {
+    console.error('GET /api/catalog error:', error);
+    return c.json({ error: 'server_error' }, 500);
+  }
+});
+
+// ─── POST /api/catalog/suggestions ──────────────────────────
+app.post('/api/catalog/suggestions', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+    const body = await c.req.json();
+    const selectedIds = body.selected_product_ids || [];
+
+    if (selectedIds.length === 0) return c.json({ suggestions: [] });
+
+    // Co-purchase analysis: find products bought in same invoices as selected products
+    const coPurchaseCounts = {};
+    try {
+      // Get invoice_ids that contain selected products
+      const { data: selectedItems } = await supabase.from('invoice_items')
+        .select('invoice_id').in('product_id', selectedIds);
+      if (!selectedItems || selectedItems.length === 0) return c.json({ suggestions: [] });
+
+      const invoiceIds = [...new Set(selectedItems.map(i => i.invoice_id))];
+      if (invoiceIds.length === 0) return c.json({ suggestions: [] });
+
+      // Get all products in those invoices (excluding selected ones)
+      const { data: coItems } = await supabase.from('invoice_items')
+        .select('product_id').in('invoice_id', invoiceIds);
+
+      (coItems || []).forEach(item => {
+        if (!selectedIds.includes(item.product_id)) {
+          coPurchaseCounts[item.product_id] = (coPurchaseCounts[item.product_id] || 0) + 1;
+        }
+      });
+    } catch {}
+
+    if (Object.keys(coPurchaseCounts).length === 0) return c.json({ suggestions: [] });
+
+    // Top 5 by co_purchase_count
+    const top5 = Object.entries(coPurchaseCounts)
+      .sort((a, b) => b[1] - a[1]).slice(0, 5).map(([pid, count]) => ({ product_id: pid, count }));
+
+    const top5Ids = top5.map(t => t.product_id);
+    const { data: suggestedProducts } = await supabase.from('products')
+      .select('id, name').in('id', top5Ids).eq('is_active', true);
+
+    const prodMap = {};
+    (suggestedProducts || []).forEach(p => { prodMap[p.id] = p.name; });
+
+    // Get selected product names for AI reason
+    const { data: selectedProds } = await supabase.from('products').select('id, name').in('id', selectedIds);
+    const selectedNames = (selectedProds || []).map(p => p.name);
+
+    // AI generates reason text
+    let suggestions = top5.filter(t => prodMap[t.product_id]).map(t => ({
+      product_id: t.product_id, product_name: prodMap[t.product_id],
+      reason: `Often bought with ${selectedNames[0] || 'your selected items'} by your customers`,
+      co_purchase_count: t.count,
+    }));
+
+    // Try AI for better reasons
+    try {
+      const client = getOpenAI();
+      if (client && suggestions.length > 0) {
+        const controller = new AbortController();
+        const tid = setTimeout(() => controller.abort(), 6000);
+        const comp = await client.chat.completions.create({
+          model: 'gpt-4o-mini',
+          messages: [{
+            role: 'system',
+            content: 'Generate a short reason (under 10 words) for each product suggestion based on co-purchase data. Output JSON array: [{"product_id":"...","reason":"..."}]. No markdown.',
+          }, {
+            role: 'user',
+            content: JSON.stringify({ selected: selectedNames, suggestions: suggestions.map(s => ({ product_id: s.product_id, name: s.product_name, co_count: s.co_purchase_count })) }),
+          }],
+          temperature: 0.3,
+        }, { signal: controller.signal });
+        clearTimeout(tid);
+
+        const aiText = comp.choices[0].message.content || '';
+        try {
+          const match = aiText.match(/\[[\s\S]*\]/);
+          if (match) {
+            const parsed = JSON.parse(match[0]);
+            parsed.forEach(item => {
+              const s = suggestions.find(sg => sg.product_id === item.product_id);
+              if (s && item.reason) s.reason = item.reason;
+            });
+          }
+        } catch {}
+      }
+    } catch {}
+
+    return c.json({ suggestions: suggestions.map(s => ({ product_id: s.product_id, product_name: s.product_name, reason: s.reason })) });
+  } catch (error) {
+    console.error('POST /api/catalog/suggestions error:', error);
+    return c.json({ error: 'server_error' }, 500);
+  }
+});
+
+// ─── PATCH /api/products/prices ─────────────────────────────
+app.patch('/api/products/prices', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const body = await c.req.json();
+    const updates = body.price_updates || [];
+    let count = 0;
+    for (const u of updates) {
+      if (u.product_id && u.selling_price > 0) {
+        const { error } = await supabase.from('products')
+          .update({ selling_price: u.selling_price })
+          .eq('id', u.product_id).eq('organisation_id', auth.organisationId);
+        if (!error) count++;
+      }
+    }
+    return c.json({ updated: count });
+  } catch (error) {
+    return c.json({ error: 'server_error' }, 500);
+  }
+});
+
+// ─── POST /api/catalog/pdf ──────────────────────────────────
+app.post('/api/catalog/pdf', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+    const body = await c.req.json();
+    const { product_ids, edited_prices, hide_prices } = body;
+
+    if (!product_ids || product_ids.length === 0) return c.json({ error: 'no_products' }, 400);
+
+    const { data: org } = await supabase.from('organisations').select('name').eq('id', organisationId).single();
+    const { data: products } = await supabase.from('products')
+      .select('id, name, category, selling_price, sku, custom_fields')
+      .in('id', product_ids).eq('is_active', true);
+
+    // Group by category
+    const grouped = {};
+    (products || []).forEach(p => {
+      const cat = p.category || 'Uncategorized';
+      if (!grouped[cat]) grouped[cat] = [];
+      const price = (edited_prices && edited_prices[p.id]) ? edited_prices[p.id] : p.selling_price;
+      grouped[cat].push({ ...p, display_price: price });
+    });
+
+    // Generate PDF
+    const doc = new PDFDocument({ size: 'A4', margin: 40 });
+    const chunks = [];
+    doc.on('data', chunk => chunks.push(chunk));
+    const pdfReady = new Promise(resolve => doc.on('end', resolve));
+
+    doc.fontSize(22).font('Helvetica-Bold').text(org?.name || 'Product Catalog', { align: 'center' });
+    doc.moveDown(0.3);
+    doc.fontSize(12).font('Helvetica').fillColor('#666').text('PRODUCT CATALOG', { align: 'center' });
+    doc.moveDown(1);
+
+    for (const [category, items] of Object.entries(grouped)) {
+      doc.fontSize(14).font('Helvetica-Bold').fillColor('#075E54').text(category);
+      doc.moveDown(0.3);
+      doc.moveTo(40, doc.y).lineTo(555, doc.y).strokeColor('#E0E0E0').stroke();
+      doc.moveDown(0.3);
+
+      // Table header
+      doc.fontSize(9).font('Helvetica-Bold').fillColor('#999');
+      doc.text('#', 40, doc.y, { width: 25 });
+      doc.text('PRODUCT', 70, doc.y - 11, { width: 200 });
+      doc.text('SKU', 280, doc.y - 11, { width: 80 });
+      if (!hide_prices) doc.text('PRICE', 420, doc.y - 11, { width: 100, align: 'right' });
+      doc.moveDown(0.4);
+
+      items.forEach((item, i) => {
+        if (doc.y > 750) { doc.addPage(); }
+        doc.fontSize(10).font('Helvetica').fillColor('#333');
+        doc.text(`${i + 1}`, 40, doc.y, { width: 25 });
+        doc.text(item.name, 70, doc.y - 11, { width: 200 });
+        doc.text(item.sku || '—', 280, doc.y - 11, { width: 80 });
+        if (!hide_prices) doc.text(`₹${item.display_price.toFixed(2)}`, 420, doc.y - 11, { width: 100, align: 'right' });
+        doc.moveDown(0.4);
+      });
+      doc.moveDown(0.5);
+    }
+
+    doc.end();
+    await pdfReady;
+
+    const pdfBuffer = Buffer.concat(chunks);
+    const fileName = `catalog-${Date.now()}.pdf`;
+    const storagePath = `${organisationId}/${fileName}`;
+
+    const { error: uploadErr } = await supabase.storage.from('invoices').upload(storagePath, pdfBuffer, { contentType: 'application/pdf', upsert: true });
+    if (uploadErr) return c.json({ error: 'upload_failed' }, 500);
+
+    const { data: publicUrl } = supabase.storage.from('invoices').getPublicUrl(storagePath);
+
+    let attachmentId = null;
+    try {
+      const { data: att } = await supabase.from('attachments').insert({
+        organisation_id: organisationId, entity_type: 'catalog', entity_id: organisationId,
+        file_name: fileName, mime_type: 'application/pdf', storage_path: storagePath, public_url: publicUrl.publicUrl,
+      }).select('id').single();
+      attachmentId = att?.id;
+    } catch {}
+
+    return c.json({ pdf_url: publicUrl.publicUrl, attachment_id: attachmentId });
+  } catch (error) {
+    console.error('POST /api/catalog/pdf error:', error);
+    return c.json({ error: 'server_error' }, 500);
+  }
+});
+
+// ─── POST /api/catalog/share ────────────────────────────────
+app.post('/api/catalog/share', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+    const body = await c.req.json();
+    const { customer_id, attachment_id, channel } = body;
+
+    if (channel === 'app' && customer_id) {
+      const { data: conv } = await supabase.from('conversations').select('id')
+        .eq('organisation_id', organisationId).eq('entity_type', 'customer')
+        .eq('entity_id', customer_id).eq('status', 'active').maybeSingle();
+      if (conv) {
+        // Get PDF URL from attachment
+        let pdfUrl = '';
+        if (attachment_id) {
+          const { data: att } = await supabase.from('attachments').select('public_url').eq('id', attachment_id).single();
+          pdfUrl = att?.public_url || '';
+        }
+        const { data: msg } = await supabase.from('messages').insert({
+          organisation_id: organisationId, conversation_id: conv.id,
+          role: 'tool', content: 'Product catalog shared',
+          metadata: {
+            sender_type: 'system', visibility: 'both', message_type: 'text',
+            read_by_owner: true, preview_text: 'Product catalog shared',
+            card_type: 'catalog_card', card_data: { attachment_id, pdf_url: pdfUrl },
+          },
+          tokens_input: 0, tokens_output: 0,
+        }).select('id').single();
+        return c.json({ shared: true, message_id: msg?.id });
+      }
+      return c.json({ shared: false });
+    } else if (channel === 'whatsapp' && customer_id) {
+      const { data: cust } = await supabase.from('customers').select('phone').eq('id', customer_id).single();
+      const phone = (cust?.phone || '').replace(/[^0-9]/g, '');
+      let pdfUrl = '';
+      if (attachment_id) {
+        const { data: att } = await supabase.from('attachments').select('public_url').eq('id', attachment_id).single();
+        pdfUrl = att?.public_url || '';
+      }
+      const text = encodeURIComponent(`Check out our latest product catalog:\n${pdfUrl}`);
+      return c.json({ shared: true, whatsapp_url: `https://wa.me/${phone}?text=${text}` });
+    }
+    return c.json({ error: 'invalid_request' }, 400);
+  } catch (error) {
+    console.error('POST /api/catalog/share error:', error);
+    return c.json({ error: 'server_error' }, 500);
+  }
+});
+
+
 // Export supabase client for use in other modules
 export { supabase };
 
