@@ -38,6 +38,21 @@ export default function CustomerChatScreen() {
   const [menuVisible, setMenuVisible] = useState(false);
   const [activeTab, setActiveTab] = useState('direct');
   const [sentReminders, setSentReminders] = useState<Set<string>>(new Set());
+  const [sparkMode, setSparkMode] = useState(false);
+  const [sparkProcessing, setSparkProcessing] = useState(false);
+  const [sparkInput, setSparkInput] = useState('');
+  // Action Preview Sheet
+  const [previewVisible, setPreviewVisible] = useState(false);
+  const [previewDraftId, setPreviewDraftId] = useState<string | null>(null);
+  const [previewActions, setPreviewActions] = useState<any[]>([]);
+  const [previewInsight, setPreviewInsight] = useState<string | null>(null);
+  const [checkedActions, setCheckedActions] = useState<Set<string>>(new Set());
+  const [confirming, setConfirming] = useState(false);
+  // Auto-confirm banner
+  const [bannerVisible, setBannerVisible] = useState(false);
+  const [bannerText, setBannerText] = useState('');
+  const [bannerDraftId, setBannerDraftId] = useState<string | null>(null);
+  const [bannerActionIds, setBannerActionIds] = useState<string[]>([]);
 
   // ── Auth helper ────────────────────────────────────────────
   const getToken = async () => {
@@ -156,6 +171,159 @@ export default function CustomerChatScreen() {
       setSentReminders(prev => new Set(prev).add(invoiceId));
       if (data.message_id) loadChat(); // Refresh to show new reminder message
     } catch { Alert.alert('Error', 'Failed to send reminder.'); }
+  };
+
+  // ── AI Spark handler ───────────────────────────────────────
+  const handleSpark = async () => {
+    const text = sparkInput.trim() || inputText.trim();
+    if (!text || sparkProcessing || !conversationId) return;
+    Keyboard.dismiss();
+    setSparkInput('');
+    setInputText('');
+    setSparkMode(false);
+    setSparkProcessing(true);
+
+    // Show owner instruction in chat as outgoing message
+    const tempId = `spark-${Date.now()}`;
+    const sparkMsg: ChatMessage = {
+      id: tempId, role: 'assistant', content: `✨ ${text}`,
+      created_at: new Date().toISOString(), sender_type: 'owner',
+      visibility: 'both', message_type: 'text', card_type: null,
+      card_data: {}, preview_text: text.substring(0, 50),
+    };
+    setMessages(prev => [...prev, sparkMsg]);
+    setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
+
+    try {
+      const token = await getToken();
+      if (!token) return;
+      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+      const res = await fetch(`${backendUrl}/api/chat/${customer_id}/spark`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: text, conversation_id: conversationId }),
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+
+      if (res.status === 401) {
+        await authService.clearSession(); await supabase.auth.signOut();
+        setIsAuthenticated(false); router.replace('/login'); return;
+      }
+
+      const data = await res.json();
+
+      if (data.routing === 'clarify') {
+        // AI asks clarifying question — reload to show it
+        await loadChat();
+      } else if (data.routing === 'preview') {
+        // Show Action Preview Sheet
+        setPreviewDraftId(data.draft_id);
+        setPreviewActions(data.actions || []);
+        setPreviewInsight(data.ai_insight);
+        setCheckedActions(new Set((data.actions || []).map((a: any) => a.action_id)));
+        setPreviewVisible(true);
+      } else if (data.routing === 'auto_confirm') {
+        // Auto-confirm: execute immediately, show banner
+        const confirmRes = await fetch(`${backendUrl}/api/chat/${customer_id}/spark/confirm`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ draft_id: data.draft_id, action_ids: (data.actions || []).map((a: any) => a.action_id) }),
+        });
+        const confirmData = await confirmRes.json();
+        if (confirmData.executed?.length > 0) {
+          setBannerText(data.actions?.[0]?.details || 'Action completed');
+          setBannerDraftId(data.draft_id);
+          setBannerActionIds((data.actions || []).map((a: any) => a.action_id));
+          setBannerVisible(true);
+          // 5 second auto-dismiss
+          setTimeout(() => setBannerVisible(false), 5000);
+        }
+        await loadChat();
+      }
+    } catch (err: any) {
+      if (err.name !== 'AbortError') {
+        const errorMsg: ChatMessage = {
+          id: `err-${Date.now()}`, role: 'assistant', content: "Could not fully process request. Try again.",
+          created_at: new Date().toISOString(), sender_type: 'ai',
+          visibility: 'both', message_type: 'text', card_type: null,
+          card_data: {}, preview_text: 'AI error',
+        };
+        setMessages(prev => [...prev, errorMsg]);
+      }
+    } finally {
+      setSparkProcessing(false);
+    }
+  };
+
+  // ── Confirm All handler ────────────────────────────────────
+  const handleConfirmAll = async () => {
+    if (confirming || !previewDraftId) return;
+    setConfirming(true);
+    try {
+      const token = await getToken();
+      if (!token) return;
+      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+      const selectedIds = Array.from(checkedActions);
+
+      const res = await fetch(`${backendUrl}/api/chat/${customer_id}/spark/confirm`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ draft_id: previewDraftId, action_ids: selectedIds }),
+      });
+      const data = await res.json();
+
+      setPreviewVisible(false);
+      setPreviewDraftId(null);
+      setPreviewActions([]);
+
+      if (data.executed?.length > 0) {
+        await loadChat(); // Refresh to show invoice card
+      }
+      if (data.failed?.length > 0) {
+        Alert.alert('Warning', `${data.failed.length} action(s) failed to execute.`);
+      }
+    } catch {
+      Alert.alert('Error', 'Failed to execute actions.');
+    } finally {
+      setConfirming(false);
+    }
+  };
+
+  // ── Cancel draft handler ───────────────────────────────────
+  const handleCancelDraft = async () => {
+    if (!previewDraftId) return;
+    try {
+      const token = await getToken();
+      if (!token) return;
+      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+      await fetch(`${backendUrl}/api/chat/${customer_id}/spark/${previewDraftId}`, {
+        method: 'DELETE', headers: { 'Authorization': `Bearer ${token}` },
+      });
+    } catch {}
+    setPreviewVisible(false);
+    setPreviewDraftId(null);
+    setPreviewActions([]);
+  };
+
+  // ── Banner Undo handler ────────────────────────────────────
+  const handleBannerUndo = async () => {
+    if (!bannerDraftId) return;
+    try {
+      const token = await getToken();
+      if (!token) return;
+      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+      await fetch(`${backendUrl}/api/chat/${customer_id}/spark/${bannerDraftId}`, {
+        method: 'DELETE', headers: { 'Authorization': `Bearer ${token}` },
+      });
+    } catch {}
+    setBannerVisible(false);
+    setBannerText('Action undone');
+    setBannerVisible(true);
+    setTimeout(() => setBannerVisible(false), 2000);
   };
 
   // ── Formatting helpers ─────────────────────────────────────
@@ -423,8 +591,8 @@ export default function CustomerChatScreen() {
 
           <View style={styles.rightCapsule}>
             {inputText.trim().length > 0 ? (
-              <TouchableOpacity style={styles.sendBtn} onPress={handleSend} disabled={sending}>
-                {sending ? (
+              <TouchableOpacity style={styles.sendBtn} onPress={sparkMode ? handleSpark : handleSend} disabled={sending || sparkProcessing}>
+                {(sending || sparkProcessing) ? (
                   <ActivityIndicator size="small" color="#FFF" />
                 ) : (
                   <Ionicons name="send" size={20} color="#FFF" />
@@ -433,11 +601,18 @@ export default function CustomerChatScreen() {
             ) : (
               <>
                 <TouchableOpacity style={styles.sparkBtn} onPress={() => {
-                  // Phase 4: AI Spark will go here
-                  Alert.alert('AI Spark', 'AI Spark coming in Phase 4');
-                }}>
+                if (sparkMode) {
+                  handleSpark();
+                } else {
+                  setSparkMode(true);
+                }
+              }}>
+                {sparkProcessing ? (
+                  <ActivityIndicator size="small" color="#FFF" />
+                ) : (
                   <Ionicons name="sparkles" size={22} color="#FFF" />
-                </TouchableOpacity>
+                )}
+              </TouchableOpacity>
                 <TouchableOpacity style={styles.micBtn}>
                   <Ionicons name="mic" size={20} color="#CCC" />
                 </TouchableOpacity>
@@ -473,6 +648,103 @@ export default function CustomerChatScreen() {
           </View>
         </Pressable>
       </Modal>
+
+      {/* Action Preview Sheet */}
+      <Modal visible={previewVisible} transparent animationType="slide" onRequestClose={handleCancelDraft}>
+        <View style={styles.sheetOverlay}>
+          <Pressable style={styles.sheetDismiss} onPress={handleCancelDraft} />
+          <View style={styles.sheetContainer}>
+            <View style={styles.sheetHandle} />
+            <Text style={styles.sheetHeading}>I've prepared this:</Text>
+
+            {previewActions.map((action: any) => (
+              <View key={action.action_id} style={styles.actionBlock}>
+                <TouchableOpacity
+                  style={styles.actionCheckbox}
+                  onPress={() => setCheckedActions(prev => {
+                    const next = new Set(prev);
+                    next.has(action.action_id) ? next.delete(action.action_id) : next.add(action.action_id);
+                    return next;
+                  })}
+                >
+                  <Ionicons
+                    name={checkedActions.has(action.action_id) ? 'checkbox' : 'square-outline'}
+                    size={24} color={checkedActions.has(action.action_id) ? '#075E54' : '#CCC'}
+                  />
+                </TouchableOpacity>
+                <View style={styles.actionContent}>
+                  <Text style={styles.actionName}>
+                    {action.action_type === 'create_invoice' ? 'Create Invoice' :
+                     action.action_type === 'schedule_delivery' ? 'Delivery' :
+                     action.action_type === 'set_reminder' ? 'Payment Reminder' :
+                     action.action_type === 'record_payment' ? 'Record Payment' :
+                     action.action_type}
+                  </Text>
+                  <Text style={styles.actionDetails}>{action.details}</Text>
+                </View>
+                <TouchableOpacity style={styles.actionEditBtn}>
+                  <Text style={styles.actionEditText}>Edit</Text>
+                </TouchableOpacity>
+              </View>
+            ))}
+
+            {previewInsight && (
+              <View style={styles.insightBox}>
+                <Ionicons name="bulb-outline" size={18} color="#00796B" />
+                <Text style={styles.insightBoxText}>{previewInsight}</Text>
+              </View>
+            )}
+
+            <View style={styles.sheetButtons}>
+              <TouchableOpacity
+                style={[styles.confirmAllBtn, confirming && { opacity: 0.6 }]}
+                onPress={handleConfirmAll}
+                disabled={confirming || checkedActions.size === 0}
+              >
+                {confirming ? (
+                  <ActivityIndicator size="small" color="#FFF" />
+                ) : (
+                  <Text style={styles.confirmAllText}>Confirm All</Text>
+                )}
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.editMasterBtn}>
+                <Text style={styles.editMasterText}>Edit</Text>
+              </TouchableOpacity>
+            </View>
+            <TouchableOpacity onPress={handleCancelDraft} style={styles.cancelLink}>
+              <Text style={styles.cancelLinkText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Auto-confirm Banner */}
+      {bannerVisible && (
+        <View style={styles.bannerContainer}>
+          <Text style={styles.bannerText} numberOfLines={2}>{bannerText}</Text>
+          <View style={styles.bannerButtons}>
+            <TouchableOpacity style={styles.bannerBtn} onPress={() => setBannerVisible(false)}>
+              <Text style={styles.bannerBtnText}>OK</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.bannerBtn} onPress={() => {
+              setBannerVisible(false);
+              // Re-open preview with the auto-confirmed action
+              if (bannerDraftId && bannerActionIds.length > 0) {
+                setPreviewDraftId(bannerDraftId);
+                setPreviewActions(bannerActionIds.map(id => ({ action_id: id, action_type: 'edit', details: bannerText, editable: true })));
+                setCheckedActions(new Set(bannerActionIds));
+                setPreviewVisible(true);
+              }
+            }}>
+              <Text style={styles.bannerBtnText}>Edit</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.bannerBtn} onPress={handleBannerUndo}>
+              <Text style={[styles.bannerBtnText, { color: '#D32F2F' }]}>Undo</Text>
+            </TouchableOpacity>
+          </View>
+          <View style={styles.bannerTimerBar} />
+        </View>
+      )}
     </KeyboardAvoidingView>
   );
 }
@@ -593,4 +865,56 @@ const styles = StyleSheet.create({
   menuDivider: { height: 1, backgroundColor: '#F0F0F0', marginVertical: 4 },
   menuItem: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, gap: 14 },
   menuItemText: { fontSize: 15, color: '#333' },
+
+  // Action Preview Sheet
+  sheetOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.4)' },
+  sheetDismiss: { flex: 1 },
+  sheetContainer: {
+    backgroundColor: '#FFF', borderTopLeftRadius: 20, borderTopRightRadius: 20,
+    paddingHorizontal: 20, paddingBottom: 30, maxHeight: '80%',
+  },
+  sheetHandle: { width: 40, height: 4, backgroundColor: '#DDD', borderRadius: 2, alignSelf: 'center', marginVertical: 12 },
+  sheetHeading: { fontSize: 18, fontWeight: '600', color: '#333', marginBottom: 16 },
+  actionBlock: {
+    flexDirection: 'row', alignItems: 'flex-start', borderWidth: 1, borderColor: '#E0E0E0',
+    borderRadius: 12, padding: 14, marginBottom: 12, gap: 12,
+  },
+  actionCheckbox: { paddingTop: 2 },
+  actionContent: { flex: 1 },
+  actionName: { fontSize: 16, fontWeight: '700', color: '#1A1A1A', marginBottom: 4 },
+  actionDetails: { fontSize: 13, color: '#666', lineHeight: 18 },
+  actionEditBtn: { paddingVertical: 4, paddingHorizontal: 8 },
+  actionEditText: { fontSize: 14, fontWeight: '600', color: '#075E54' },
+  insightBox: {
+    flexDirection: 'row', alignItems: 'flex-start', backgroundColor: '#E0F2F1',
+    borderLeftWidth: 3, borderLeftColor: '#009688', borderRadius: 8,
+    padding: 12, marginBottom: 16, gap: 10,
+  },
+  insightBoxText: { flex: 1, fontSize: 13, color: '#004D40', lineHeight: 18 },
+  sheetButtons: { flexDirection: 'row', gap: 12, marginBottom: 12 },
+  confirmAllBtn: {
+    flex: 2, backgroundColor: '#075E54', borderRadius: 12,
+    paddingVertical: 16, alignItems: 'center',
+  },
+  confirmAllText: { color: '#FFF', fontSize: 17, fontWeight: '700' },
+  editMasterBtn: {
+    flex: 1, borderWidth: 2, borderColor: '#075E54', borderRadius: 12,
+    paddingVertical: 16, alignItems: 'center',
+  },
+  editMasterText: { color: '#075E54', fontSize: 17, fontWeight: '700' },
+  cancelLink: { alignItems: 'center', paddingVertical: 8 },
+  cancelLinkText: { color: '#999', fontSize: 15 },
+
+  // Auto-confirm banner
+  bannerContainer: {
+    position: 'absolute', bottom: 80, left: 12, right: 12,
+    backgroundColor: '#FFF', borderRadius: 12, padding: 14,
+    elevation: 6, shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15, shadowRadius: 8,
+  },
+  bannerText: { fontSize: 14, color: '#333', marginBottom: 10 },
+  bannerButtons: { flexDirection: 'row', gap: 12 },
+  bannerBtn: { paddingVertical: 6, paddingHorizontal: 16, borderRadius: 8, backgroundColor: '#F5F5F5' },
+  bannerBtnText: { fontSize: 14, fontWeight: '600', color: '#075E54' },
+  bannerTimerBar: { height: 3, backgroundColor: '#075E54', borderRadius: 2, marginTop: 10 },
 });

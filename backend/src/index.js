@@ -1261,7 +1261,7 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
         organisation_id: organisationId, conversation_id: conversationId,
         role: 'assistant', content: clarifyContent,
         metadata: {
-          sender_type: 'ai', visibility: 'owner_only', message_type: 'text',
+          sender_type: 'ai', visibility: 'both', message_type: 'text',
           read_by_owner: true, preview_text: clarifyContent.substring(0, 50),
           ai_raw_response: JSON.stringify(parsed),
         },
