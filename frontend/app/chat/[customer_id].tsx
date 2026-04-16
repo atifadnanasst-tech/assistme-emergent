@@ -4,7 +4,7 @@ import {
   ActivityIndicator, Alert, Linking, KeyboardAvoidingView, Platform,
   Keyboard, Modal, Pressable,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../contexts/AuthContext';
@@ -28,6 +28,7 @@ export default function CustomerChatScreen() {
   const { customer_id } = useLocalSearchParams<{ customer_id: string }>();
   const { setIsAuthenticated } = useAuth();
   const flatListRef = useRef<FlatList>(null);
+  const insets = useSafeAreaInsets();
 
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
@@ -42,6 +43,7 @@ export default function CustomerChatScreen() {
   const [sparkMode, setSparkMode] = useState(false);
   const [sparkProcessing, setSparkProcessing] = useState(false);
   const [sparkInput, setSparkInput] = useState('');
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
   // Action Preview Sheet
   const [previewVisible, setPreviewVisible] = useState(false);
   const [previewDraftId, setPreviewDraftId] = useState<string | null>(null);
@@ -70,6 +72,14 @@ export default function CustomerChatScreen() {
 
   // ── Load conversation ──────────────────────────────────────
   useEffect(() => { loadChat(); }, [customer_id]);
+
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const showSub = Keyboard.addListener(showEvent, () => setKeyboardVisible(true));
+    const hideSub = Keyboard.addListener(hideEvent, () => setKeyboardVisible(false));
+    return () => { showSub.remove(); hideSub.remove(); };
+  }, []);
 
   const loadChat = async () => {
     try {
@@ -579,7 +589,7 @@ setTimeout(() => {
       </View>
 
       {/* Input bar */}
-      <SafeAreaView style={styles.inputSafeArea} edges={['bottom']}>
+      <View style={[styles.inputBarWrapper, { paddingBottom: keyboardVisible ? 0 : insets.bottom }]}>
         <View style={styles.inputRow}>
           <View style={styles.inputPill}>
             <TouchableOpacity style={styles.inputIconBtn}>
@@ -633,7 +643,7 @@ setTimeout(() => {
             )}
           </View>
         </View>
-      </SafeAreaView>
+      </View>
 
       {/* 3-dot menu overlay */}
       <Modal visible={menuVisible} transparent animationType="fade" onRequestClose={() => setMenuVisible(false)}>
@@ -841,7 +851,7 @@ const styles = StyleSheet.create({
   invoiceActionDone: { color: '#999', fontSize: 14, marginTop: 10 },
 
   // Input bar
-  inputSafeArea: { backgroundColor: '#F0F0F0', paddingBottom: 0 },
+  inputBarWrapper: { backgroundColor: '#F0F0F0' },
   inputRow: { flexDirection: 'row', alignItems: 'flex-end', padding: 6, gap: 6, backgroundColor: '#F0F0F0' },
   inputPill: {
     flex: 1, flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF',
