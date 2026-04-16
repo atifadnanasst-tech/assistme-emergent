@@ -772,25 +772,36 @@ app.get('/api/chat/:customer_id', async (c) => {
         }));
       }
 
-      // 4. Mark unread messages as read
+      // 4. Mark unread messages as read using jsonb_set
       try {
-        await supabase.rpc('mark_messages_read', { p_conversation_id: conversation.id }).catch(() => {
-          // RPC may not exist, fall back to manual update
-        });
-        // Fallback: update messages where read_by_owner = false
         const { data: unreadMsgs } = await supabase
           .from('messages')
-          .select('id, metadata')
+          .select('id')
           .eq('conversation_id', conversation.id)
           .eq('metadata->>read_by_owner', 'false');
 
         if (unreadMsgs && unreadMsgs.length > 0) {
-          for (const msg of unreadMsgs) {
-            const updatedMeta = { ...(msg.metadata || {}), read_by_owner: true };
-            await supabase
-              .from('messages')
-              .update({ metadata: updatedMeta })
-              .eq('id', msg.id);
+          const unreadIds = unreadMsgs.map(m => m.id);
+          await supabase.rpc('exec_sql', {
+            query: `UPDATE messages SET metadata = jsonb_set(metadata, '{read_by_owner}', 'true') WHERE id = ANY($1)`,
+            params: [unreadIds],
+          }).catch(async () => {
+            // RPC may not exist — fall back to per-row update
+            for (const msg of unreadMsgs) {
+              await supabase
+                .from('messages')
+                .update({ metadata: supabase.rpc ? undefined : undefined })
+                .eq('id', msg.id);
+            }
+          });
+          // Reliable fallback: individual updates using Supabase client
+          for (const uid of unreadIds) {
+            const { data: row } = await supabase.from('messages').select('metadata').eq('id', uid).single();
+            if (row) {
+              await supabase.from('messages').update({
+                metadata: { ...(row.metadata || {}), read_by_owner: true }
+              }).eq('id', uid);
+            }
           }
         }
       } catch (err) {
