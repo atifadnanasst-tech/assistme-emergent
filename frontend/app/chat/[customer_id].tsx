@@ -38,6 +38,7 @@ export default function CustomerChatScreen() {
   const [menuVisible, setMenuVisible] = useState(false);
   const [activeTab, setActiveTab] = useState('direct');
   const [sentReminders, setSentReminders] = useState<Set<string>>(new Set());
+  const [refreshing, setRefreshing] = useState(false);
   const [sparkMode, setSparkMode] = useState(false);
   const [sparkProcessing, setSparkProcessing] = useState(false);
   const [sparkInput, setSparkInput] = useState('');
@@ -102,6 +103,7 @@ setTimeout(() => {
       if (err.name !== 'AbortError') console.error('Load chat error:', err);
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   };
 
@@ -337,7 +339,12 @@ setTimeout(() => {
   const formatCurrency = (n: number) => '₹' + n.toLocaleString('en-IN');
   const formatDateDivider = (ts: string) => {
     const d = new Date(ts);
-    return d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+    const today = new Date();
+    const yesterday = new Date();
+    yesterday.setDate(today.getDate() - 1);
+    if (d.toDateString() === today.toDateString()) return 'Today';
+    if (d.toDateString() === yesterday.toDateString()) return 'Yesterday';
+    return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
   };
 
   // ── Health dots ────────────────────────────────────────────
@@ -430,7 +437,7 @@ setTimeout(() => {
     if (index === 0) return true;
     const curr = new Date(messages[index].created_at);
     const prev = new Date(messages[index - 1].created_at);
-    return curr.getMonth() !== prev.getMonth() || curr.getFullYear() !== prev.getFullYear();
+    return curr.toDateString() !== prev.toDateString();
   };
 
   const renderMessage = ({ item, index }: { item: ChatMessage; index: number }) => {
@@ -494,7 +501,8 @@ setTimeout(() => {
   return (
     <KeyboardAvoidingView
       style={styles.flex1}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={0}
     >
       {/* Header */}
       <SafeAreaView style={styles.safeTop} edges={['top']}>
@@ -564,6 +572,8 @@ setTimeout(() => {
             contentContainerStyle={styles.chatContent}
             onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: false })}
             showsVerticalScrollIndicator={false}
+            refreshing={refreshing}
+            onRefresh={loadChat}
           />
         )}
       </View>
@@ -831,7 +841,7 @@ const styles = StyleSheet.create({
   invoiceActionDone: { color: '#999', fontSize: 14, marginTop: 10 },
 
   // Input bar
-  inputSafeArea: { backgroundColor: '#F0F0F0' },
+  inputSafeArea: { backgroundColor: '#F0F0F0', paddingBottom: 0 },
   inputRow: { flexDirection: 'row', alignItems: 'flex-end', padding: 6, gap: 6, backgroundColor: '#F0F0F0' },
   inputPill: {
     flex: 1, flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF',
