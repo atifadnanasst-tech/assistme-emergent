@@ -44,12 +44,18 @@ export default function LoginScreen() {
     setError('');
 
     try {
-      const fullPhone = `+91${phone}`;
+      // Format phone to E.164 WITHOUT '+' prefix to match Supabase test OTP config
+      // Input: 9007188402 → Send: 919007188402
+      const formattedPhone = `91${phone}`;
+      
+      console.log('📱 [LOGIN] Phone sent to Supabase:', formattedPhone);
+      
       const { error: otpError } = await supabase.auth.signInWithOtp({
-        phone: fullPhone,
+        phone: formattedPhone,
       });
 
       if (otpError) {
+        console.error('❌ [LOGIN] signInWithOtp error:', otpError);
         // Handle specific Supabase errors
         if (otpError.message.includes('rate')) {
           setError('Too many attempts. Try again in 1 hour.');
@@ -60,10 +66,12 @@ export default function LoginScreen() {
         return;
       }
 
-      // Navigate to OTP screen
+      console.log('✅ [LOGIN] OTP request successful');
+      
+      // Navigate to OTP screen with formatted phone
       router.push({
         pathname: '/otp',
-        params: { phone: fullPhone },
+        params: { phone: formattedPhone },
       });
     } catch (err) {
       console.error('Send OTP error:', err);

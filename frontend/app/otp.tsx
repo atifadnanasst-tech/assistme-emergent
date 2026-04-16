@@ -282,13 +282,17 @@ export default function OTPScreen() {
     setError('');
 
     try {
+      console.log('📱 [OTP] Resend - Phone sent to Supabase:', phone);
+      
       const { error: resendError } = await supabase.auth.signInWithOtp({
         phone: phone!,
       });
 
       if (resendError) {
+        console.error('❌ [OTP] Resend error:', resendError);
         setError(resendError.message || 'Failed to resend OTP.');
       } else {
+        console.log('✅ [OTP] Resend successful');
         // Reset timer and OTP
         setTimer(TIMER_DURATION);
         setCanResend(false);
@@ -296,7 +300,7 @@ export default function OTPScreen() {
         inputRefs.current[0]?.focus();
       }
     } catch (err) {
-      console.error('Resend OTP error:', err);
+      console.error('❌ [OTP] Resend OTP error:', err);
       setError('Failed to resend OTP. Please try again.');
     } finally {
       setResending(false);
@@ -307,8 +311,12 @@ export default function OTPScreen() {
     router.back();
   };
 
+  // Mask phone number for display
+  // Handles both formats: 919007188402 or +919007188402
   const maskedPhone = phone
-    ? `${phone.slice(0, 3)} XXXXX ${phone.slice(-4)}`
+    ? phone.startsWith('+')
+      ? `${phone.slice(0, 3)} XXXXX ${phone.slice(-4)}`  // +91 XXXXX 8402
+      : `+${phone.slice(0, 2)} XXXXX ${phone.slice(-4)}` // +91 XXXXX 8402
     : '';
 
   return (
