@@ -247,13 +247,21 @@ app.get('/api/home', async (c) => {
     const filterTagId = c.req.query('filter');
     const limit = parseInt(c.req.query('limit') || '50', 10);
 
+    console.log('🔍 [HOME] Step 1: Organisation ID extracted:', organisationId);
+    console.log('🔍 [HOME] Filter tag:', filterTagId || 'none (all)');
+
     // Query 1: Get filter tabs (tags)
     const { data: tags, error: tagsError } = await supabase
       .from('tags')
-      .select('id, name, color, is_system, created_by')
+      .select('id, name, color, is_system')
       .eq('organisation_id', organisationId)
+      .is('deleted_at', null)
       .order('is_system', { ascending: false })
       .order('created_at', { ascending: true });
+
+    console.log('🔍 [HOME] Tags query result');
+    console.log('  - Error:', tagsError ? tagsError.message : 'none');
+    console.log('  - Count:', tags?.length || 0);
 
     const filterTabs = [];
     
@@ -319,6 +327,11 @@ app.get('/api/home', async (c) => {
 
     const { data: conversations, error: conversationsError } = await conversationsQuery;
 
+    console.log('🔍 [HOME] Step 2: Conversations query result');
+    console.log('  - Error:', conversationsError ? conversationsError.message : 'none');
+    console.log('  - Count:', conversations?.length || 0);
+    console.log('  - Sample:', conversations?.slice(0, 2));
+
     if (conversationsError) {
       console.error('Conversations query error:', conversationsError);
       return c.json({ error: 'server_error' }, 500);
@@ -327,14 +340,24 @@ app.get('/api/home', async (c) => {
     // Query 3: Get latest message per conversation (DISTINCT ON pattern)
     const conversationIds = conversations?.map(c => c.id) || [];
     
+    console.log('🔍 [HOME] Step 3: Conversation IDs for messages query');
+    console.log('  - Count:', conversationIds.length);
+    console.log('  - IDs:', conversationIds);
+    
     let latestMessages = [];
     if (conversationIds.length > 0) {
+      console.log('🔍 [HOME] Step 4: Executing messages query...');
+      
       const { data: messages, error: messagesError } = await supabase
         .from('messages')
         .select('conversation_id, content, created_at, role, metadata')
         .in('conversation_id', conversationIds)
         .order('conversation_id')
         .order('created_at', { ascending: false });
+
+      console.log('  - Messages error:', messagesError ? messagesError.message : 'none');
+      console.log('  - Messages count:', messages?.length || 0);
+      console.log('  - Sample messages:', messages?.slice(0, 3));
 
       if (!messagesError && messages) {
         // Group by conversation_id and take first (most recent)
@@ -345,11 +368,19 @@ app.get('/api/home', async (c) => {
           }
         });
         latestMessages = Object.values(messagesByConv);
+        
+        console.log('🔍 [HOME] Step 5: Latest messages grouped');
+        console.log('  - Unique conversations with messages:', latestMessages.length);
+        console.log('  - Mapping:', Object.keys(messagesByConv));
       }
     }
 
     // Query 4: Get customer data
-    const customerIds = conversations?.map(c => c.entity_id) || [];
+    const customerIds = conversations?.map(c => c.entity_id).filter(id => id !== null) || [];
+    console.log('🔍 [HOME] Step 6: Customer IDs to fetch');
+    console.log('  - Count:', customerIds.length);
+    console.log('  - IDs:', customerIds);
+    
     let customers = [];
     
     if (customerIds.length > 0) {
@@ -357,6 +388,11 @@ app.get('/api/home', async (c) => {
         .from('customers')
         .select('id, name, outstanding_balance, custom_fields')
         .in('id', customerIds);
+
+      console.log('🔍 [HOME] Step 7: Customers query result');
+      console.log('  - Error:', customersError ? customersError.message : 'none');
+      console.log('  - Count:', customersData?.length || 0);
+      console.log('  - Sample:', customersData?.slice(0, 2));
 
       if (!customersError && customersData) {
         customers = customersData;
