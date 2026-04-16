@@ -18,15 +18,32 @@ AssistMe is a WhatsApp-style business operating system for Indian MSME traders. 
 - Navigation shell with expo-router
 - Environment configuration structure
 
-### ⏳ Flow 1: Auth (OTP Login + Session)
-**Status**: Awaiting flow prompt
+### 🚧 Flow 1: Auth (OTP Login + Session) - IN PROGRESS
+**Status**: Implementation complete, awaiting testing
 
-**Requirements Summary**:
-- Phone OTP login via Supabase Auth
-- No Twilio SDK (configured in Supabase dashboard)
-- Real OTP flow (no bypass)
-- Demo phone with fixed OTP: 123456
-- Session management with Supabase
+**What's Built**:
+- ✅ Login screen with phone input (+91 prefix)
+- ✅ OTP verification screen with 6-box input
+- ✅ Supabase Auth integration (signInWithOtp, verifyOtp)
+- ✅ SecureStore for secure token storage
+- ✅ Backend POST /api/auth/setup-session endpoint
+- ✅ Token validation with Supabase Admin SDK
+- ✅ Atomic user + organisation creation
+- ✅ System tags seeding (6 tags with is_system=true)
+- ✅ Session management and navigation
+- ✅ Auto-verify when OTP boxes filled
+- ✅ Resend OTP with timer (28 seconds)
+- ✅ Error handling for wrong/expired OTP
+- ✅ Session check on app launch
+
+**Testing Pending**:
+- Phone number validation
+- OTP send/verify flow
+- Backend setup-session endpoint
+- System tags creation
+- Navigation flow (login → OTP → home)
+- Session persistence
+- Error states
 
 ---
 

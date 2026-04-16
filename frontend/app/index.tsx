@@ -1,43 +1,42 @@
-import { View, Text, StyleSheet } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { useEffect } from 'react';
+import { View, ActivityIndicator, StyleSheet } from 'react-native';
+import { useRouter } from 'expo-router';
+import { authService } from '../lib/auth';
 
 export default function Index() {
+  const router = useRouter();
+
+  useEffect(() => {
+    checkAuthAndRedirect();
+  }, []);
+
+  const checkAuthAndRedirect = async () => {
+    const token = await authService.getAccessToken();
+    
+    if (token) {
+      const isValid = await authService.isSessionValid();
+      if (isValid) {
+        router.replace('/home');
+      } else {
+        router.replace('/login');
+      }
+    } else {
+      router.replace('/login');
+    }
+  };
+
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.content}>
-        <Text style={styles.title}>AssistMe</Text>
-        <Text style={styles.subtitle}>WhatsApp-style Business OS</Text>
-        <Text style={styles.message}>Awaiting Flow 1: Auth Setup</Text>
-      </View>
-    </SafeAreaView>
+    <View style={styles.container}>
+      <ActivityIndicator size="large" color="#075E54" />
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#075E54',
-  },
-  content: {
-    flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    paddingHorizontal: 24,
-  },
-  title: {
-    fontSize: 48,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
-    marginBottom: 8,
-  },
-  subtitle: {
-    fontSize: 18,
-    color: '#E8F5E9',
-    marginBottom: 32,
-  },
-  message: {
-    fontSize: 14,
-    color: '#B2DFDB',
-    textAlign: 'center',
+    backgroundColor: '#075E54',
   },
 });
