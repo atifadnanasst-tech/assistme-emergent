@@ -667,6 +667,393 @@ app.post('/api/tags', async (c) => {
 });
 
 
+// ══════════════════════════════════════════════════════════════
+// FLOW 3A — CUSTOMER CHAT ROUTES
+// ══════════════════════════════════════════════════════════════
+
+// Auth + org helper (reusable for chat routes)
+async function authenticateChat(c) {
+  const authHeader = c.req.header('Authorization');
+  if (!authHeader || !authHeader.startsWith('Bearer ')) return null;
+  const token = authHeader.split(' ')[1];
+  if (!supabase) return null;
+  const { data: userData, error } = await supabase.auth.getUser(token);
+  if (error || !userData.user) return null;
+  const { data: userRecord } = await supabase
+    .from('users').select('id, organisation_id').eq('auth_id', userData.user.id).single();
+  if (!userRecord) return null;
+  return { userId: userRecord.id, organisationId: userRecord.organisation_id };
+}
+
+// Validate customer belongs to org
+async function validateCustomer(customerId, organisationId) {
+  const { data: customer, error } = await supabase
+    .from('customers')
+    .select('id, name, phone, outstanding_balance, status, custom_fields')
+    .eq('id', customerId)
+    .eq('organisation_id', organisationId)
+    .maybeSingle();
+  if (error || !customer) return null;
+  return customer;
+}
+
+// ─── GET /api/chat/:customer_id ────────────────────────────
+app.get('/api/chat/:customer_id', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { userId, organisationId } = auth;
+    const customerId = c.req.param('customer_id');
+
+    // 1. Validate customer belongs to org
+    const customer = await validateCustomer(customerId, organisationId);
+    if (!customer) return c.json({ error: 'customer_not_found' }, 404);
+
+    // Shape customer header data
+    const nameParts = (customer.name || '').split(' ').filter(Boolean);
+    const initials = nameParts.map(p => p[0]).join('').toUpperCase().slice(0, 2);
+    const avatarColor = customer.custom_fields?.avatar_color || '#075E54';
+    const healthScore = customer.custom_fields?.health_score ?? null;
+    const outstandingBalance = (customer.outstanding_balance && customer.outstanding_balance > 0)
+      ? customer.outstanding_balance : null;
+
+    // 2. Fetch or create conversation
+    let { data: conversation } = await supabase
+      .from('conversations')
+      .select('id')
+      .eq('organisation_id', organisationId)
+      .eq('entity_type', 'customer')
+      .eq('entity_id', customerId)
+      .eq('status', 'active')
+      .maybeSingle();
+
+    if (!conversation) {
+      const { data: newConv, error: createErr } = await supabase
+        .from('conversations')
+        .insert({
+          organisation_id: organisationId,
+          user_id: userId,
+          entity_type: 'customer',
+          entity_id: customerId,
+          model: 'gpt-4o-mini',
+          status: 'active',
+        })
+        .select('id')
+        .single();
+      if (createErr) {
+        console.error('Create conversation error:', createErr);
+        return c.json({ error: 'server_error' }, 500);
+      }
+      conversation = newConv;
+    }
+
+    // 3. Fetch messages (only if conversation exists)
+    let messages = [];
+    if (conversation?.id) {
+      const { data: msgData, error: msgErr } = await supabase
+        .from('messages')
+        .select('id, role, content, metadata, created_at')
+        .eq('conversation_id', conversation.id)
+        .order('created_at', { ascending: true })
+        .limit(50);
+
+      if (!msgErr && msgData) {
+        messages = msgData.map(m => ({
+          id: m.id,
+          role: m.role,
+          content: m.content,
+          created_at: m.created_at,
+          sender_type: m.metadata?.sender_type || null,
+          visibility: m.metadata?.visibility || 'both',
+          message_type: m.metadata?.message_type || 'text',
+          card_type: m.metadata?.card_type || null,
+          card_data: m.metadata?.card_data || {},
+          preview_text: m.metadata?.preview_text || null,
+        }));
+      }
+
+      // 4. Mark unread messages as read
+      try {
+        await supabase.rpc('mark_messages_read', { p_conversation_id: conversation.id }).catch(() => {
+          // RPC may not exist, fall back to manual update
+        });
+        // Fallback: update messages where read_by_owner = false
+        const { data: unreadMsgs } = await supabase
+          .from('messages')
+          .select('id, metadata')
+          .eq('conversation_id', conversation.id)
+          .eq('metadata->>read_by_owner', 'false');
+
+        if (unreadMsgs && unreadMsgs.length > 0) {
+          for (const msg of unreadMsgs) {
+            const updatedMeta = { ...(msg.metadata || {}), read_by_owner: true };
+            await supabase
+              .from('messages')
+              .update({ metadata: updatedMeta })
+              .eq('id', msg.id);
+          }
+        }
+      } catch (err) {
+        console.warn('Mark messages read failed:', err.message);
+      }
+    }
+
+    return c.json({
+      conversation_id: conversation.id,
+      customer: {
+        id: customer.id,
+        name: customer.name,
+        initials,
+        avatar_color: avatarColor,
+        outstanding_balance: outstandingBalance,
+        health_score: healthScore,
+        status: customer.status || 'active',
+      },
+      messages,
+    });
+
+  } catch (error) {
+    console.error('GET /api/chat error:', error);
+    return c.json({ error: 'server_error' }, 500);
+  }
+});
+
+// ─── POST /api/chat/:customer_id/message ───────────────────
+app.post('/api/chat/:customer_id/message', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+    const customerId = c.req.param('customer_id');
+
+    const customer = await validateCustomer(customerId, organisationId);
+    if (!customer) return c.json({ error: 'customer_not_found' }, 404);
+
+    const body = await c.req.json();
+    const content = body.content?.trim();
+    const conversationId = body.conversation_id;
+
+    if (!content || content.length === 0) return c.json({ error: 'empty_message' }, 400);
+    if (content.length > 2000) return c.json({ error: 'message_too_long' }, 400);
+    if (!conversationId) return c.json({ error: 'missing_conversation_id' }, 400);
+
+    // Validate conversation belongs to org
+    const { data: conv } = await supabase
+      .from('conversations')
+      .select('id')
+      .eq('id', conversationId)
+      .eq('organisation_id', organisationId)
+      .maybeSingle();
+    if (!conv) return c.json({ error: 'conversation_not_found' }, 404);
+
+    const previewText = content.length > 50 ? content.substring(0, 50) + '...' : content;
+
+    const { data: savedMsg, error: saveErr } = await supabase
+      .from('messages')
+      .insert({
+        organisation_id: organisationId,
+        conversation_id: conversationId,
+        role: 'assistant',
+        content,
+        metadata: {
+          sender_type: 'owner',
+          visibility: 'both',
+          message_type: 'text',
+          read_by_owner: true,
+          preview_text: previewText,
+        },
+        tokens_input: 0,
+        tokens_output: 0,
+      })
+      .select('id, created_at')
+      .single();
+
+    if (saveErr) {
+      console.error('Save owner message error:', saveErr);
+      return c.json({ error: 'server_error' }, 500);
+    }
+
+    return c.json({ message_id: savedMsg.id, created_at: savedMsg.created_at });
+
+  } catch (error) {
+    console.error('POST /api/chat/message error:', error);
+    return c.json({ error: 'server_error' }, 500);
+  }
+});
+
+// ─── POST /api/chat/:customer_id/reminder ──────────────────
+app.post('/api/chat/:customer_id/reminder', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+    const customerId = c.req.param('customer_id');
+
+    const customer = await validateCustomer(customerId, organisationId);
+    if (!customer) return c.json({ error: 'customer_not_found' }, 404);
+
+    const body = await c.req.json();
+    const invoiceId = body.invoice_id;
+    if (!invoiceId) return c.json({ error: 'missing_invoice_id' }, 400);
+
+    // Fetch invoice
+    const { data: invoice } = await supabase
+      .from('invoices')
+      .select('id, total_amount, due_date, status, amount_paid')
+      .eq('id', invoiceId)
+      .eq('organisation_id', organisationId)
+      .maybeSingle();
+
+    if (!invoice) return c.json({ error: 'invoice_not_found' }, 404);
+    if (invoice.status === 'paid') return c.json({ error: 'invoice_already_paid' }, 400);
+
+    // Build WhatsApp reminder link
+    const phone = (customer.phone || '').replace(/[^0-9]/g, '');
+    if (!phone) return c.json({ error: 'no_phone_number' }, 400);
+
+    const amountDue = (invoice.total_amount || 0) - (invoice.amount_paid || 0);
+    const reminderText = encodeURIComponent(
+      `Hi ${customer.name}, this is a reminder about your pending invoice of ₹${amountDue.toLocaleString('en-IN')} (due: ${new Date(invoice.due_date).toLocaleDateString('en-IN')}). Please arrange payment at your earliest convenience.`
+    );
+    const whatsappUrl = `https://wa.me/${phone}?text=${reminderText}`;
+
+    // Save reminder message to conversation
+    const { data: conv } = await supabase
+      .from('conversations')
+      .select('id')
+      .eq('organisation_id', organisationId)
+      .eq('entity_type', 'customer')
+      .eq('entity_id', customerId)
+      .eq('status', 'active')
+      .maybeSingle();
+
+    let messageId = null;
+    if (conv) {
+      const { data: savedMsg } = await supabase
+        .from('messages')
+        .insert({
+          organisation_id: organisationId,
+          conversation_id: conv.id,
+          role: 'assistant',
+          content: `Payment reminder sent for ₹${amountDue.toLocaleString('en-IN')}`,
+          metadata: {
+            sender_type: 'owner',
+            visibility: 'both',
+            message_type: 'text',
+            read_by_owner: true,
+            preview_text: `Reminder sent for ₹${amountDue.toLocaleString('en-IN')}`,
+          },
+          tokens_input: 0,
+          tokens_output: 0,
+        })
+        .select('id')
+        .single();
+      messageId = savedMsg?.id;
+    }
+
+    return c.json({ sent: true, message_id: messageId, whatsapp_url: whatsappUrl });
+
+  } catch (error) {
+    console.error('POST /api/chat/reminder error:', error);
+    return c.json({ error: 'server_error' }, 500);
+  }
+});
+
+// ─── POST /api/payments ────────────────────────────────────
+app.post('/api/payments', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+
+    const body = await c.req.json();
+    const { customer_id, invoice_id, amount, payment_date } = body;
+
+    if (!customer_id || !invoice_id || !amount) {
+      return c.json({ error: 'missing_fields' }, 400);
+    }
+    if (typeof amount !== 'number' || amount <= 0) {
+      return c.json({ error: 'invalid_amount' }, 400);
+    }
+
+    // Validate customer
+    const customer = await validateCustomer(customer_id, organisationId);
+    if (!customer) return c.json({ error: 'customer_not_found' }, 404);
+
+    // Validate invoice
+    const { data: invoice } = await supabase
+      .from('invoices')
+      .select('id, total_amount, amount_paid, status')
+      .eq('id', invoice_id)
+      .eq('organisation_id', organisationId)
+      .maybeSingle();
+
+    if (!invoice) return c.json({ error: 'invoice_not_found' }, 404);
+    if (invoice.status === 'paid') return c.json({ error: 'invoice_already_paid' }, 400);
+
+    const maxPayable = (invoice.total_amount || 0) - (invoice.amount_paid || 0);
+    if (amount > maxPayable) {
+      return c.json({ error: 'amount_exceeds_due', max_payable: maxPayable }, 400);
+    }
+
+    // Step 1: Update invoice (MUST succeed before touching customer balance)
+    const newAmountPaid = (invoice.amount_paid || 0) + amount;
+    const newStatus = newAmountPaid >= (invoice.total_amount || 0) ? 'paid' : 'partial';
+
+    const { error: invoiceErr } = await supabase
+      .from('invoices')
+      .update({ amount_paid: newAmountPaid, status: newStatus })
+      .eq('id', invoice_id)
+      .eq('organisation_id', organisationId);
+
+    if (invoiceErr) {
+      console.error('Invoice update failed:', invoiceErr);
+      return c.json({ error: 'server_error', message: 'Failed to update invoice' }, 500);
+    }
+
+    // Step 2: Update customer balance (only after invoice update succeeds)
+    let balanceWarning = null;
+    const newBalance = Math.max(0, (customer.outstanding_balance || 0) - amount);
+
+    const { error: balanceErr } = await supabase
+      .from('customers')
+      .update({ outstanding_balance: newBalance })
+      .eq('id', customer_id)
+      .eq('organisation_id', organisationId);
+
+    if (balanceErr) {
+      console.error('Customer balance update failed:', balanceErr);
+      balanceWarning = 'Invoice updated but customer balance sync failed. Please verify manually.';
+    }
+
+    // Step 3: Record payment pattern in entity_memory
+    try {
+      await supabase.from('entity_memory').insert({
+        organisation_id: organisationId,
+        entity_type: 'customer',
+        entity_id: customer_id,
+        memory_key: 'last_payment_amount',
+        memory_value: amount.toString(),
+        confidence: 1.0,
+      });
+    } catch (memErr) {
+      console.warn('entity_memory write failed:', memErr.message);
+    }
+
+    return c.json({
+      payment_id: invoice_id,
+      new_status: newStatus,
+      new_balance: newBalance,
+      warning: balanceWarning,
+    });
+
+  } catch (error) {
+    console.error('POST /api/payments error:', error);
+    return c.json({ error: 'server_error' }, 500);
+  }
+});
+
+
 // Export supabase client for use in other modules
 export { supabase };
 

@@ -35,7 +35,7 @@ const activeContext = new Map();
 
 function getActiveContext(conversationId) {
   if (!activeContext.has(conversationId)) {
-    activeContext.set(conversationId, { customer_id: null, customer_name: null, timeframe: null });
+    activeContext.set(conversationId, { customer_id: null, customer_name: null, timeframe: null, pending_intent: null, pending_options: [] });
   }
   return activeContext.get(conversationId);
 }
@@ -109,7 +109,16 @@ const TOOLS = [
     function: {
       name: 'get_overdue_payments',
       description: 'Get ALL overdue invoices with customer name, amount, days overdue. Call this for "overdue", "pending payments", "who owes me", "payment reminders", "due", "baaki", "payment baaki", "unpaid", "kaun si payment" etc.',
-      parameters: { type: 'object', properties: {}, required: [] },
+      parameters: {
+        type: 'object',
+        properties: {
+          customer_id: {
+            type: 'string',
+            description: 'Optional. UUID of a specific customer. Pass this when owner asks about a specific customer by name. Omit for global overdue queries.'
+          }
+        },
+        required: []
+      },
     },
   },
   {
@@ -191,13 +200,18 @@ async function executeTool(toolName, args, supabase, organisationId) {
       }
 
       case 'get_overdue_payments': {
-        const { data: invoices } = await supabase
+        let invoicesQuery = supabase
           .from('invoices')
-          .select('id, customer_id, total_amount, due_date, status')
+          .select('id, customer_id, amount_due, due_date, status')
           .eq('organisation_id', organisationId)
-          .lt('due_date', new Date().toISOString())
-          .neq('status', 'paid')
-          .order('due_date', { ascending: true });
+          .in('status', ['sent', 'viewed', 'overdue', 'partial'])
+          .lt('due_date', new Date().toISOString().split('T')[0]);
+
+        if (args.customer_id) {
+          invoicesQuery = invoicesQuery.eq('customer_id', args.customer_id);
+        }
+
+        const { data: invoices } = await invoicesQuery.order('due_date', { ascending: true });
 
         if (!invoices || invoices.length === 0) {
           return { card_type: 'payment_reminder', data: { customers: [], total: 0 } };
@@ -228,7 +242,7 @@ async function executeTool(toolName, args, supabase, organisationId) {
               days_overdue: 0,
             };
           }
-          byCustomer[inv.customer_id].amount += inv.total_amount || 0;
+          byCustomer[inv.customer_id].amount += inv.amount_due || 0;
           const days = Math.floor((Date.now() - new Date(inv.due_date).getTime()) / 86400000);
           if (days > byCustomer[inv.customer_id].days_overdue) {
             byCustomer[inv.customer_id].days_overdue = days;
@@ -251,6 +265,8 @@ async function executeTool(toolName, args, supabase, organisationId) {
           .select('id, name, phone, outstanding_balance')
           .eq('organisation_id', organisationId)
           .ilike('name', `%${query}%`)
+          .is('deleted_at', null)
+          .eq('status', 'active')
           .limit(10);
 
         const matches = results || [];
@@ -337,11 +353,11 @@ async function executeTool(toolName, args, supabase, organisationId) {
       }
 
       default:
-        return { card_type: 'query_response', data: { error: `Unknown tool: ${toolName}` } };
+        return { card_type: 'query_response', data: { message: 'I could not process that request.' } };
     }
   } catch (err) {
     console.error(`Tool ${toolName} failed:`, err.message);
-    return { card_type: 'query_response', data: { error: err.message } };
+    return { card_type: 'query_response', data: { message: 'I could not fetch that data right now. Please try again.' } };
   }
 }
 
@@ -431,6 +447,92 @@ export function registerAIRoutes(app, supabase) {
       const detectedTimeframe = detectTimeframe(userMessage);
       if (detectedTimeframe) ctx.timeframe = detectedTimeframe;
 
+      // 1c. Check if owner is responding to a clarification
+      if (ctx.pending_intent && ctx.pending_options.length > 0) {
+        const msg = userMessage.toLowerCase().trim();
+
+        // Handle "both" / "all" / "dono" / "sab"
+        if (/\b(both|all|dono|sab)\b/i.test(msg)) {
+          const results = await Promise.all(
+            ctx.pending_options.map(o =>
+              executeTool(ctx.pending_intent.tool, { ...ctx.pending_intent.args, customer_id: o.id }, supabase, organisationId)
+            )
+          );
+          const mergedCustomers = [];
+          let mergedTotal = 0;
+          results.forEach(r => {
+            mergedCustomers.push(...(r.data?.customers || []));
+            mergedTotal += r.data?.total || 0;
+          });
+          const mergedResult = { customers: mergedCustomers, total: mergedTotal, invoice_count: mergedCustomers.length };
+          ctx.pending_intent = null;
+          ctx.pending_options = [];
+          const { data: savedMsg } = await supabase.from('messages').insert({
+            organisation_id: organisationId, conversation_id: conversationId,
+            role: 'assistant', content: `Showing overdue payments for all selected customers.`,
+            metadata: { card_type: 'payment_reminder', card_data: mergedResult },
+            tokens_input: 0, tokens_output: 0,
+          }).select('id').single();
+          return c.json({
+            message_id: savedMsg?.id || null,
+            response_text: `Showing overdue payments for all selected customers.`,
+            card_type: 'payment_reminder',
+            card_data: mergedResult,
+            actions: [],
+          });
+        }
+
+        // Exact match first, then partial fallback
+        const exact = ctx.pending_options.find(o => msg === o.name.toLowerCase());
+        const partial = ctx.pending_options.find(o =>
+          o.name.toLowerCase().includes(msg) || msg.includes(o.name.toLowerCase().split(' ')[0])
+        );
+        const match = exact || partial;
+
+        if (match) {
+          ctx.customer_id = match.id;
+          ctx.customer_name = match.name;
+          const pendingTool = ctx.pending_intent.tool;
+          const pendingArgs = { ...ctx.pending_intent.args, customer_id: match.id };
+          ctx.pending_intent = null;
+          ctx.pending_options = [];
+          console.log('🔧 [AI] Clarification resolved — executing pending intent:', pendingTool, 'for', match.name);
+          const resolvedResult = await executeTool(pendingTool, pendingArgs, supabase, organisationId);
+          const resolvedCardType = resolvedResult.card_type || TOOL_CARD_TYPE_MAP[pendingTool] || 'query_response';
+          const resolvedCardData = resolvedResult.data || {};
+          const resolvedText = `Showing ${pendingTool === 'get_overdue_payments' ? 'overdue payments' : 'results'} for ${match.name}.`;
+          const { data: savedMsg } = await supabase.from('messages').insert({
+            organisation_id: organisationId, conversation_id: conversationId,
+            role: 'assistant', content: resolvedText,
+            metadata: { card_type: resolvedCardType, card_data: resolvedCardData },
+            tokens_input: 0, tokens_output: 0,
+          }).select('id').single();
+          return c.json({
+            message_id: savedMsg?.id || null,
+            response_text: resolvedText,
+            card_type: resolvedCardType,
+            card_data: resolvedCardData,
+            actions: [],
+          });
+        }
+
+        // No match — ask again, do NOT clear pending_intent
+        const { data: savedMsg } = await supabase.from('messages').insert({
+          organisation_id: organisationId, conversation_id: conversationId,
+          role: 'assistant',
+          content: `I couldn't match that. Please select from: ${ctx.pending_options.map(o => o.name).join(', ')}`,
+          metadata: { card_type: 'clarification', card_data: { question: 'Which customer do you mean?', options: ctx.pending_options } },
+          tokens_input: 0, tokens_output: 0,
+        }).select('id').single();
+        return c.json({
+          message_id: savedMsg?.id || null,
+          response_text: `I couldn't match that. Please select from: ${ctx.pending_options.map(o => o.name).join(', ')}`,
+          card_type: 'clarification',
+          card_data: { question: 'Which customer do you mean?', options: ctx.pending_options },
+          actions: [],
+        });
+      }
+
       // 2. Context assembly
       let globalContext = '';
       try {
@@ -490,8 +592,21 @@ export function registerAIRoutes(app, supabase) {
           try { toolArgs = JSON.parse(tc.function.arguments || '{}'); } catch {}
 
           console.log('🔧 [AI] Tool called:', toolName, 'args:', JSON.stringify(toolArgs));
+
+          if (toolName === 'get_overdue_payments' && !toolArgs.customer_id && ctx.customer_id) {
+            toolArgs.customer_id = ctx.customer_id;
+            console.log('🔧 [AI] Injected customer_id from context:', ctx.customer_id);
+          }
+
           toolResult = await executeTool(toolName, toolArgs, supabase, organisationId);
           console.log('🔧 [AI] Tool result card_type:', toolResult.card_type);
+
+          // Store pending_intent when clarification is needed
+          if (toolResult.card_type === 'clarification') {
+            ctx.pending_intent = { tool: toolName, args: toolArgs };
+            ctx.pending_options = toolResult.data?.options || [];
+            console.log('🔧 [AI] Clarification needed — pending_intent stored:', toolName);
+          }
 
           // Update active context if search_customers resolved a single match
           if (toolResult._resolved) {
