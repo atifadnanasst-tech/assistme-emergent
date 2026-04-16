@@ -12,6 +12,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams, useSegments } from 'expo-router';
 import { supabase } from '../lib/supabase';
 import { authService } from '../lib/auth';
+import { useAuth } from '../contexts/AuthContext';
 
 const TIMER_DURATION = 28; // seconds
 
@@ -19,6 +20,7 @@ export default function OTPScreen() {
   const router = useRouter();
   const segments = useSegments();
   const { phone } = useLocalSearchParams<{ phone: string }>();
+  const { setIsAuthenticated } = useAuth();
   
   const [otp, setOtp] = useState(['', '', '', '', '', '']);
   const [loading, setLoading] = useState(false);
@@ -233,18 +235,10 @@ export default function OTPScreen() {
 
       console.log('✅ [OTP] Supabase session set in memory');
 
-      // ISSUE 2 LOGGING: Immediately before navigation
-      console.log('📊 [OTP] ========== ABOUT TO NAVIGATE ==========');
-      console.log('📊 [OTP] Current route segment:', segments[0]);
-      console.log('📊 [OTP] Token stored:', !!storedToken);
-      console.log('📊 [OTP] Org ID stored:', storedOrgId);
-      console.log('📊 [OTP] Calling router.replace("/home")...');
-      
-      // Navigate to home (proper await sequencing - no delay needed)
-      console.log('🚀 [OTP] Navigating to /home...');
-      router.replace('/home');
-      
-      console.log('📊 [OTP] ========== NAVIGATION CALLED ==========');
+      // Update auth state - navigation guard will handle redirect to /home
+      console.log('🔐 [OTP] Setting authentication state to true');
+      setIsAuthenticated(true);
+      console.log('✅ [OTP] Authentication complete - guard will handle navigation');
     } catch (err) {
       console.error('Verify OTP error:', err);
       setError('Something went wrong. Please try again.');

@@ -2,22 +2,24 @@ import { Stack, useRouter, useSegments } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { View, ActivityIndicator, StyleSheet } from 'react-native';
 import * as SplashScreen from 'expo-splash-screen';
-import { authService } from '../lib/auth';
-import { supabase } from '../lib/supabase';
+import { AuthProvider, useAuth } from '../contexts/AuthContext';
 
 // Prevent splash screen from auto-hiding
 SplashScreen.preventAutoHideAsync();
 
-export default function RootLayout() {
+function RootLayoutNav() {
   const [isReady, setIsReady] = useState(false);
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [isCheckingAuth, setIsCheckingAuth] = useState(false);
+  const { isAuthenticated, isCheckingAuth } = useAuth();
   const router = useRouter();
   const segments = useSegments();
 
   useEffect(() => {
-    checkAuth();
-  }, []);
+    // Hide splash when auth check is complete
+    if (!isCheckingAuth && !isReady) {
+      setIsReady(true);
+      SplashScreen.hideAsync();
+    }
+  }, [isCheckingAuth, isReady]);
 
   useEffect(() => {
     // LOADING GATE: Do not run redirect logic while auth state is loading
@@ -32,6 +34,7 @@ export default function RootLayout() {
       isAuthenticated,
       currentSegment: segments[0],
       inAuthGroup,
+      isCheckingAuth,
     });
 
     if (isAuthenticated && inAuthGroup) {
@@ -46,52 +49,6 @@ export default function RootLayout() {
       console.log('✅ [LAYOUT] User on correct screen, no redirect needed');
     }
   }, [isReady, isAuthenticated, isCheckingAuth, segments]);
-
-  const checkAuth = async () => {
-    setIsCheckingAuth(true);
-    console.log('🔍 [LAYOUT] Starting auth check...');
-    
-    try {
-      // Check if we have a stored session
-      const token = await authService.getAccessToken();
-      console.log('🔍 [LAYOUT] Token check:', token ? 'Token found' : 'No token');
-      
-      if (token) {
-        // Validate session with Supabase
-        const isValid = await authService.isSessionValid();
-        console.log('🔍 [LAYOUT] Session validity:', isValid);
-        
-        if (isValid) {
-          setIsAuthenticated(true);
-          console.log('✅ [LAYOUT] Session valid - user authenticated');
-        } else {
-          // Try to refresh
-          console.log('🔄 [LAYOUT] Session invalid, attempting refresh...');
-          const refreshed = await authService.refreshSession();
-          if (refreshed) {
-            setIsAuthenticated(true);
-            console.log('✅ [LAYOUT] Session refreshed - user authenticated');
-          } else {
-            // Clear invalid session
-            await authService.clearSession();
-            setIsAuthenticated(false);
-            console.log('❌ [LAYOUT] Refresh failed - clearing session');
-          }
-        }
-      } else {
-        setIsAuthenticated(false);
-        console.log('❌ [LAYOUT] No token - user not authenticated');
-      }
-    } catch (error) {
-      console.error('❌ [LAYOUT] Auth check error:', error);
-      setIsAuthenticated(false);
-    } finally {
-      setIsCheckingAuth(false);
-      setIsReady(true);
-      await SplashScreen.hideAsync();
-      console.log('✅ [LAYOUT] Auth check complete');
-    }
-  };
 
   // LOADING GATE: Show loading screen while checking auth
   if (!isReady || isCheckingAuth) {
@@ -114,6 +71,14 @@ export default function RootLayout() {
       <Stack.Screen name="otp" options={{ headerShown: false }} />
       <Stack.Screen name="home" options={{ headerShown: false }} />
     </Stack>
+  );
+}
+
+export default function RootLayout() {
+  return (
+    <AuthProvider>
+      <RootLayoutNav />
+    </AuthProvider>
   );
 }
 
