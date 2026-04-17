@@ -509,7 +509,7 @@ const s = StyleSheet.create({
   saveDraftBtn: { paddingHorizontal: 12, paddingVertical: 6 },
   saveDraftText: { color: '#A5D6A7', fontSize: 14, fontWeight: '600' },
   scroll: { flex: 1 },
-  scrollContent: { padding: 16 },
+  scrollContent: { paddingHorizontal: 16, paddingBottom: 16, paddingTop: 8 },
   sectionLabel: { fontSize: 11, fontWeight: '600', color: '#999', letterSpacing: 0.5, marginTop: 16, marginBottom: 6 },
   fieldRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF', borderRadius: 10, padding: 14, gap: 10 },
   fieldValue: { flex: 1, fontSize: 16, fontWeight: '600', color: '#1A1A1A' },
