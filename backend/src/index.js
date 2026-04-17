@@ -1081,8 +1081,7 @@ Extract ALL actions from the owner's instruction. Output ONLY this JSON — no o
     {
       "action_type": "create_invoice | schedule_delivery | set_reminder | record_payment",
       "entities": {
-        "product_name": "string or null",
-        "quantity": number or null,
+        "items": [{"product_name": "string", "quantity": number}],
         "amount": number or null,
         "due_date": "YYYY-MM-DD or null",
         "delivery_date": "YYYY-MM-DD or null"
@@ -1093,10 +1092,11 @@ Extract ALL actions from the owner's instruction. Output ONLY this JSON — no o
   "reasoning": "one sentence"
 }
 Rules:
-- Extract EVERY action mentioned (invoice, delivery, reminder, payment — can be multiple)
-- Resolve relative dates: "tomorrow" = next day, "7 din baad" = +7 days, "kal" = tomorrow
-- If owner says "payment reminder in 7 days", action_type = set_reminder, due_date = today + 7 days
-- If owner says "delivery kal", action_type = schedule_delivery, delivery_date = tomorrow
+- create_invoice: put ALL products inside entities.items array as one action (never split into multiple create_invoice)
+- schedule_delivery: one action, set delivery_date
+- set_reminder: one action, set due_date
+- record_payment: one action, set amount
+- Resolve relative dates: "tomorrow"/"kal" = next day, "7 din baad" = +7 days from today
 - If intent is truly unclear, return empty actions array with confidence_score < 0.50
 - No markdown. No preamble. JSON only.`;
 
@@ -1249,17 +1249,16 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
       });
     } catch {}
 
-    // Product resolution for actions with product_name
-    let resolvedProduct = null;
-    const firstProductAction = parsed.actions.find(a => a.entities?.product_name);
-    if (firstProductAction?.entities?.product_name) {
+    // Product resolution: resolve each product name from the DB
+    // Build a map of product_name → { resolved, alternatives }
+    async function resolveProduct(productName) {
+      if (!productName) return { resolved: null, alternatives: [] };
       const { data: products } = await supabase
-        .from('products').select('id, name, selling_price')
-        .eq('organisation_id', organisationId)
-        .ilike('name', `%${firstProductAction.entities.product_name}%`).limit(5);
-      if (products?.length >= 1) {
-        resolvedProduct = products[0]; // Best match
-      }
+        .from('products').select('id, name, selling_price, sku')
+        .eq('organisation_id', organisationId).eq('is_active', true)
+        .ilike('name', `%${productName}%`).limit(5);
+      if (!products || products.length === 0) return { resolved: null, alternatives: [] };
+      return { resolved: products[0], alternatives: products.length > 1 ? products : [] };
     }
 
     // Routing: if we have ANY valid actions → always preview. Only clarify when zero actions.
@@ -1282,68 +1281,114 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
 
     for (const action of parsed.actions) {
       const ent = action.entities || {};
-      // Compute amount from product price if not given
-      let amount = ent.amount;
-      if (!amount && resolvedProduct && ent.quantity) {
-        amount = resolvedProduct.selling_price * ent.quantity;
-      }
 
-      const actionParams = {
-        customer_id: customerId,
-        customer_name: customer.name,
-        product_name: resolvedProduct?.name || ent.product_name || null,
-        product_id: resolvedProduct?.id || null,
-        quantity: ent.quantity || null,
-        amount: amount || null,
-        unit_price: resolvedProduct?.selling_price || null,
-        due_date: ent.due_date || null,
-        delivery_date: ent.delivery_date || null,
-      };
-
-      const { data: savedAction, error: actionErr } = await supabase
-        .from('ai_actions')
-        .insert({
-          organisation_id: organisationId,
-          action_name: `${action.action_type.replace(/_/g, ' ')} for ${customer.name}`,
-          action_type: action.action_type,
-          prompt_template: query,
-          parameters: actionParams,
-          confidence_score: parsed.confidence_score,
-          status: 'pending',
-        })
-        .select('id')
-        .single();
-
-      if (actionErr) {
-        console.error('Save ai_action failed:', actionErr);
-        continue;
-      }
-
-      if (!draftId) draftId = savedAction.id; // First action ID as draft_id
-
-      // Build details string
-      let details = '';
       if (action.action_type === 'create_invoice') {
-        if (ent.quantity && (resolvedProduct?.name || ent.product_name)) {
-          details = `${ent.quantity} × ${resolvedProduct?.name || ent.product_name}`;
-        }
-        if (amount) details += (details ? '\n' : '') + `Amount: ₹${amount.toLocaleString('en-IN')}`;
-        if (ent.due_date) details += `   Due: ${ent.due_date}`;
-      } else if (action.action_type === 'schedule_delivery') {
-        details = `Schedule: ${ent.delivery_date || 'TBD'}`;
-      } else if (action.action_type === 'set_reminder') {
-        details = `Send on: ${ent.due_date || 'TBD'}`;
-      } else if (action.action_type === 'record_payment') {
-        details = amount ? `₹${amount.toLocaleString('en-IN')}` : 'Amount TBD';
-      }
+        // Handle items[] array for invoice
+        const items = Array.isArray(ent.items) ? ent.items : (ent.product_name ? [{ product_name: ent.product_name, quantity: ent.quantity }] : []);
+        const resolvedItems = [];
+        let totalAmount = 0;
 
-      responseActions.push({
-        action_id: savedAction.id,
-        action_type: action.action_type,
-        details: details || `${action.action_type.replace(/_/g, ' ')} for ${customer.name}`,
-        parameters: actionParams,
-        editable: true,
-      });
+        for (const item of items) {
+          const { resolved, alternatives } = await resolveProduct(item.product_name);
+          const unitPrice = resolved?.selling_price || null;
+          const qty = item.quantity || 1;
+          const lineTotal = unitPrice ? unitPrice * qty : null;
+          if (lineTotal) totalAmount += lineTotal;
+
+          resolvedItems.push({
+            product_name: resolved?.name || item.product_name,
+            product_id: resolved?.id || null,
+            quantity: qty,
+            unit_price: unitPrice,
+            line_total: lineTotal,
+            alternatives: alternatives.map(a => ({ id: a.id, name: a.name, selling_price: a.selling_price })),
+          });
+        }
+
+        const actionParams = {
+          customer_id: customerId,
+          customer_name: customer.name,
+          items: resolvedItems,
+          amount: ent.amount || totalAmount || null,
+          due_date: ent.due_date || null,
+          delivery_date: ent.delivery_date || null,
+        };
+
+        const { data: savedAction, error: actionErr } = await supabase
+          .from('ai_actions').insert({
+            organisation_id: organisationId,
+            action_name: `create invoice for ${customer.name}`,
+            action_type: 'create_invoice',
+            prompt_template: query,
+            parameters: actionParams,
+            confidence_score: parsed.confidence_score,
+            status: 'pending',
+          }).select('id').single();
+
+        if (actionErr) { console.error('Save ai_action failed:', actionErr); continue; }
+        if (!draftId) draftId = savedAction.id;
+
+        // Build details for each item
+        const itemLines = resolvedItems.map(it =>
+          `${it.quantity} × ${it.product_name}${it.unit_price ? ` @ ₹${it.unit_price.toLocaleString('en-IN')}` : ''}`
+        );
+        const totalStr = (ent.amount || totalAmount) ? `₹${(ent.amount || totalAmount).toLocaleString('en-IN')}` : null;
+
+        responseActions.push({
+          action_id: savedAction.id,
+          action_type: 'create_invoice',
+          details: itemLines.join('\n') + (totalStr ? `\nTotal: ${totalStr}` : '') + (ent.due_date ? `\nDue: ${ent.due_date}` : ''),
+          parameters: actionParams,
+          items: resolvedItems,
+          editable: true,
+        });
+
+      } else {
+        // Non-invoice actions (delivery, reminder, payment)
+        const actionParams = {
+          customer_id: customerId,
+          customer_name: customer.name,
+          amount: ent.amount || null,
+          due_date: ent.due_date || null,
+          delivery_date: ent.delivery_date || null,
+          description: action.action_type === 'schedule_delivery'
+            ? `Delivery for ${customer.name}`
+            : action.action_type === 'set_reminder'
+            ? `Payment reminder for ${customer.name}`
+            : `Payment from ${customer.name}`,
+        };
+
+        const { data: savedAction, error: actionErr } = await supabase
+          .from('ai_actions').insert({
+            organisation_id: organisationId,
+            action_name: `${action.action_type.replace(/_/g, ' ')} for ${customer.name}`,
+            action_type: action.action_type,
+            prompt_template: query,
+            parameters: actionParams,
+            confidence_score: parsed.confidence_score,
+            status: 'pending',
+          }).select('id').single();
+
+        if (actionErr) { console.error('Save ai_action failed:', actionErr); continue; }
+        if (!draftId) draftId = savedAction.id;
+
+        let details = '';
+        if (action.action_type === 'schedule_delivery') {
+          details = `Schedule: ${ent.delivery_date || 'TBD'}`;
+        } else if (action.action_type === 'set_reminder') {
+          details = `Send on: ${ent.due_date || 'TBD'}`;
+        } else if (action.action_type === 'record_payment') {
+          details = ent.amount ? `₹${ent.amount.toLocaleString('en-IN')}` : 'Amount TBD';
+        }
+
+        responseActions.push({
+          action_id: savedAction.id,
+          action_type: action.action_type,
+          details: details || `${action.action_type.replace(/_/g, ' ')} for ${customer.name}`,
+          parameters: actionParams,
+          editable: true,
+        });
+      }
     }
 
     if (responseActions.length === 0) {

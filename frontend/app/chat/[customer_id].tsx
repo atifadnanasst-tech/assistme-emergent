@@ -2,11 +2,12 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, FlatList, TextInput,
   ActivityIndicator, Alert, Linking, KeyboardAvoidingView, Platform,
-  Keyboard, Modal, Pressable,
+  Keyboard, Modal, Pressable, ScrollView,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import { useAuth } from '../../contexts/AuthContext';
 import { supabase } from '../../lib/supabase';
 import { authService } from '../../lib/auth';
@@ -56,6 +57,12 @@ export default function CustomerChatScreen() {
   const [bannerText, setBannerText] = useState('');
   const [bannerDraftId, setBannerDraftId] = useState<string | null>(null);
   const [bannerActionIds, setBannerActionIds] = useState<string[]>([]);
+  // Date edit sheet
+  const [dateEditVisible, setDateEditVisible] = useState(false);
+  const [dateEditAction, setDateEditAction] = useState<any>(null);
+  const [dateEditValue, setDateEditValue] = useState(new Date());
+  const [dateEditDesc, setDateEditDesc] = useState('');
+  const [showDatePicker, setShowDatePicker] = useState(Platform.OS === 'ios');
 
   // ── Auth helper ────────────────────────────────────────────
   const getToken = async () => {
@@ -692,6 +699,7 @@ setTimeout(() => {
           <View style={styles.sheetContainer}>
             <View style={styles.sheetHandle} />
             <Text style={styles.sheetHeading}>I've prepared this:</Text>
+            <ScrollView style={{ maxHeight: 400 }} showsVerticalScrollIndicator={false}>
 
             {previewActions.map((action: any) => (
               <View key={action.action_id} style={styles.actionBlock}>
@@ -716,20 +724,73 @@ setTimeout(() => {
                      action.action_type === 'record_payment' ? 'Record Payment' :
                      action.action_type}
                   </Text>
-                  <Text style={styles.actionDetails}>{action.details}</Text>
+
+                  {/* Rich invoice items rendering */}
+                  {action.action_type === 'create_invoice' && action.items?.length > 0 ? (
+                    <View>
+                      {action.items.map((item: any, idx: number) => (
+                        <View key={idx} style={styles.invoiceItemRow}>
+                          <Text style={styles.invoiceItemName}>
+                            {item.quantity} × {item.product_name}
+                          </Text>
+                          {item.unit_price != null && (
+                            <Text style={styles.invoiceItemPrice}>
+                              @ ₹{item.unit_price.toLocaleString('en-IN')} = ₹{(item.line_total || item.unit_price * item.quantity).toLocaleString('en-IN')}
+                            </Text>
+                          )}
+                          {item.alternatives?.length > 1 && (
+                            <View style={styles.altRow}>
+                              <Text style={styles.altLabel}>Also found:</Text>
+                              {item.alternatives.filter((a: any) => a.id !== item.product_id).slice(0, 3).map((alt: any) => (
+                                <TouchableOpacity key={alt.id} style={styles.altChip} onPress={() => {
+                                  // Swap product in this item
+                                  const updated = previewActions.map((pa: any) => {
+                                    if (pa.action_id !== action.action_id) return pa;
+                                    const newItems = [...pa.items];
+                                    newItems[idx] = { ...newItems[idx], product_name: alt.name, product_id: alt.id, unit_price: alt.selling_price, line_total: alt.selling_price * newItems[idx].quantity };
+                                    const newTotal = newItems.reduce((s: number, i: any) => s + (i.line_total || 0), 0);
+                                    return { ...pa, items: newItems, parameters: { ...pa.parameters, items: newItems, amount: newTotal } };
+                                  });
+                                  setPreviewActions(updated);
+                                }}>
+                                  <Text style={styles.altChipText}>{alt.name} (₹{alt.selling_price})</Text>
+                                </TouchableOpacity>
+                              ))}
+                            </View>
+                          )}
+                        </View>
+                      ))}
+                      {action.parameters?.amount > 0 && (
+                        <Text style={styles.invoiceTotalText}>Total: ₹{action.parameters.amount.toLocaleString('en-IN')}</Text>
+                      )}
+                      {action.parameters?.due_date && (
+                        <Text style={styles.invoiceDueText}>Due: {action.parameters.due_date}</Text>
+                      )}
+                    </View>
+                  ) : (
+                    <Text style={styles.actionDetails}>{action.details}</Text>
+                  )}
                 </View>
                 <TouchableOpacity style={styles.actionEditBtn} onPress={() => {
                   if (action.action_type === 'create_invoice') {
                     setPreviewVisible(false);
-                    const p = action.params || {};
+                    const p = action.parameters || {};
                     const params: Record<string, string> = {};
                     if (p.items) params.items = JSON.stringify(p.items);
                     if (p.due_date) params.due_date = p.due_date;
-                    if (p.delivery_date) params.delivery_date = p.delivery_date;
-                    if (p.notes) params.notes = p.notes;
+                    if (p.amount) params.amount = String(p.amount);
                     if (previewDraftId) params.draft_id = previewDraftId;
                     if (action.action_id) params.action_id = action.action_id;
                     router.push({ pathname: `/customer/${customer_id}/invoice`, params });
+                  } else if (action.action_type === 'schedule_delivery' || action.action_type === 'set_reminder') {
+                    const dateStr = action.action_type === 'schedule_delivery'
+                      ? action.parameters?.delivery_date
+                      : action.parameters?.due_date;
+                    setDateEditAction(action);
+                    setDateEditValue(dateStr ? new Date(dateStr + 'T00:00:00') : new Date());
+                    setDateEditDesc(action.parameters?.description || action.details || '');
+                    setShowDatePicker(Platform.OS === 'ios');
+                    setDateEditVisible(true);
                   }
                 }}>
                   <Text style={styles.actionEditText}>Edit</Text>
@@ -743,6 +804,7 @@ setTimeout(() => {
                 <Text style={styles.insightBoxText}>{previewInsight}</Text>
               </View>
             )}
+            </ScrollView>
 
             <View style={styles.sheetButtons}>
               <TouchableOpacity
@@ -762,6 +824,81 @@ setTimeout(() => {
             </View>
             <TouchableOpacity onPress={handleCancelDraft} style={styles.cancelLink}>
               <Text style={styles.cancelLinkText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Date Edit Sheet for Delivery / Reminder */}
+      <Modal visible={dateEditVisible} transparent animationType="slide" onRequestClose={() => setDateEditVisible(false)}>
+        <View style={styles.sheetOverlay}>
+          <Pressable style={styles.sheetDismiss} onPress={() => setDateEditVisible(false)} />
+          <View style={[styles.sheetContainer, { paddingBottom: 40 }]}>
+            <View style={styles.sheetHandle} />
+            <Text style={styles.sheetHeading}>
+              {dateEditAction?.action_type === 'schedule_delivery' ? 'Edit Delivery' : 'Edit Payment Reminder'}
+            </Text>
+
+            {/* Date picker */}
+            <View style={styles.dateField}>
+              <Ionicons name="calendar-outline" size={22} color="#075E54" />
+              <Text style={styles.dateFieldLabel}>Date</Text>
+              <TouchableOpacity
+                style={styles.dateFieldValue}
+                onPress={() => setShowDatePicker(true)}
+              >
+                <Text style={styles.dateFieldValueText}>
+                  {dateEditValue.toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}
+                </Text>
+                <Ionicons name="chevron-down" size={18} color="#666" />
+              </TouchableOpacity>
+            </View>
+            {showDatePicker && (
+              <DateTimePicker
+                value={dateEditValue}
+                mode="date"
+                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                minimumDate={new Date()}
+                onChange={(event: any, date?: Date) => {
+                  if (Platform.OS === 'android') setShowDatePicker(false);
+                  if (date) setDateEditValue(date);
+                }}
+                themeVariant="light"
+              />
+            )}
+
+            {/* Description */}
+            <View style={styles.dateDescField}>
+              <Ionicons name="document-text-outline" size={22} color="#075E54" />
+              <TextInput
+                style={styles.dateDescInput}
+                value={dateEditDesc}
+                onChangeText={setDateEditDesc}
+                placeholder="Description"
+                placeholderTextColor="#999"
+                multiline
+              />
+            </View>
+
+            {/* Save button */}
+            <TouchableOpacity
+              style={styles.confirmAllBtn}
+              onPress={() => {
+                const dateStr = dateEditValue.toISOString().split('T')[0];
+                const updated = previewActions.map((pa: any) => {
+                  if (pa.action_id !== dateEditAction?.action_id) return pa;
+                  const key = pa.action_type === 'schedule_delivery' ? 'delivery_date' : 'due_date';
+                  return {
+                    ...pa,
+                    details: pa.action_type === 'schedule_delivery' ? `Schedule: ${dateStr}` : `Send on: ${dateStr}`,
+                    parameters: { ...pa.parameters, [key]: dateStr, description: dateEditDesc },
+                  };
+                });
+                setPreviewActions(updated);
+                setDateEditVisible(false);
+              }}
+            >
+              <Text style={styles.confirmAllText}>Save</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -950,6 +1087,16 @@ const styles = StyleSheet.create({
   actionContent: { flex: 1 },
   actionName: { fontSize: 16, fontWeight: '700', color: '#1A1A1A', marginBottom: 4 },
   actionDetails: { fontSize: 13, color: '#666', lineHeight: 18 },
+  // Invoice item rows in action preview
+  invoiceItemRow: { marginBottom: 6 },
+  invoiceItemName: { fontSize: 14, color: '#1A1A1A', fontWeight: '500' },
+  invoiceItemPrice: { fontSize: 13, color: '#075E54', fontWeight: '600', marginTop: 1 },
+  invoiceTotalText: { fontSize: 15, fontWeight: '700', color: '#075E54', marginTop: 8, borderTopWidth: 1, borderTopColor: '#E0E0E0', paddingTop: 6 },
+  invoiceDueText: { fontSize: 12, color: '#999', marginTop: 2 },
+  altRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 4, marginTop: 4 },
+  altLabel: { fontSize: 11, color: '#999' },
+  altChip: { backgroundColor: '#E8F5E9', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 },
+  altChipText: { fontSize: 11, color: '#2E7D32', fontWeight: '500' },
   actionEditBtn: { paddingVertical: 4, paddingHorizontal: 8 },
   actionEditText: { fontSize: 14, fontWeight: '600', color: '#075E54' },
   insightBox: {
@@ -971,6 +1118,22 @@ const styles = StyleSheet.create({
   editMasterText: { color: '#075E54', fontSize: 17, fontWeight: '700' },
   cancelLink: { alignItems: 'center', paddingVertical: 8 },
   cancelLinkText: { color: '#999', fontSize: 15 },
+
+  // Date edit sheet
+  dateField: {
+    flexDirection: 'row', alignItems: 'center', backgroundColor: '#F5F5F5',
+    borderRadius: 12, padding: 14, gap: 12, marginBottom: 12,
+  },
+  dateFieldLabel: { fontSize: 14, color: '#666', fontWeight: '500' },
+  dateFieldValue: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 6,
+  },
+  dateFieldValueText: { fontSize: 15, color: '#1A1A1A', fontWeight: '600' },
+  dateDescField: {
+    flexDirection: 'row', alignItems: 'flex-start', backgroundColor: '#F5F5F5',
+    borderRadius: 12, padding: 14, gap: 12, marginBottom: 20,
+  },
+  dateDescInput: { flex: 1, fontSize: 15, color: '#333', minHeight: 40, paddingVertical: 0 },
 
   // Auto-confirm banner
   bannerContainer: {
