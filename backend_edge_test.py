@@ -16,7 +16,7 @@ def get_backend_url():
                     return line.split('=', 1)[1].strip()
     except FileNotFoundError:
         pass
-    return "https://trader-flow-guide.preview.emergentagent.com"
+    return "https://assistme-preview.preview.emergentagent.com"
 
 BACKEND_URL = get_backend_url()
 API_BASE = f"{BACKEND_URL}/api"

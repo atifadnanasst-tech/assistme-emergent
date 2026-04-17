@@ -208,7 +208,7 @@ router.replace('/home'); // ✅ Based on proper awaits only
 
 2. **Get QR Code**:
    - Backend logs will show QR code after expo starts
-   - Or use: `https://trader-flow-guide.preview.emergentagent.com`
+   - Or use: `https://assistme-preview.preview.emergentagent.com`
 
 3. **Scan QR Code**:
    - iOS: Open Camera app → point at QR

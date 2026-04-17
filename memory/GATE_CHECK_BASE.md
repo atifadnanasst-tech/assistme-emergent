@@ -86,7 +86,7 @@ curl http://localhost:8001/api/health
 # Response: {"status":"ok","message":"AssistMe Backend Running"}
 
 # Frontend
-https://trader-flow-guide.preview.emergentagent.com
+https://assistme-preview.preview.emergentagent.com
 # Shows: "AssistMe - WhatsApp-style Business OS - Awaiting Flow 1: Auth Setup"
 
 # Services status

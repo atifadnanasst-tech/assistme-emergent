@@ -9,7 +9,7 @@ import json
 import sys
 
 # Configuration
-BACKEND_URL = "https://trader-flow-guide.preview.emergentagent.com"
+BACKEND_URL = "https://assistme-preview.preview.emergentagent.com"
 SUPABASE_URL = "https://qsyuyivpptuzmzbpfeaq.supabase.co"
 SUPABASE_ANON_KEY = "sb_publishable_a4IIUGPHXvOiQb4KG09F7A_55sghKRx"
 TEST_PHONE = "919007188402"

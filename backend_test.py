@@ -10,7 +10,7 @@ import sys
 from datetime import datetime
 
 # Configuration from frontend/.env
-BACKEND_URL = "https://trader-flow-guide.preview.emergentagent.com"
+BACKEND_URL = "https://assistme-preview.preview.emergentagent.com"
 API_BASE = f"{BACKEND_URL}/api"
 
 # Test credentials from test_credentials.md

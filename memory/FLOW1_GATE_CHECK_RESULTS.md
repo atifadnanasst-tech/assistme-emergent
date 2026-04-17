@@ -187,7 +187,7 @@ All requirements met. Proceed to Flow 2 with confidence.
 ## TEST CREDENTIALS USED
 - **Demo Phone**: Any 10-digit number (e.g., 9876543210)
 - **Demo OTP**: 123456 (if configured in Supabase)
-- **Backend**: https://trader-flow-guide.preview.emergentagent.com/api
+- **Backend**: https://assistme-preview.preview.emergentagent.com/api
 - **Supabase**: qsyuyivpptuzmzbpfeaq.supabase.co
 
 ---
