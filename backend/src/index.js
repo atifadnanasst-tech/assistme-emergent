@@ -1395,15 +1395,57 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
       return c.json({ routing: 'clarify', message: 'Could not create actions. Try again.', confidence_score: 0, actions: [] });
     }
 
-    // Get entity_memory insight for preview
+    // Post-processing: if create_invoice has delivery_date or due_date, ensure separate delivery/reminder actions exist
+    const hasDelivery = responseActions.some(a => a.action_type === 'schedule_delivery');
+    const hasReminder = responseActions.some(a => a.action_type === 'set_reminder');
+    const invoiceAction = responseActions.find(a => a.action_type === 'create_invoice');
+
+    if (invoiceAction && !hasDelivery && invoiceAction.parameters?.delivery_date) {
+      const delParams = { customer_id: customerId, customer_name: customer.name, delivery_date: invoiceAction.parameters.delivery_date, description: `Delivery for ${customer.name}` };
+      const { data: delAction } = await supabase.from('ai_actions').insert({
+        organisation_id: organisationId, action_name: `schedule delivery for ${customer.name}`,
+        action_type: 'schedule_delivery', prompt_template: query, parameters: delParams,
+        confidence_score: parsed.confidence_score, status: 'pending',
+      }).select('id').single();
+      if (delAction) {
+        responseActions.push({ action_id: delAction.id, action_type: 'schedule_delivery', details: `Schedule: ${invoiceAction.parameters.delivery_date}`, parameters: delParams, editable: true });
+      }
+    }
+
+    if (invoiceAction && !hasReminder && invoiceAction.parameters?.due_date) {
+      const remParams = { customer_id: customerId, customer_name: customer.name, due_date: invoiceAction.parameters.due_date, description: `Payment reminder for ${customer.name}` };
+      const { data: remAction } = await supabase.from('ai_actions').insert({
+        organisation_id: organisationId, action_name: `set reminder for ${customer.name}`,
+        action_type: 'set_reminder', prompt_template: query, parameters: remParams,
+        confidence_score: parsed.confidence_score, status: 'pending',
+      }).select('id').single();
+      if (remAction) {
+        responseActions.push({ action_id: remAction.id, action_type: 'set_reminder', details: `Send on: ${invoiceAction.parameters.due_date}`, parameters: remParams, editable: true });
+      }
+    }
+
+    // Get entity_memory insight for preview — format in natural language
     let aiInsight = null;
     try {
       const { data: insights } = await supabase
         .from('entity_memory').select('memory_key, memory_value')
         .eq('organisation_id', organisationId).eq('entity_type', 'customer')
-        .eq('entity_id', customerId).is('deleted_at', null).limit(3);
+        .eq('entity_id', customerId).is('deleted_at', null).limit(5);
       if (insights?.length > 0) {
-        aiInsight = insights.map(i => `${i.memory_key}: ${i.memory_value}`).join('. ');
+        const parts = [];
+        for (const i of insights) {
+          const key = i.memory_key;
+          const val = i.memory_value;
+          if (key === 'task_completed_on_time' && val === 'true') parts.push(`${customer.name} usually completes tasks on time`);
+          else if (key === 'task_completed_on_time' && val === 'false') parts.push(`${customer.name} sometimes delays tasks`);
+          else if (key === 'last_delivery_alert_date') parts.push(`Last delivery alert was on ${new Date(val).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}`);
+          else if (key === 'last_reminder_alert_date') parts.push(`Last payment reminder sent ${new Date(val).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}`);
+          else if (key === 'payment_behavior') parts.push(`Payment behavior: ${val}`);
+          else if (key === 'avg_payment_days') parts.push(`${customer.name} usually pays within ${val} days`);
+          else if (key.includes('preferred')) parts.push(`Preferred: ${val}`);
+          else parts.push(`${key.replace(/_/g, ' ')}: ${val}`);
+        }
+        if (parts.length > 0) aiInsight = parts.join('. ') + '.';
       }
     } catch {}
 

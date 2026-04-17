@@ -15,7 +15,8 @@ interface LineItem { product_id: string; product_name: string; hsn_code: string 
 
 export default function NewInvoiceScreen() {
   const router = useRouter();
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const params = useLocalSearchParams<{ id: string; items?: string; amount?: string; due_date?: string; draft_id?: string; action_id?: string }>();
+  const id = params.id;
   const { setIsAuthenticated } = useAuth();
 
   const [loading, setLoading] = useState(true);
@@ -69,6 +70,31 @@ export default function NewInvoiceScreen() {
       setShippingAddress(data.shipping_address);
       setProducts(data.products || []);
       if (data.prefilled_items?.length > 0) setItems(data.prefilled_items);
+
+      // Populate from Spark params if passed via URL
+      if (params.items) {
+        try {
+          const sparkItems = JSON.parse(params.items as string);
+          if (Array.isArray(sparkItems) && sparkItems.length > 0 && data.products) {
+            const lineItems: LineItem[] = sparkItems.map((si: any) => {
+              // Match to a product from the loaded products list
+              const match = (data.products || []).find((p: Product) =>
+                p.id === si.product_id || p.name.toLowerCase().includes((si.product_name || '').toLowerCase())
+              );
+              return {
+                product_id: match?.id || si.product_id || '',
+                product_name: match?.name || si.product_name || '',
+                hsn_code: match?.hsn_code || null,
+                quantity: si.quantity || 1,
+                unit_price: match?.selling_price || si.unit_price || 0,
+                tax_rate: match?.tax_rate || 0,
+                line_total: (si.quantity || 1) * (match?.selling_price || si.unit_price || 0),
+              };
+            });
+            setItems(lineItems);
+          }
+        } catch (e) { console.warn('Failed to parse spark items:', e); }
+      }
     } catch {} finally { setLoading(false); }
   };
 
