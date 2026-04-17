@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView, FlatList, TextInput,
-  ActivityIndicator, Alert, Linking, KeyboardAvoidingView, Platform,
+  ActivityIndicator, Alert, Linking, KeyboardAvoidingView, Platform, Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -215,10 +215,14 @@ export default function ProductsCatalogScreen() {
                 <View style={s.gridContainer}>
                   {prods.map(p => (
                     <TouchableOpacity key={p.id} style={s.gridCard} onPress={() => toggleProduct(p.id)}>
-                      <View style={s.gridImagePlaceholder}>
-                        <Text style={s.gridImageLetter}>{p.name[0]}</Text>
-                        {p.is_top_seller && <View style={s.topBadge}><Text style={s.topBadgeText}>TOP</Text></View>}
-                      </View>
+                      {p.image_url ? (
+                        <Image source={{ uri: p.image_url }} style={s.gridImage} resizeMode="cover" />
+                      ) : (
+                        <View style={s.gridImagePlaceholder}>
+                          <Text style={s.gridImageLetter}>{p.name[0]}</Text>
+                        </View>
+                      )}
+                      {p.is_top_seller && <View style={s.topBadge}><Text style={s.topBadgeText}>TOP</Text></View>}
                       <View style={s.gridCardBody}>
                         <View style={s.gridNameRow}>
                           <Ionicons name={selected.has(p.id) ? 'checkbox' : 'square-outline'} size={18} color={selected.has(p.id) ? '#075E54' : '#CCC'} />
@@ -242,7 +246,11 @@ export default function ProductsCatalogScreen() {
                 prods.map(p => (
                   <TouchableOpacity key={p.id} style={s.listRow} onPress={() => toggleProduct(p.id)}>
                     <Ionicons name={selected.has(p.id) ? 'checkbox' : 'square-outline'} size={20} color={selected.has(p.id) ? '#075E54' : '#CCC'} />
-                    <View style={s.listImagePlaceholder}><Text style={s.listImageLetter}>{p.name[0]}</Text></View>
+                    {p.image_url ? (
+                      <Image source={{ uri: p.image_url }} style={s.listImage} resizeMode="cover" />
+                    ) : (
+                      <View style={s.listImagePlaceholder}><Text style={s.listImageLetter}>{p.name[0]}</Text></View>
+                    )}
                     <View style={{ flex: 1 }}>
                       <Text style={s.listProductName}>{p.name}</Text>
                       {p.is_top_seller && <Text style={s.listTopLabel}>TOP SELLER</Text>}
@@ -351,7 +359,8 @@ const s = StyleSheet.create({
   addNewText: { color: '#075E54', fontSize: 13, fontWeight: '600' },
   gridContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   gridCard: { width: '48%', backgroundColor: '#FFF', borderRadius: 12, overflow: 'hidden', elevation: 1 },
-  gridImagePlaceholder: { height: 100, backgroundColor: '#F0F0F0', justifyContent: 'center', alignItems: 'center' },
+  gridImage: { width: '100%', height: 120, backgroundColor: '#F0F0F0' },
+  gridImagePlaceholder: { height: 120, backgroundColor: '#F0F0F0', justifyContent: 'center', alignItems: 'center' },
   gridImageLetter: { fontSize: 32, fontWeight: '700', color: '#CCC' },
   topBadge: { position: 'absolute', top: 6, right: 6, backgroundColor: '#FF9800', borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2 },
   topBadgeText: { fontSize: 9, fontWeight: '700', color: '#FFF' },
@@ -362,6 +371,7 @@ const s = StyleSheet.create({
   gridPrice: { fontSize: 15, fontWeight: '700', color: '#075E54' },
   priceEditInput: { borderWidth: 1, borderColor: '#075E54', borderRadius: 6, padding: 4, fontSize: 14, width: 80, color: '#333' },
   listRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF', borderRadius: 10, padding: 12, marginBottom: 6, gap: 10 },
+  listImage: { width: 40, height: 40, borderRadius: 8, backgroundColor: '#F0F0F0' },
   listImagePlaceholder: { width: 40, height: 40, borderRadius: 8, backgroundColor: '#F0F0F0', justifyContent: 'center', alignItems: 'center' },
   listImageLetter: { fontSize: 18, fontWeight: '700', color: '#CCC' },
   listProductName: { fontSize: 14, fontWeight: '600', color: '#1A1A1A' },
