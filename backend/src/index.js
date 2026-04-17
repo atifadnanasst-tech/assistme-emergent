@@ -2369,10 +2369,28 @@ app.post('/api/invoices', async (c) => {
     const customer = await validateCustomer(customer_id, organisationId);
     if (!customer) return c.json({ error: 'customer_not_found' }, 404);
 
-    // Invoice number = COUNT + 1
-    const { count: invCount } = await supabase.from('invoices').select('*', { count: 'exact', head: true }).eq('organisation_id', organisationId);
-    const seqNum = (invCount || 0) + 1;
+    // Generate unique invoice number by finding the max existing number
+    const { data: existingInvoices } = await supabase
+      .from('invoices')
+      .select('invoice_number')
+      .eq('organisation_id', organisationId)
+      .order('created_at', { ascending: false })
+      .limit(100);
+    
+    let maxNum = 0;
+    if (existingInvoices && existingInvoices.length > 0) {
+      existingInvoices.forEach(inv => {
+        const match = inv.invoice_number.match(/INV-(\d+)/);
+        if (match) {
+          const num = parseInt(match[1]);
+          if (num > maxNum) maxNum = num;
+        }
+      });
+    }
+    
+    const seqNum = maxNum + 1;
     const invoiceNumber = 'INV-' + seqNum.toString().padStart(3, '0');
+    console.log(`📝 [INVOICE] Generated number: ${invoiceNumber} (max was ${maxNum})`);
 
     // Backend recomputes all financials
     let subtotal = 0;
