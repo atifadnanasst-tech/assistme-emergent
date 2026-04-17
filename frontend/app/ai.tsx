@@ -12,6 +12,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Keyboard,
+  ScrollView,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -45,6 +46,30 @@ export default function AIScreen() {
   const [executingActions, setExecutingActions] = useState<Set<string>>(new Set());
   const [sentReminders, setSentReminders] = useState<Set<string>>(new Set());
   const [keyboardVisible, setKeyboardVisible] = useState(false);
+
+  const QUICK_PILLS = [
+    { id: 'outstanding', icon: '💰', label: 'Outstanding', query: 'Show my outstanding summary — total pending, top defaulters, and overdue vs not due breakdown' },
+    { id: 'collections', icon: '📥', label: 'Collections Today', query: 'How much did I collect today? Compare with yesterday.' },
+    { id: 'deliveries', icon: '📦', label: 'Deliveries Due', query: 'What deliveries are due today? Any late deliveries?' },
+    { id: 'quotes', icon: '📄', label: 'Expiring Quotes', query: 'Which quotes are about to expire? Who needs follow-up?' },
+    { id: 'bank', icon: '🏦', label: 'Bank Balance', query: 'Show my bank balance snapshot — all accounts and total cash position' },
+    { id: 'sales', icon: '📊', label: 'Sales Today', query: 'What are my sales today? Revenue and order count.' },
+    { id: 'repeat', icon: '🔁', label: 'Follow Up', query: 'Which repeat customers have not ordered recently? Any high-value inactive customers to follow up with?' },
+    { id: 'risk', icon: '⚠️', label: 'Risk Alerts', query: 'Any payment risk alerts? Customers delaying payments or dropping order frequency?' },
+    { id: 'stock', icon: '📦', label: 'Low Stock', query: 'Which products are below reorder level?' },
+    { id: 'insight', icon: '🧠', label: 'AI Insight', query: 'Give me your top business insight based on my data — any patterns, suggestions, or opportunities?' },
+    { id: 'tasks', icon: '📅', label: "Today's Tasks", query: 'What are my tasks for today? Deliveries, follow-ups, reminders.' },
+    { id: 'trends', icon: '📈', label: 'Weekly Trend', query: 'Show me weekly sales trend and collection trend for the past month.' },
+  ];
+
+  const sendQuickQuery = (query: string) => {
+    if (sendingState !== 'idle' || !conversationId) return;
+    setInputText(query);
+    // Use a short delay so inputText is set before handleSend reads it
+    setTimeout(() => {
+      handleSendDirect(query);
+    }, 50);
+  };
 
   useEffect(() => {
     const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
@@ -124,9 +149,13 @@ setTimeout(() => {
   const handleSend = async () => {
     const text = inputText.trim();
     if (!text || sendingState !== 'idle' || !conversationId) return;
-
     Keyboard.dismiss();
     setInputText('');
+    await handleSendDirect(text);
+  };
+
+  const handleSendDirect = async (text: string) => {
+    if (!text || sendingState !== 'idle' || !conversationId) return;
 
     // Optimistic render
     const tempId = `temp-${Date.now()}`;
@@ -464,6 +493,24 @@ keyboardVerticalOffset={80}
         </View>
       </SafeAreaView>
 
+      {/* Quick pills - horizontal scrollable */}
+      <View style={styles.pillsContainer}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pillsScroll}>
+          {QUICK_PILLS.map(pill => (
+            <TouchableOpacity
+              key={pill.id}
+              style={styles.pill}
+              onPress={() => sendQuickQuery(pill.query)}
+              disabled={sendingState !== 'idle'}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.pillIcon}>{pill.icon}</Text>
+              <Text style={styles.pillLabel}>{pill.label}</Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+      </View>
+
       {/* Chat area */}
       <View style={styles.chatArea}>
         <FlatList
@@ -524,6 +571,35 @@ onLayout={() => flatListRef.current?.scrollToEnd({ animated: false })}
 const styles = StyleSheet.create({
   flex1: { flex: 1, backgroundColor: '#ECE5DD' },
   safeTop: { backgroundColor: '#075E54' },
+  // Quick pills
+  pillsContainer: {
+    backgroundColor: '#F5F5F0',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+  },
+  pillsScroll: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 8,
+  },
+  pill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    gap: 6,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    elevation: 1,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+  },
+  pillIcon: { fontSize: 14 },
+  pillLabel: { fontSize: 13, fontWeight: '500', color: '#1A1A1A' },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
