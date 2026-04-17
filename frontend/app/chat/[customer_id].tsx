@@ -461,7 +461,15 @@ setTimeout(() => {
           {cd.items_summary && <Text style={styles.invoiceItems}>{cd.items_summary}</Text>}
           {cd.due_date && <Text style={styles.invoiceItems}>Due {new Date(cd.due_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}</Text>}
           <Text style={[styles.invoiceAmount, isOverdue && { color: '#D32F2F' }]}>{formatCurrency(cd.total_amount || 0)}</Text>
-          {cd.status !== 'paid' && (
+          {cd.pdf_url && (
+            <TouchableOpacity onPress={() => Linking.openURL(cd.pdf_url).catch(() => Alert.alert('Error', 'Could not open PDF'))} style={{ marginTop: 8 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 8, paddingHorizontal: 12, backgroundColor: '#F0F0F0', borderRadius: 8 }}>
+                <Ionicons name="document" size={16} color="#075E54" />
+                <Text style={{ fontSize: 14, fontWeight: '600', color: '#075E54' }}>View PDF</Text>
+              </View>
+            </TouchableOpacity>
+          )}
+          {cd.status !== 'paid' && !cd.pdf_url && (
             isOverdue ? (
               sentReminders.has(invoiceId) ? (
                 <Text style={styles.invoiceActionDone}>Reminder sent ✓</Text>

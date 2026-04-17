@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView, TextInput,
-  ActivityIndicator, Alert, Linking, KeyboardAvoidingView, Platform,
+  ActivityIndicator, Alert, Linking, KeyboardAvoidingView, Platform, Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
@@ -10,8 +10,9 @@ import { useAuth } from '../../../contexts/AuthContext';
 import { supabase } from '../../../lib/supabase';
 import { authService } from '../../../lib/auth';
 
-interface Product { id: string; name: string; sku: string; selling_price: number; tax_rate: number; unit: string; hsn_code: string | null; }
+interface Product { id: string; name: string; sku: string; selling_price: number; tax_rate: number; unit: string; hsn_code: string | null; image_url: string | null; }
 interface LineItem { product_id: string; product_name: string; hsn_code: string | null; quantity: number; unit_price: number; tax_rate: number; line_total: number; }
+interface Customer { id: string; name: string; phone: string; }
 
 export default function NewInvoiceScreen() {
   const router = useRouter();
@@ -22,9 +23,14 @@ export default function NewInvoiceScreen() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState<string | null>(null);
   const [orgName, setOrgName] = useState('');
+  const [allCustomers, setAllCustomers] = useState<Customer[]>([]);
   const [customerName, setCustomerName] = useState('');
   const [customerId, setCustomerId] = useState(id || '');
   const [customerExpanded, setCustomerExpanded] = useState(false);
+  const [customerSearchVisible, setCustomerSearchVisible] = useState(false);
+  const [customerSearchQuery, setCustomerSearchQuery] = useState('');
+  const [packingModalVisible, setPackingModalVisible] = useState(false);
+  const [packingInput, setPackingInput] = useState('');
   const [customerDefaults, setCustomerDefaults] = useState<any>({});
   const [billingAddress, setBillingAddress] = useState<any>(null);
   const [shippingAddress, setShippingAddress] = useState<any>(null);
@@ -61,6 +67,7 @@ export default function NewInvoiceScreen() {
       setOrgName(data.organisation?.name || '');
       setCustomerName(data.customer?.name || '');
       setCustomerId(data.customer?.id || id || '');
+      setAllCustomers(data.all_customers || []);
       setTaxId(data.customer?.tax_id || '');
       setCustomerDefaults(data.customer?.custom_fields || {});
       setPaymentTerms(data.customer?.custom_fields?.payment_terms || '');
@@ -211,6 +218,29 @@ export default function NewInvoiceScreen() {
     } catch {} finally { setSubmitting(null); }
   };
 
+  const handleSelectCustomer = (customer: Customer) => {
+    setCustomerId(customer.id);
+    setCustomerName(customer.name);
+    setCustomerSearchVisible(false);
+    setCustomerSearchQuery('');
+  };
+
+  const handleEditPackingHandling = () => {
+    setPackingInput(packingHandling.toString());
+    setPackingModalVisible(true);
+  };
+
+  const handleSavePackingHandling = () => {
+    const val = parseFloat(packingInput) || 0;
+    setPackingHandling(val);
+    setPackingModalVisible(false);
+    setPackingInput('');
+  };
+
+  const filteredCustomers = allCustomers.filter(c => 
+    c.name.toLowerCase().includes(customerSearchQuery.toLowerCase())
+  );
+
   const fmt = (n: number) => '₹' + n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   if (loading) return (
@@ -233,16 +263,18 @@ export default function NewInvoiceScreen() {
       </SafeAreaView>
 
       <ScrollView style={s.scroll} contentContainerStyle={s.scrollContent}>
-        {/* Business Name */}
-        <Text style={s.sectionLabel}>MY BUSINESS NAME</Text>
-        <View style={s.fieldRow}><Text style={s.fieldValue}>{orgName}</Text><Ionicons name="pencil" size={18} color="#075E54" /></View>
+        {/* Business Name - NO MARGIN */}
+        <Text style={[s.sectionLabel, { marginTop: 0 }]}>MY BUSINESS NAME</Text>
+        <View style={s.fieldRow}><Text style={s.fieldValue}>{orgName}</Text><Ionicons name="pencil" size={18} color="#999" /></View>
 
         {/* Customer */}
         <Text style={s.sectionLabel}>CUSTOMER</Text>
         <View style={s.fieldRow}>
           <Text style={s.fieldValue}>{customerName}</Text>
-          <Ionicons name="pencil" size={18} color="#075E54" />
-          <TouchableOpacity onPress={() => setCustomerExpanded(!customerExpanded)}>
+          <TouchableOpacity onPress={() => setCustomerSearchVisible(true)} style={{ marginLeft: 'auto' }}>
+            <Ionicons name="pencil" size={18} color="#075E54" />
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => setCustomerExpanded(!customerExpanded)} style={{ marginLeft: 8 }}>
             <Ionicons name={customerExpanded ? 'chevron-up' : 'chevron-down'} size={22} color="#666" />
           </TouchableOpacity>
         </View>
@@ -323,10 +355,9 @@ export default function NewInvoiceScreen() {
             <Text style={s.totalLabel}>Packing & Handling</Text>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
               <Text style={s.totalValue}>+{fmt(packingHandling)}</Text>
-              <TouchableOpacity onPress={() => {
-                Alert.prompt ? Alert.prompt('Packing & Handling', 'Enter amount', (v) => setPackingHandling(parseFloat(v) || 0)) :
-                  setPackingHandling(prev => prev === 0 ? 150 : 0);
-              }}><Ionicons name="pencil" size={14} color="#075E54" /></TouchableOpacity>
+              <TouchableOpacity onPress={handleEditPackingHandling}>
+                <Ionicons name="pencil" size={14} color="#075E54" />
+              </TouchableOpacity>
             </View>
           </View>
           <View style={[s.totalRow, { borderTopWidth: 1, borderTopColor: '#E0E0E0', paddingTop: 12, marginTop: 8 }]}>
@@ -351,6 +382,60 @@ export default function NewInvoiceScreen() {
           </TouchableOpacity>
         </View>
       </SafeAreaView>
+
+      {/* Customer Search Modal */}
+      <Modal visible={customerSearchVisible} animationType="slide" transparent={true} onRequestClose={() => setCustomerSearchVisible(false)}>
+        <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <View style={s.modalContent}>
+            <View style={s.modalHeader}>
+              <Text style={s.modalTitle}>Select Customer</Text>
+              <TouchableOpacity onPress={() => setCustomerSearchVisible(false)}>
+                <Ionicons name="close" size={24} color="#333" />
+              </TouchableOpacity>
+            </View>
+            <TextInput
+              style={s.searchInput}
+              placeholder="Search customer..."
+              value={customerSearchQuery}
+              onChangeText={setCustomerSearchQuery}
+              autoFocus
+            />
+            <ScrollView style={s.customerList}>
+              {filteredCustomers.map(customer => (
+                <TouchableOpacity key={customer.id} style={s.customerItem} onPress={() => handleSelectCustomer(customer)}>
+                  <Text style={s.customerItemName}>{customer.name}</Text>
+                  <Text style={s.customerItemPhone}>{customer.phone}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      {/* Packing & Handling Edit Modal */}
+      <Modal visible={packingModalVisible} animationType="fade" transparent={true} onRequestClose={() => setPackingModalVisible(false)}>
+        <View style={s.modalOverlay}>
+          <View style={s.packingModal}>
+            <Text style={s.packingModalTitle}>Packing & Handling Charges</Text>
+            <TextInput
+              style={s.packingModalInput}
+              placeholder="Enter amount"
+              value={packingInput}
+              onChangeText={setPackingInput}
+              keyboardType="numeric"
+              autoFocus
+            />
+            <View style={s.packingModalButtons}>
+              <TouchableOpacity onPress={() => setPackingModalVisible(false)}>
+                <Text style={s.packingModalCancel}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={s.packingModalSaveBtn} onPress={handleSavePackingHandling}>
+                <Text style={s.packingModalSave}>Save</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }
@@ -416,4 +501,20 @@ const s = StyleSheet.create({
   shareBtnText: { fontSize: 14, fontWeight: '600', color: '#FFF' },
   waBtn: { flex: 1.2, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 14, borderRadius: 10, backgroundColor: '#25D366' },
   waBtnText: { fontSize: 14, fontWeight: '600', color: '#FFF' },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+  modalContent: { backgroundColor: '#FFF', borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingTop: 16, maxHeight: '80%' },
+  modalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: '#E0E0E0' },
+  modalTitle: { fontSize: 18, fontWeight: '700', color: '#1A1A1A' },
+  searchInput: { marginHorizontal: 16, marginTop: 12, paddingVertical: 10, paddingHorizontal: 14, backgroundColor: '#F5F5F5', borderRadius: 10, fontSize: 15 },
+  customerList: { flex: 1, paddingHorizontal: 16, paddingTop: 8 },
+  customerItem: { paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#F0F0F0' },
+  customerItemName: { fontSize: 16, fontWeight: '600', color: '#1A1A1A' },
+  customerItemPhone: { fontSize: 13, color: '#666', marginTop: 2 },
+  packingModal: { backgroundColor: '#FFF', borderRadius: 16, padding: 24, marginHorizontal: 40, minWidth: 280 },
+  packingModalTitle: { fontSize: 16, fontWeight: '600', color: '#1A1A1A', marginBottom: 16 },
+  packingModalInput: { borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 8, padding: 12, fontSize: 16, marginBottom: 16 },
+  packingModalButtons: { flexDirection: 'row', justifyContent: 'flex-end', gap: 12 },
+  packingModalCancel: { fontSize: 15, color: '#666', paddingVertical: 10, paddingHorizontal: 16 },
+  packingModalSaveBtn: { backgroundColor: '#075E54', borderRadius: 8, paddingVertical: 10, paddingHorizontal: 20 },
+  packingModalSave: { fontSize: 15, fontWeight: '600', color: '#FFF' },
 });
