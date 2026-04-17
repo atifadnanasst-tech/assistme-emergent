@@ -1503,7 +1503,8 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
               .eq('organisation_id', organisationId);
             const invoiceNumber = ((invCount || 0) + 1).toString();
 
-            const subtotal = params.amount || 0;
+            const itemsArr = Array.isArray(params.items) ? params.items : [];
+            const subtotal = params.amount || itemsArr.reduce((s, i) => s + (i.line_total || (i.quantity || 1) * (i.unit_price || 0)), 0) || 0;
             const taxAmount = 0;
             const totalAmount = subtotal + taxAmount;
 
@@ -1522,8 +1523,22 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
 
             if (invErr) { console.error('Create invoice failed:', invErr); failed.push(actionId); continue; }
 
-            // Insert invoice items
-            if (params.product_name) {
+            // Insert invoice items — handle items[] array or legacy single product
+            if (itemsArr.length > 0) {
+              for (let idx = 0; idx < itemsArr.length; idx++) {
+                const item = itemsArr[idx];
+                await supabase.from('invoice_items').insert({
+                  organisation_id: organisationId,
+                  invoice_id: newInvoice.id,
+                  description: item.product_name || 'Item',
+                  quantity: item.quantity || 1,
+                  unit_price: item.unit_price || 0,
+                  tax_rate: 0,
+                  line_total: item.line_total || (item.quantity || 1) * (item.unit_price || 0),
+                  sort_order: idx + 1,
+                });
+              }
+            } else if (params.product_name) {
               await supabase.from('invoice_items').insert({
                 organisation_id: organisationId,
                 invoice_id: newInvoice.id,
@@ -1536,17 +1551,18 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
               });
             }
 
-            // Insert invoice card message in chat
+            // Build items summary for card
+            const itemsSummary = itemsArr.length > 0
+              ? itemsArr.map(i => `${i.product_name} × ${i.quantity || 1}`).join(', ')
+              : params.product_name ? `${params.product_name} × ${params.quantity || 1}` : 'Items';
+
+            // Insert invoice card message in chat (visible to customer)
             const { data: conv } = await supabase
               .from('conversations').select('id')
               .eq('organisation_id', organisationId).eq('entity_type', 'customer')
               .eq('entity_id', customerId).eq('status', 'active').maybeSingle();
 
             if (conv) {
-              const itemsSummary = params.product_name
-                ? `${params.product_name} × ${params.quantity || 1}`
-                : 'Items';
-
               await supabase.from('messages').insert({
                 organisation_id: organisationId,
                 conversation_id: conv.id,
@@ -1585,7 +1601,7 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
             await supabase.from('tasks').insert({
               organisation_id: organisationId,
               title: `Delivery for ${customer.name}`,
-              description: params.product_name ? `Deliver ${params.quantity || ''} ${params.product_name}` : 'Scheduled delivery',
+              description: params.description || (params.product_name ? `Deliver ${params.quantity || ''} ${params.product_name}` : 'Scheduled delivery'),
               status: 'pending',
               priority: 'medium',
               created_by: userId,
@@ -1593,34 +1609,49 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
               entity_type: 'delivery',
               entity_id: customerId,
             });
+            // Confirmation as owner-only system message
+            const { data: delConv } = await supabase
+              .from('conversations').select('id')
+              .eq('organisation_id', organisationId).eq('entity_type', 'customer')
+              .eq('entity_id', customerId).eq('status', 'active').maybeSingle();
+            if (delConv) {
+              await supabase.from('messages').insert({
+                organisation_id: organisationId, conversation_id: delConv.id,
+                role: 'system', content: `✓ Delivery scheduled for ${customer.name} on ${params.delivery_date || 'TBD'}`,
+                metadata: { sender_type: 'system', visibility: 'owner_only', message_type: 'system_alert', read_by_owner: true, preview_text: `Delivery scheduled for ${customer.name}` },
+                tokens_input: 0, tokens_output: 0,
+              });
+            }
             executed.push(actionId);
             break;
           }
 
           case 'set_reminder': {
-            // Build wa.me reminder link
-            const phone = (customer.phone || '').replace(/[^0-9]/g, '');
-            if (phone) {
-              const text = encodeURIComponent(
-                `Hi ${customer.name}, this is a reminder about your pending payment. Please arrange at your earliest convenience.`
-              );
-              // Save reminder message to chat
-              const { data: conv } = await supabase
-                .from('conversations').select('id')
-                .eq('organisation_id', organisationId).eq('entity_type', 'customer')
-                .eq('entity_id', customerId).eq('status', 'active').maybeSingle();
-              if (conv) {
-                await supabase.from('messages').insert({
-                  organisation_id: organisationId, conversation_id: conv.id,
-                  role: 'assistant', content: `Payment reminder scheduled for ${customer.name}`,
-                  metadata: {
-                    sender_type: 'ai', visibility: 'both', message_type: 'text',
-                    read_by_owner: true, preview_text: `Reminder scheduled for ${customer.name}`,
-                    ai_raw_response: JSON.stringify(params),
-                  },
-                  tokens_input: 0, tokens_output: 0,
-                });
-              }
+            // Create a task in tasks table (so it shows in My Tasks)
+            const reminderDate = params.due_date || new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0];
+            await supabase.from('tasks').insert({
+              organisation_id: organisationId,
+              title: `Payment reminder for ${customer.name}`,
+              description: params.description || `Send payment reminder to ${customer.name}`,
+              status: 'pending',
+              priority: 'medium',
+              created_by: userId,
+              due_date: reminderDate,
+              entity_type: 'reminder',
+              entity_id: customerId,
+            });
+            // Confirmation as owner-only system message (pink strip)
+            const { data: remConv } = await supabase
+              .from('conversations').select('id')
+              .eq('organisation_id', organisationId).eq('entity_type', 'customer')
+              .eq('entity_id', customerId).eq('status', 'active').maybeSingle();
+            if (remConv) {
+              await supabase.from('messages').insert({
+                organisation_id: organisationId, conversation_id: remConv.id,
+                role: 'system', content: `✓ Payment reminder set for ${customer.name} on ${reminderDate}`,
+                metadata: { sender_type: 'system', visibility: 'owner_only', message_type: 'system_alert', read_by_owner: true, preview_text: `Reminder set for ${customer.name}` },
+                tokens_input: 0, tokens_output: 0,
+              });
             }
             executed.push(actionId);
             break;
