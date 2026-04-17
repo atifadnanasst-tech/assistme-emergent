@@ -1,6 +1,6 @@
 // AI Routes for AssistMe — Flow 2B
 // Backend-controlled AI: DB queries first, AI formats results
-// STRICT: tool_choice='required' for all business queries
+// AI-first: tool_choice='auto' — AI decides whether to call a tool or use general knowledge
 import OpenAI from 'openai';
 
 // ── Rate limiter (in-memory, per org) ────────────────────────
@@ -72,11 +72,18 @@ const TOOL_CARD_TYPE_MAP = {
   get_collection_insights: 'collection_insight',
   get_bank_summary: 'bank_summary',
   get_reorder_suggestions: 'reorder_suggestion',
+  get_best_selling_products: 'query_response',
 };
 
 // ── System prompt ────────────────────────────────────────────
-const SYSTEM_PROMPT = `You are a business data assistant for an Indian MSME trader.
-You MUST use tools to answer any business question. NEVER answer from memory.
+const SYSTEM_PROMPT = `You are a business assistant for an Indian MSME trader.
+
+RULE 1 — DATA QUESTIONS: For any question about financials, customers, payments, sales, invoices, products, stock — ALWAYS call a tool first. NEVER guess numbers.
+RULE 2 — GENERAL QUESTIONS: For industry trends, market advice, business strategy, product recommendations, or general knowledge questions — answer directly from your knowledge. No tool call needed.
+RULE 3 — After receiving tool results, write a plain-language summary using ONLY the returned data.
+RULE 4 — Amounts in INR (₹), Indian format: ₹1,20,000. Never invent numbers.
+RULE 5 — If tool returns empty data, say "No records found" — do not fabricate.
+RULE 6 — Keep responses concise and actionable. Respond in the owner's language.
 
 Available tools:
 - get_daily_summary: business summary (payments, deliveries, quotes)
@@ -85,14 +92,7 @@ Available tools:
 - get_collection_insights: collection efficiency data
 - get_bank_summary: bank account balances
 - get_reorder_suggestions: low-stock products
-
-RULES:
-- ALWAYS call a tool first. Never guess financial data.
-- After receiving tool results, write a plain-language summary using ONLY the data returned.
-- Amounts are in INR (₹). Format Indian style: ₹1,20,000.
-- Never invent numbers, names, or counts.
-- If tool returns empty data, say "No records found" — do not fabricate.
-- Keep responses concise and actionable.`;
+- get_best_selling_products: top products by revenue/quantity sold`;
 
 // ── Tool definitions ─────────────────────────────────────────
 const TOOLS = [
@@ -155,6 +155,20 @@ const TOOLS = [
       name: 'get_reorder_suggestions',
       description: 'Get products low on stock that need reordering. Call for "reorder", "stock", "inventory" etc.',
       parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_best_selling_products',
+      description: 'Get top-selling products by revenue and quantity. Call for "best selling", "top products", "highest selling", "sabse zyada bikne wala", "top seller", "popular products", "which product sells most" etc.',
+      parameters: {
+        type: 'object',
+        properties: {
+          months: { type: 'number', description: 'How many months back. Default: 12 for "this year", 6 for "last 6 months", 1 for "this month".' }
+        },
+        required: [],
+      },
     },
   },
 ];
@@ -348,6 +362,53 @@ async function executeTool(toolName, args, supabase, organisationId) {
               reorder_point: i.reorder_point,
               suggested_qty: i.reorder_qty,
             })),
+          },
+        };
+      }
+
+      case 'get_best_selling_products': {
+        const months = args.months || 12;
+        const since = new Date();
+        since.setMonth(since.getMonth() - months);
+        const sinceStr = since.toISOString().split('T')[0];
+
+        // Get all invoices in the period
+        const { data: invs } = await supabase
+          .from('invoices')
+          .select('id')
+          .eq('organisation_id', organisationId)
+          .gte('issue_date', sinceStr);
+
+        if (!invs || invs.length === 0) {
+          return { card_type: 'query_response', data: { products: [], period_months: months, message: 'No invoices found in this period.' } };
+        }
+
+        const invIds = invs.map(i => i.id);
+        const { data: items } = await supabase
+          .from('invoice_items')
+          .select('description, quantity, unit_price, line_total')
+          .eq('organisation_id', organisationId)
+          .in('invoice_id', invIds);
+
+        // Aggregate by product name
+        const productMap = {};
+        (items || []).forEach(item => {
+          const key = item.description || 'Unknown';
+          if (!productMap[key]) productMap[key] = { product: key, total_qty: 0, total_revenue: 0, orders: 0 };
+          productMap[key].total_qty += item.quantity || 0;
+          productMap[key].total_revenue += item.line_total || 0;
+          productMap[key].orders += 1;
+        });
+
+        // Sort by revenue descending
+        const sorted = Object.values(productMap).sort((a, b) => b.total_revenue - a.total_revenue);
+
+        return {
+          card_type: 'query_response',
+          data: {
+            products: sorted.slice(0, 10),
+            period_months: months,
+            total_products_sold: sorted.length,
           },
         };
       }
@@ -576,7 +637,7 @@ export function registerAIRoutes(app, supabase) {
           model: 'gpt-4o-mini',
           messages: aiMessages,
           tools: TOOLS,
-          tool_choice: 'required',
+          tool_choice: 'auto',
           temperature: 0.3,
         }, { signal: controller.signal });
         clearTimeout(timeoutId);
@@ -670,7 +731,7 @@ export function registerAIRoutes(app, supabase) {
               model: 'gpt-4o-mini',
               messages: retryMessages,
               tools: TOOLS,
-              tool_choice: 'required',
+              tool_choice: 'auto',
               temperature: 0.3,
             }, { signal: controllerRetry.signal });
             clearTimeout(timeoutRetry);

@@ -13,7 +13,7 @@ import {
   Platform,
   Keyboard,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../contexts/AuthContext';
@@ -35,6 +35,7 @@ export default function AIScreen() {
   const router = useRouter();
   const { setIsAuthenticated } = useAuth();
   const flatListRef = useRef<FlatList>(null);
+  const insets = useSafeAreaInsets();
 
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<AIMessage[]>([]);
@@ -43,6 +44,15 @@ export default function AIScreen() {
   const [inputText, setInputText] = useState('');
   const [executingActions, setExecutingActions] = useState<Set<string>>(new Set());
   const [sentReminders, setSentReminders] = useState<Set<string>>(new Set());
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
+
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const s1 = Keyboard.addListener(showEvent, () => setKeyboardVisible(true));
+    const s2 = Keyboard.addListener(hideEvent, () => setKeyboardVisible(false));
+    return () => { s1.remove(); s2.remove(); };
+  }, []);
 
   useEffect(() => {
     loadConversation();
@@ -481,40 +491,32 @@ onLayout={() => flatListRef.current?.scrollToEnd({ animated: false })}
         )}
       </View>
 
-      {/* Input bar — wrapped in SafeAreaView for bottom inset */}
-      <SafeAreaView style={styles.inputSafeArea} edges={['bottom']}>
-        <View style={styles.inputBar}>
-          <TextInput
-            style={styles.textInput}
-            placeholder="Ask AI about your business..."
-            placeholderTextColor="#999999"
-            value={inputText}
-            onChangeText={setInputText}
-            editable={sendingState === 'idle'}
-            maxLength={2000}
-            multiline
-          />
-          <TouchableOpacity style={styles.inputIconDisabled}>
-            <Ionicons name="attach" size={22} color="#CCCCCC" />
+      {/* Input bar */}
+      <View style={[styles.inputBar, { paddingBottom: keyboardVisible ? 4 : insets.bottom + 4 }]}>
+        <TextInput
+          style={styles.textInput}
+          placeholder="Ask AI about your business..."
+          placeholderTextColor="#999999"
+          value={inputText}
+          onChangeText={setInputText}
+          editable={sendingState === 'idle'}
+          maxLength={2000}
+          multiline
+        />
+        {inputText.trim().length > 0 ? (
+          <TouchableOpacity
+            style={styles.sendButton}
+            onPress={handleSend}
+            disabled={sendingState !== 'idle'}
+          >
+            <Ionicons name="send" size={20} color="#FFFFFF" />
           </TouchableOpacity>
-          <TouchableOpacity style={styles.inputIconDisabled}>
-            <Ionicons name="camera-outline" size={22} color="#CCCCCC" />
-          </TouchableOpacity>
-          {inputText.trim().length > 0 ? (
-            <TouchableOpacity
-              style={styles.sendButton}
-              onPress={handleSend}
-              disabled={sendingState !== 'idle'}
-            >
-              <Ionicons name="send" size={20} color="#FFFFFF" />
-            </TouchableOpacity>
-          ) : (
-            <View style={styles.micButtonDisabled}>
-              <Ionicons name="mic" size={20} color="#CCCCCC" />
-            </View>
-          )}
-        </View>
-      </SafeAreaView>
+        ) : (
+          <View style={styles.micButtonDisabled}>
+            <Ionicons name="mic" size={20} color="#CCCCCC" />
+          </View>
+        )}
+      </View>
     </KeyboardAvoidingView>
   );
 }
@@ -682,21 +684,15 @@ const styles = StyleSheet.create({
   dot3: { opacity: 0.8 },
 
   // ── Input bar ──────────────────────────────────────────
-  inputSafeArea: {
-    backgroundColor: '#FFFFFF',
-  },
   inputBar: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-end',
     backgroundColor: '#FFFFFF',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingHorizontal: 8,
+    paddingTop: 6,
     borderTopWidth: 1,
     borderTopColor: '#F0F0F0',
-    gap: 8,
-  },
-  inputIconDisabled: {
-    padding: 6,
+    gap: 6,
   },
   textInput: {
     flex: 1,
