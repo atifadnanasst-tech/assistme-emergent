@@ -63,6 +63,9 @@ export default function CustomerChatScreen() {
   const [dateEditValue, setDateEditValue] = useState(new Date());
   const [dateEditDesc, setDateEditDesc] = useState('');
   const [showDatePicker, setShowDatePicker] = useState(Platform.OS === 'ios');
+  // AI query
+  const [aiQueryText, setAiQueryText] = useState('');
+  const [aiQuerying, setAiQuerying] = useState(false);
 
   // ── Auth helper ────────────────────────────────────────────
   const getToken = async () => {
@@ -334,6 +337,54 @@ setTimeout(() => {
     setTimeout(() => setBannerVisible(false), 2000);
   };
 
+  // ── AI Query handler ───────────────────────────────────────
+  const handleAiQuery = async () => {
+    const text = aiQueryText.trim();
+    if (!text || aiQuerying || !conversationId) return;
+    Keyboard.dismiss();
+    setAiQueryText('');
+    setAiQuerying(true);
+
+    // Optimistic: add owner's query locally
+    const tempQId = `aiq-${Date.now()}`;
+    const queryMsg: ChatMessage = {
+      id: tempQId, role: 'user', content: text,
+      created_at: new Date().toISOString(), sender_type: 'owner',
+      visibility: 'owner_only', message_type: 'ai_query', card_type: null,
+      card_data: {}, preview_text: text.substring(0, 50),
+    };
+    setMessages(prev => [...prev, queryMsg]);
+    setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
+
+    try {
+      const token = await getToken();
+      if (!token) return;
+      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+      const res = await fetch(`${backendUrl}/api/chat/${customer_id}/ai-query`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: text, conversation_id: conversationId }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const respMsg: ChatMessage = {
+          id: data.message_id || `air-${Date.now()}`, role: 'assistant', content: data.response,
+          created_at: new Date().toISOString(), sender_type: 'ai',
+          visibility: 'owner_only', message_type: 'ai_response', card_type: null,
+          card_data: {}, preview_text: data.response?.substring(0, 50),
+        };
+        setMessages(prev => [...prev, respMsg]);
+        setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
+      } else {
+        Alert.alert('Error', 'Could not get AI response. Try again.');
+      }
+    } catch {
+      Alert.alert('Error', 'AI query failed.');
+    } finally {
+      setAiQuerying(false);
+    }
+  };
+
   // ── Formatting helpers ─────────────────────────────────────
   const formatTime = (ts: string) => {
     const d = new Date(ts);
@@ -455,10 +506,33 @@ setTimeout(() => {
     let content = null;
     if (item.message_type === 'invoice_card' || item.card_type === 'invoice_card') {
       content = renderInvoiceCard(item);
+    } else if (item.message_type === 'ai_query') {
+      // Owner's AI query — right-aligned teal bubble
+      content = (
+        <View style={styles.outgoingContainer}>
+          <View style={[styles.outgoingBubble, { backgroundColor: '#E0F2F1' }]}>
+            <Text style={[styles.outgoingText, { color: '#00695C' }]}>{item.content}</Text>
+            <Text style={styles.outgoingTime}>{formatTime(item.created_at)}</Text>
+          </View>
+        </View>
+      );
+    } else if (item.message_type === 'ai_response') {
+      // AI response — left-aligned with AI icon
+      content = (
+        <View style={styles.incomingContainer}>
+          <View style={[styles.incomingBubble, { backgroundColor: '#F0FAF8', borderLeftWidth: 3, borderLeftColor: '#075E54' }]}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+              <Ionicons name="sparkles" size={14} color="#075E54" />
+              <Text style={{ fontSize: 11, fontWeight: '700', color: '#075E54' }}>AI</Text>
+            </View>
+            <Text style={styles.incomingText}>{item.content}</Text>
+            <Text style={styles.incomingTime}>{formatTime(item.created_at)}</Text>
+          </View>
+        </View>
+      );
     } else if (item.role === 'system' || item.message_type === 'system_alert' || item.message_type === 'spark_clarify') {
       content = renderSystemAlert(item);
     } else if (item.visibility === 'owner_only' && item.sender_type === 'ai') {
-      // AI-only messages (e.g. spark reasoning) — render as subtle system note, not green bubble
       content = renderSystemAlert(item);
     } else if (item.role === 'user') {
       content = renderIncomingMessage(item);
@@ -563,107 +637,149 @@ setTimeout(() => {
         </View>
       </SafeAreaView>
 
-      {/* Chat area */}
+      {/* Chat area — filtered by active tab */}
       <View style={styles.chatArea}>
-        {messages.length === 0 ? (
+        {activeTab === 'broadcast' ? (
           <View style={styles.emptyState}>
-            <Text style={styles.emptyText}>No messages yet. Start a conversation.</Text>
+            <Ionicons name="megaphone-outline" size={48} color="#CCC" />
+            <Text style={styles.emptyText}>Broadcast Messages</Text>
+            <Text style={[styles.emptyText, { fontSize: 13, marginTop: 4 }]}>Coming soon</Text>
           </View>
-        ) : (
-          <FlatList
-            ref={flatListRef}
-            data={messages}
-            renderItem={renderMessage}
-            keyExtractor={item => item.id}
-            contentContainerStyle={styles.chatContent}
-            onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: false })}
-            showsVerticalScrollIndicator={false}
-            refreshing={refreshing}
-            onRefresh={loadChat}
-          />
-        )}
+        ) : (() => {
+          const filtered = messages.filter(m => {
+            if (activeTab === 'direct') {
+              // Direct: customer-facing messages + invoice cards + system alerts (pink strips)
+              return m.visibility === 'both' || m.message_type === 'invoice_card' || m.message_type === 'system_alert' || m.message_type === 'spark_clarify';
+            } else {
+              // AI: owner-only messages (pink strips, AI queries, AI responses)
+              return m.visibility === 'owner_only' || m.message_type === 'ai_query' || m.message_type === 'ai_response' || m.message_type === 'system_alert' || m.message_type === 'spark_clarify';
+            }
+          });
+          return filtered.length === 0 ? (
+            <View style={styles.emptyState}>
+              <Ionicons name={activeTab === 'ai' ? 'sparkles-outline' : 'chatbubbles-outline'} size={48} color="#CCC" />
+              <Text style={styles.emptyText}>
+                {activeTab === 'ai' ? `Ask AI anything about ${customer?.name || 'this customer'}` : 'No messages yet'}
+              </Text>
+            </View>
+          ) : (
+            <FlatList
+              ref={flatListRef}
+              data={filtered}
+              renderItem={renderMessage}
+              keyExtractor={item => item.id}
+              contentContainerStyle={styles.chatContent}
+              onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: false })}
+              showsVerticalScrollIndicator={false}
+              refreshing={refreshing}
+              onRefresh={loadChat}
+            />
+          );
+        })()}
       </View>
 
-      {/* Spark FAB — floating above input bar, right side */}
-      {!sparkMode && !sparkProcessing && inputText.trim().length === 0 && (
+      {/* Spark FAB — only on Direct Messages tab */}
+      {activeTab === 'direct' && !sparkMode && !sparkProcessing && inputText.trim().length === 0 && (
         <TouchableOpacity style={[styles.sparkFab, { bottom: 68 + (keyboardVisible ? 0 : insets.bottom) }]} onPress={() => setSparkMode(true)}>
           <Ionicons name="sparkles" size={22} color="#FFF" />
         </TouchableOpacity>
       )}
 
-      {/* Input bar */}
-      <View style={[styles.inputBarWrapper, { paddingBottom: keyboardVisible ? 0 : insets.bottom }]}>
-        {/* Spark processing indicator */}
-        {sparkProcessing && (
-          <View style={styles.sparkProcessingBar}>
-            <ActivityIndicator size="small" color="#075E54" />
-            <Text style={styles.sparkProcessingText}>AI is analyzing your request...</Text>
-          </View>
-        )}
-        {/* Spark mode indicator */}
-        {sparkMode && !sparkProcessing && (
-          <View style={styles.sparkIndicator}>
-            <Ionicons name="sparkles" size={16} color="#075E54" />
-            <Text style={styles.sparkIndicatorText}>AI Spark Mode — type a natural language instruction</Text>
-            <TouchableOpacity onPress={() => { setSparkMode(false); setSparkInput(''); }} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-              <Ionicons name="close-circle" size={20} color="#999" />
-            </TouchableOpacity>
-          </View>
-        )}
-        <View style={styles.inputRow}>
-          <View style={[styles.inputPill, sparkMode && styles.inputPillSpark]}>
-            <TouchableOpacity style={styles.inputIconBtn}>
-              <Ionicons name={sparkMode ? 'sparkles' : 'happy-outline'} size={22} color={sparkMode ? '#075E54' : '#667781'} />
-            </TouchableOpacity>
-            <TextInput
-              style={styles.textInput}
-              placeholder={sparkMode ? 'What would you like to do?' : 'Message or voice...'}
-              placeholderTextColor={sparkMode ? '#075E54' : '#999'}
-              value={inputText}
-              onChangeText={setInputText}
-              multiline
-              maxLength={2000}
-            />
-            {!sparkMode && (
-              <>
-                <TouchableOpacity style={styles.inputIconBtn}>
-                  <Ionicons name="attach" size={22} color="#667781" />
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.inputIconBtn}>
-                  <Ionicons name="camera-outline" size={22} color="#667781" />
-                </TouchableOpacity>
-              </>
-            )}
-          </View>
-
-          {/* Send button when text typed, or spark send in spark mode, or mic when idle */}
-          {sparkMode ? (
+      {/* Input bar — different for each tab */}
+      {activeTab === 'broadcast' ? null : activeTab === 'ai' ? (
+        /* AI Messages input */
+        <View style={[styles.inputBarWrapper, { paddingBottom: keyboardVisible ? 0 : insets.bottom }]}>
+          {aiQuerying && (
+            <View style={styles.sparkProcessingBar}>
+              <ActivityIndicator size="small" color="#075E54" />
+              <Text style={styles.sparkProcessingText}>AI is thinking...</Text>
+            </View>
+          )}
+          <View style={styles.inputRow}>
+            <View style={[styles.inputPill, styles.aiInputPill]}>
+              <Ionicons name="sparkles" size={20} color="#075E54" style={{ marginLeft: 6 }} />
+              <TextInput
+                style={styles.textInput}
+                placeholder={`Ask about ${customer?.name || 'this customer'}...`}
+                placeholderTextColor="#075E54"
+                value={aiQueryText}
+                onChangeText={setAiQueryText}
+                multiline
+                maxLength={2000}
+              />
+            </View>
             <TouchableOpacity
               style={[styles.sendBtn, styles.sparkSendBtn]}
-              onPress={handleSpark}
-              disabled={sparkProcessing || inputText.trim().length === 0}
+              onPress={handleAiQuery}
+              disabled={aiQuerying || aiQueryText.trim().length === 0}
             >
-              {sparkProcessing ? (
+              {aiQuerying ? (
                 <ActivityIndicator size="small" color="#FFF" />
               ) : (
                 <Ionicons name="send" size={20} color="#FFF" />
               )}
             </TouchableOpacity>
-          ) : inputText.trim().length > 0 ? (
-            <TouchableOpacity style={styles.sendBtn} onPress={handleSend} disabled={sending}>
-              {sending ? (
-                <ActivityIndicator size="small" color="#FFF" />
-              ) : (
-                <Ionicons name="send" size={20} color="#FFF" />
-              )}
-            </TouchableOpacity>
-          ) : (
-            <TouchableOpacity style={styles.micBtn}>
-              <Ionicons name="mic" size={22} color="#FFF" />
-            </TouchableOpacity>
-          )}
+          </View>
         </View>
-      </View>
+      ) : (
+        /* Direct Messages input */
+        <View style={[styles.inputBarWrapper, { paddingBottom: keyboardVisible ? 0 : insets.bottom }]}>
+          {sparkProcessing && (
+            <View style={styles.sparkProcessingBar}>
+              <ActivityIndicator size="small" color="#075E54" />
+              <Text style={styles.sparkProcessingText}>AI is analyzing your request...</Text>
+            </View>
+          )}
+          {sparkMode && !sparkProcessing && (
+            <View style={styles.sparkIndicator}>
+              <Ionicons name="sparkles" size={16} color="#075E54" />
+              <Text style={styles.sparkIndicatorText}>AI Spark Mode — type a natural language instruction</Text>
+              <TouchableOpacity onPress={() => { setSparkMode(false); setSparkInput(''); }} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <Ionicons name="close-circle" size={20} color="#999" />
+              </TouchableOpacity>
+            </View>
+          )}
+          <View style={styles.inputRow}>
+            <View style={[styles.inputPill, sparkMode && styles.inputPillSpark]}>
+              <TouchableOpacity style={styles.inputIconBtn}>
+                <Ionicons name={sparkMode ? 'sparkles' : 'happy-outline'} size={22} color={sparkMode ? '#075E54' : '#667781'} />
+              </TouchableOpacity>
+              <TextInput
+                style={styles.textInput}
+                placeholder={sparkMode ? 'What would you like to do?' : 'Message or voice...'}
+                placeholderTextColor={sparkMode ? '#075E54' : '#999'}
+                value={inputText}
+                onChangeText={setInputText}
+                multiline
+                maxLength={2000}
+              />
+              {!sparkMode && (
+                <>
+                  <TouchableOpacity style={styles.inputIconBtn}>
+                    <Ionicons name="attach" size={22} color="#667781" />
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.inputIconBtn}>
+                    <Ionicons name="camera-outline" size={22} color="#667781" />
+                  </TouchableOpacity>
+                </>
+              )}
+            </View>
+            {sparkMode ? (
+              <TouchableOpacity style={[styles.sendBtn, styles.sparkSendBtn]} onPress={handleSpark} disabled={sparkProcessing || inputText.trim().length === 0}>
+                {sparkProcessing ? <ActivityIndicator size="small" color="#FFF" /> : <Ionicons name="send" size={20} color="#FFF" />}
+              </TouchableOpacity>
+            ) : inputText.trim().length > 0 ? (
+              <TouchableOpacity style={styles.sendBtn} onPress={handleSend} disabled={sending}>
+                {sending ? <ActivityIndicator size="small" color="#FFF" /> : <Ionicons name="send" size={20} color="#FFF" />}
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity style={styles.micBtn}>
+                <Ionicons name="mic" size={22} color="#FFF" />
+              </TouchableOpacity>
+            )}
+          </View>
+        </View>
+      )}
 
       {/* 3-dot menu overlay */}
       <Modal visible={menuVisible} transparent animationType="fade" onRequestClose={() => setMenuVisible(false)}>
@@ -1022,6 +1138,9 @@ const styles = StyleSheet.create({
   },
   inputPillSpark: {
     borderWidth: 1.5, borderColor: '#075E54', backgroundColor: '#F0FAF8',
+  },
+  aiInputPill: {
+    borderWidth: 1.5, borderColor: '#00796B', backgroundColor: '#E0F2F1',
   },
   sparkIndicator: {
     flexDirection: 'row', alignItems: 'center', backgroundColor: '#E8F5E9',

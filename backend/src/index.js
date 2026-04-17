@@ -1758,6 +1758,185 @@ app.delete('/api/chat/:customer_id/spark/:draft_id', async (c) => {
 
 
 // ══════════════════════════════════════════════════════════════
+// AI MESSAGES — Customer-scoped AI query (Flow 3A AI Tab)
+// ══════════════════════════════════════════════════════════════
+
+const AI_QUERY_TOOLS = [
+  { type: 'function', function: { name: 'get_customer_info', description: 'Get customer profile: name, phone, outstanding balance, tags, health score', parameters: { type: 'object', properties: {}, required: [] } } },
+  { type: 'function', function: { name: 'get_customer_invoices', description: 'Get all invoices for this customer with amounts, dates, status, items', parameters: { type: 'object', properties: { status: { type: 'string', description: 'Filter: all, paid, unpaid, overdue. Default: all' } }, required: [] } } },
+  { type: 'function', function: { name: 'get_purchase_history', description: 'Get products purchased by this customer with quantities, amounts, dates', parameters: { type: 'object', properties: { months: { type: 'number', description: 'How many months back to look. Default: 6' } }, required: [] } } },
+  { type: 'function', function: { name: 'get_financial_summary', description: 'Total purchases, total payments, outstanding balance, avg order value for this customer in a date range', parameters: { type: 'object', properties: { months: { type: 'number', description: 'Months back. Default: 6' } }, required: [] } } },
+  { type: 'function', function: { name: 'get_customer_tasks', description: 'Get pending tasks, reminders, deliveries for this customer', parameters: { type: 'object', properties: {}, required: [] } } },
+];
+
+async function executeAiQueryTool(toolName, args, supabase, organisationId, customerId) {
+  switch (toolName) {
+    case 'get_customer_info': {
+      const { data: cust } = await supabase.from('customers').select('name, phone, outstanding_balance, custom_fields')
+        .eq('id', customerId).eq('organisation_id', organisationId).single();
+      const { data: tags } = await supabase.from('customer_tags').select('tags(name)')
+        .eq('customer_id', customerId);
+      const tagNames = (tags || []).map(t => t.tags?.name).filter(Boolean);
+      return { name: cust?.name, phone: cust?.phone, outstanding_balance: cust?.outstanding_balance || 0, health_score: cust?.custom_fields?.health_score, tags: tagNames };
+    }
+    case 'get_customer_invoices': {
+      let q = supabase.from('invoices').select('invoice_number, status, total_amount, amount_paid, amount_due, issue_date, due_date')
+        .eq('organisation_id', organisationId).eq('customer_id', customerId).order('issue_date', { ascending: false }).limit(20);
+      if (args.status === 'paid') q = q.eq('status', 'paid');
+      else if (args.status === 'unpaid') q = q.neq('status', 'paid');
+      else if (args.status === 'overdue') q = q.neq('status', 'paid').lt('due_date', new Date().toISOString().split('T')[0]);
+      const { data } = await q;
+      return { invoices: data || [], count: (data || []).length };
+    }
+    case 'get_purchase_history': {
+      const months = args.months || 6;
+      const since = new Date(); since.setMonth(since.getMonth() - months);
+      const { data: invs } = await supabase.from('invoices').select('id, invoice_number, total_amount, issue_date')
+        .eq('organisation_id', organisationId).eq('customer_id', customerId).gte('issue_date', since.toISOString().split('T')[0]);
+      const invIds = (invs || []).map(i => i.id);
+      let items = [];
+      if (invIds.length > 0) {
+        const { data: ii } = await supabase.from('invoice_items').select('description, quantity, unit_price, line_total, invoice_id')
+          .eq('organisation_id', organisationId).in('invoice_id', invIds);
+        items = ii || [];
+      }
+      // Aggregate by product
+      const productMap = {};
+      for (const item of items) {
+        const key = item.description;
+        if (!productMap[key]) productMap[key] = { product: key, total_qty: 0, total_amount: 0, orders: 0 };
+        productMap[key].total_qty += item.quantity || 0;
+        productMap[key].total_amount += item.line_total || 0;
+        productMap[key].orders += 1;
+      }
+      return { products: Object.values(productMap), invoice_count: invs?.length || 0, period_months: months };
+    }
+    case 'get_financial_summary': {
+      const months = args.months || 6;
+      const since = new Date(); since.setMonth(since.getMonth() - months);
+      const { data: invs } = await supabase.from('invoices').select('total_amount, amount_paid, status, issue_date')
+        .eq('organisation_id', organisationId).eq('customer_id', customerId).gte('issue_date', since.toISOString().split('T')[0]);
+      const totalPurchases = (invs || []).reduce((s, i) => s + (i.total_amount || 0), 0);
+      const totalPaid = (invs || []).reduce((s, i) => s + (i.amount_paid || 0), 0);
+      const { data: cust } = await supabase.from('customers').select('outstanding_balance').eq('id', customerId).single();
+      return { total_purchases: totalPurchases, total_paid: totalPaid, outstanding: cust?.outstanding_balance || 0, invoice_count: (invs || []).length, avg_order: (invs || []).length > 0 ? Math.round(totalPurchases / invs.length) : 0, period_months: months };
+    }
+    case 'get_customer_tasks': {
+      const { data: tasks } = await supabase.from('tasks').select('title, status, priority, due_date, entity_type')
+        .eq('organisation_id', organisationId).eq('entity_id', customerId).neq('status', 'completed').order('due_date', { ascending: true }).limit(10);
+      return { tasks: tasks || [], count: (tasks || []).length };
+    }
+    default:
+      return { error: 'Unknown tool' };
+  }
+}
+
+app.post('/api/chat/:customer_id/ai-query', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { userId, organisationId } = auth;
+    const customerId = c.req.param('customer_id');
+
+    const customer = await validateCustomer(customerId, organisationId);
+    if (!customer) return c.json({ error: 'customer_not_found' }, 404);
+
+    const body = await c.req.json();
+    const query = body.query?.trim();
+    const conversationId = body.conversation_id;
+    if (!query) return c.json({ error: 'empty_query' }, 400);
+    if (!conversationId) return c.json({ error: 'missing_conversation_id' }, 400);
+
+    // Get owner's preferred language
+    const { data: orgData } = await supabase.from('organisations').select('custom_fields').eq('id', organisationId).single();
+    const language = orgData?.custom_fields?.language || 'English';
+
+    // Save owner's query as owner-only message
+    await supabase.from('messages').insert({
+      organisation_id: organisationId, conversation_id: conversationId,
+      role: 'user', content: query,
+      metadata: { sender_type: 'owner', visibility: 'owner_only', message_type: 'ai_query', read_by_owner: true, preview_text: query.substring(0, 50) },
+      tokens_input: 0, tokens_output: 0,
+    });
+
+    const client = getOpenAI();
+    if (!client) return c.json({ error: 'ai_error', message: 'AI not configured' }, 500);
+
+    const systemPrompt = `You are a data assistant for an Indian MSME trader. You answer questions about customer "${customer.name}".
+RULES:
+- ALWAYS call a tool first. NEVER guess financial data.
+- After receiving tool results, write a plain-language answer using ONLY the returned data.
+- Amounts in INR (₹), Indian format: ₹1,20,000.
+- Never invent numbers. If data is empty, say "No records found."
+- Respond in ${language}. Be concise and actionable.
+- Today's date: ${new Date().toISOString().split('T')[0]}`;
+
+    let messages = [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: query },
+    ];
+
+    // First call — get tool call
+    const controller1 = new AbortController();
+    const t1 = setTimeout(() => controller1.abort(), 10000);
+    let completion;
+    try {
+      completion = await client.chat.completions.create({
+        model: 'gpt-4o-mini', messages, tools: AI_QUERY_TOOLS, tool_choice: 'auto', temperature: 0.1,
+      }, { signal: controller1.signal });
+      clearTimeout(t1);
+    } catch (e) {
+      clearTimeout(t1);
+      return c.json({ error: 'ai_error', message: 'AI temporarily unavailable' }, 500);
+    }
+
+    let responseText = '';
+    const choice = completion.choices[0];
+
+    if (choice.message.tool_calls?.length > 0) {
+      // Execute tool calls
+      messages.push(choice.message);
+      for (const tc of choice.message.tool_calls) {
+        const args = JSON.parse(tc.function.arguments || '{}');
+        const result = await executeAiQueryTool(tc.function.name, args, supabase, organisationId, customerId);
+        messages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify(result) });
+      }
+      // Second call — get natural language response
+      const controller2 = new AbortController();
+      const t2 = setTimeout(() => controller2.abort(), 10000);
+      try {
+        const completion2 = await client.chat.completions.create({
+          model: 'gpt-4o-mini', messages, temperature: 0.2,
+        }, { signal: controller2.signal });
+        clearTimeout(t2);
+        responseText = completion2.choices[0].message.content || 'No response';
+      } catch (e) {
+        clearTimeout(t2);
+        responseText = 'AI processing failed. Please try again.';
+      }
+    } else {
+      responseText = choice.message.content || 'No response';
+    }
+
+    // Save AI response as owner-only message
+    const { data: savedMsg } = await supabase.from('messages').insert({
+      organisation_id: organisationId, conversation_id: conversationId,
+      role: 'assistant', content: responseText,
+      metadata: { sender_type: 'ai', visibility: 'owner_only', message_type: 'ai_response', read_by_owner: true, preview_text: responseText.substring(0, 50) },
+      tokens_input: 0, tokens_output: 0,
+    }).select('id').single();
+
+    return c.json({ message_id: savedMsg?.id, response: responseText });
+
+  } catch (error) {
+    console.error('POST /api/chat/ai-query error:', error);
+    return c.json({ error: 'server_error' }, 500);
+  }
+});
+
+
+
+// ══════════════════════════════════════════════════════════════
 // FLOW 3B — CUSTOMER REPORT ROUTES
 // ══════════════════════════════════════════════════════════════
 
