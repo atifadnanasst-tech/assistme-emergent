@@ -23,6 +23,7 @@ export default function NewInvoiceScreen() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState<string | null>(null);
   const [orgName, setOrgName] = useState('');
+  const [businessModalVisible, setBusinessModalVisible] = useState(false);
   const [allCustomers, setAllCustomers] = useState<Customer[]>([]);
   const [customerName, setCustomerName] = useState('');
   const [customerId, setCustomerId] = useState(id || '');
@@ -159,6 +160,10 @@ export default function NewInvoiceScreen() {
       if (!token) return;
       const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
 
+      console.log(`[INVOICE] Action: ${action}`);
+      console.log(`[INVOICE] Customer ID: ${customerId}`);
+      console.log(`[INVOICE] Items count: ${items.length}`);
+
       // Create invoice
       const r1 = await fetch(`${backendUrl}/api/invoices`, {
         method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
@@ -169,34 +174,86 @@ export default function NewInvoiceScreen() {
           status: action === 'pdf' ? 'draft' : 'sent',
         }),
       });
+      
+      if (!r1.ok) {
+        const err = await r1.text();
+        console.error('[INVOICE] Create failed:', err);
+        Alert.alert('Error', 'Failed to create invoice');
+        return;
+      }
+      
       const inv = await r1.json();
+      console.log('[INVOICE] Created:', inv.invoice_id, inv.invoice_number);
       if (!inv.invoice_id) { Alert.alert('Error', 'Failed to create invoice'); return; }
 
       // Generate PDF
+      console.log('[INVOICE] Generating PDF...');
       const r2 = await fetch(`${backendUrl}/api/invoices/${inv.invoice_id}/pdf`, {
         method: 'POST', headers: { 'Authorization': `Bearer ${token}` },
       });
+      
+      if (!r2.ok) {
+        const err = await r2.text();
+        console.error('[INVOICE] PDF failed:', err);
+        Alert.alert('Error', 'PDF generation failed');
+        return;
+      }
+      
       const pdf = await r2.json();
+      console.log('[INVOICE] PDF URL:', pdf.pdf_url);
 
       if (action === 'pdf') {
-        Alert.alert('PDF Generated', `Invoice ${inv.invoice_number} saved.\n${pdf.pdf_url ? 'PDF ready.' : ''}`);
+        Alert.alert('PDF Generated', `Invoice ${inv.invoice_number} saved.\nPDF URL: ${pdf.pdf_url || 'Not available'}`);
       } else if (action === 'share') {
-        await fetch(`${backendUrl}/api/invoices/${inv.invoice_id}/share`, {
+        console.log('[INVOICE] Sharing to app...');
+        const r3 = await fetch(`${backendUrl}/api/invoices/${inv.invoice_id}/share`, {
           method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({ channel: 'app' }),
         });
+        
+        if (!r3.ok) {
+          const err = await r3.text();
+          console.error('[INVOICE] Share failed:', err);
+          Alert.alert('Error', 'Failed to share invoice');
+          return;
+        }
+        
+        const shareRes = await r3.json();
+        console.log('[INVOICE] Share result:', shareRes);
+        Alert.alert('Success', 'Invoice shared in chat ✓');
         router.back();
       } else if (action === 'whatsapp') {
+        console.log('[INVOICE] Sharing to WhatsApp...');
         const r3 = await fetch(`${backendUrl}/api/invoices/${inv.invoice_id}/share`, {
           method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({ channel: 'whatsapp' }),
         });
+        
+        if (!r3.ok) {
+          const err = await r3.text();
+          console.error('[INVOICE] WhatsApp share failed:', err);
+          Alert.alert('Error', 'Failed to generate WhatsApp link');
+          return;
+        }
+        
         const wa = await r3.json();
-        if (wa.whatsapp_url) { try { await Linking.openURL(wa.whatsapp_url); } catch {} }
+        console.log('[INVOICE] WhatsApp URL:', wa.whatsapp_url);
+        if (wa.whatsapp_url) {
+          try {
+            await Linking.openURL(wa.whatsapp_url);
+          } catch (linkErr) {
+            console.error('[INVOICE] Failed to open WhatsApp:', linkErr);
+            Alert.alert('Error', 'Could not open WhatsApp');
+          }
+        }
         router.back();
       }
-    } catch { Alert.alert('Error', 'Something went wrong'); }
-    finally { setSubmitting(null); }
+    } catch (error) {
+      console.error('[INVOICE] Submit error:', error);
+      Alert.alert('Error', 'Something went wrong');
+    } finally {
+      setSubmitting(null);
+    }
   };
 
   const handleSaveDraft = async () => {
@@ -263,9 +320,12 @@ export default function NewInvoiceScreen() {
       </SafeAreaView>
 
       <ScrollView style={s.scroll} contentContainerStyle={s.scrollContent}>
-        {/* Business Name - NO MARGIN */}
+        {/* Business Name - NO MARGIN, clickable */}
         <Text style={[s.sectionLabel, { marginTop: 0 }]}>MY BUSINESS NAME</Text>
-        <View style={s.fieldRow}><Text style={s.fieldValue}>{orgName}</Text><Ionicons name="pencil" size={18} color="#999" /></View>
+        <TouchableOpacity style={s.fieldRow} onPress={() => Alert.alert('Business', orgName || 'Not set')} activeOpacity={0.7}>
+          <Text style={s.fieldValue}>{orgName}</Text>
+          <Ionicons name="pencil" size={18} color="#075E54" />
+        </TouchableOpacity>
 
         {/* Customer */}
         <Text style={s.sectionLabel}>CUSTOMER</Text>

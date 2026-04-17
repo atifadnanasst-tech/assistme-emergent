@@ -2483,13 +2483,20 @@ app.post('/api/invoices/:invoice_id/pdf', async (c) => {
     const { organisationId } = auth;
     const invoiceId = c.req.param('invoice_id');
 
+    console.log(`📄 [PDF] Generating for invoice: ${invoiceId}`);
+
     // Fetch invoice + items + customer + org
     const { data: invoice } = await supabase.from('invoices').select('*').eq('id', invoiceId).eq('organisation_id', organisationId).single();
-    if (!invoice) return c.json({ error: 'invoice_not_found' }, 404);
+    if (!invoice) {
+      console.error('📄 [PDF] Invoice not found:', invoiceId);
+      return c.json({ error: 'invoice_not_found' }, 404);
+    }
 
     const { data: items } = await supabase.from('invoice_items').select('*').eq('invoice_id', invoiceId).order('sort_order');
     const { data: customer } = await supabase.from('customers').select('name, phone, tax_id').eq('id', invoice.customer_id).single();
     const { data: org } = await supabase.from('organisations').select('name').eq('id', organisationId).single();
+
+    console.log(`📄 [PDF] Invoice: ${invoice.invoice_number}, Items: ${items?.length || 0}`);
 
     // Generate PDF with pdfkit
     const doc = new PDFDocument({ size: 'A4', margin: 50 });
@@ -2569,13 +2576,19 @@ app.post('/api/invoices/:invoice_id/pdf', async (c) => {
     const fileName = `${invoice.invoice_number}.pdf`;
     const storagePath = `${organisationId}/${fileName}`;
 
+    console.log(`📄 [PDF] Uploading to storage: ${storagePath}`);
+
     // Upload to Supabase Storage
     const { error: uploadErr } = await supabase.storage.from('invoices').upload(storagePath, pdfBuffer, {
       contentType: 'application/pdf', upsert: true,
     });
-    if (uploadErr) { console.error('PDF upload error:', uploadErr); return c.json({ error: 'upload_failed' }, 500); }
+    if (uploadErr) {
+      console.error('📄 [PDF] Upload error:', uploadErr);
+      return c.json({ error: 'upload_failed', detail: uploadErr.message }, 500);
+    }
 
     const { data: publicUrl } = supabase.storage.from('invoices').getPublicUrl(storagePath);
+    console.log(`📄 [PDF] Public URL: ${publicUrl.publicUrl}`);
 
     // Save to attachments table
     try {
@@ -2584,7 +2597,10 @@ app.post('/api/invoices/:invoice_id/pdf', async (c) => {
         file_name: fileName, mime_type: 'application/pdf',
         storage_path: storagePath, public_url: publicUrl.publicUrl,
       });
-    } catch (attErr) { console.warn('Attachment record failed:', attErr); }
+      console.log(`📄 [PDF] Attachment record saved`);
+    } catch (attErr) {
+      console.warn('📄 [PDF] Attachment record failed:', attErr);
+    }
 
     return c.json({ pdf_url: publicUrl.publicUrl, attachment_id: null });
   } catch (error) {
@@ -2610,48 +2626,71 @@ app.post('/api/invoices/:invoice_id/share', async (c) => {
 
     if (channel === 'app') {
       // Send invoice card to chat
+      console.log(`📱 [SHARE] Sharing to app for invoice: ${invoiceId}`);
       const { data: conv } = await supabase.from('conversations').select('id')
         .eq('organisation_id', organisationId).eq('entity_type', 'customer')
         .eq('entity_id', invoice.customer_id).eq('status', 'active').maybeSingle();
-      if (conv) {
-        // Fetch items summary
-        const { data: items } = await supabase.from('invoice_items').select('description, quantity').eq('invoice_id', invoiceId).limit(3);
-        const itemsSummary = (items || []).map(i => `${i.description} × ${i.quantity}`).join(', ');
-
-        // Get PDF URL
-        const { data: attachment } = await supabase.from('attachments').select('public_url')
-          .eq('entity_type', 'invoice').eq('entity_id', invoiceId).order('created_at', { ascending: false }).limit(1).maybeSingle();
-
-        const { data: msg } = await supabase.from('messages').insert({
-          organisation_id: organisationId, conversation_id: conv.id,
-          role: 'tool', content: `Invoice #${invoice.invoice_number} created`,
-          metadata: {
-            sender_type: 'system', visibility: 'both', message_type: 'invoice_card',
-            read_by_owner: true, preview_text: `Invoice #${invoice.invoice_number} - ₹${invoice.total_amount}`,
-            card_type: 'invoice_card',
-            card_data: {
-              invoice_id: invoiceId, invoice_number: invoice.invoice_number,
-              total_amount: invoice.total_amount, due_date: invoice.due_date,
-              status: invoice.status, items_summary: itemsSummary,
-              pdf_url: attachment?.public_url || null,
-            },
-          },
-          tokens_input: 0, tokens_output: 0,
-        }).select('id').single();
-        return c.json({ shared: true, message_id: msg?.id });
+      
+      if (!conv) {
+        console.error(`📱 [SHARE] No active conversation found for customer: ${invoice.customer_id}`);
+        return c.json({ shared: false, message_id: null, error: 'no_conversation' });
       }
-      return c.json({ shared: false, message_id: null });
+      
+      console.log(`📱 [SHARE] Found conversation: ${conv.id}`);
+      
+      // Fetch items summary
+      const { data: items } = await supabase.from('invoice_items').select('description, quantity').eq('invoice_id', invoiceId).limit(3);
+      const itemsSummary = (items || []).map(i => `${i.description} × ${i.quantity}`).join(', ');
 
-    } else if (channel === 'whatsapp') {
-      const phone = (customer?.phone || '').replace(/[^0-9]/g, '');
       // Get PDF URL
       const { data: attachment } = await supabase.from('attachments').select('public_url')
         .eq('entity_type', 'invoice').eq('entity_id', invoiceId).order('created_at', { ascending: false }).limit(1).maybeSingle();
+
+      console.log(`📱 [SHARE] PDF URL: ${attachment?.public_url || 'None'}`);
+
+      const { data: msg, error: msgErr } = await supabase.from('messages').insert({
+        organisation_id: organisationId, conversation_id: conv.id,
+        role: 'tool', content: `Invoice #${invoice.invoice_number} created`,
+        metadata: {
+          sender_type: 'system', visibility: 'both', message_type: 'invoice_card',
+          read_by_owner: true, preview_text: `Invoice #${invoice.invoice_number} - ₹${invoice.total_amount}`,
+          card_type: 'invoice_card',
+          card_data: {
+            invoice_id: invoiceId, invoice_number: invoice.invoice_number,
+            total_amount: invoice.total_amount, due_date: invoice.due_date,
+            status: invoice.status, items_summary: itemsSummary,
+            pdf_url: attachment?.public_url || null,
+          },
+        },
+        tokens_input: 0, tokens_output: 0,
+      }).select('id').single();
+      
+      if (msgErr) {
+        console.error(`📱 [SHARE] Message insert error:`, msgErr);
+        return c.json({ shared: false, error: msgErr.message }, 500);
+      }
+      
+      console.log(`📱 [SHARE] Message created: ${msg?.id}`);
+      return c.json({ shared: true, message_id: msg?.id });
+
+    } else if (channel === 'whatsapp') {
+      console.log(`💬 [WHATSAPP] Sharing invoice: ${invoiceId}`);
+      const phone = (customer?.phone || '').replace(/[^0-9]/g, '');
+      console.log(`💬 [WHATSAPP] Customer phone: ${phone}`);
+      
+      // Get PDF URL
+      const { data: attachment } = await supabase.from('attachments').select('public_url')
+        .eq('entity_type', 'invoice').eq('entity_id', invoiceId).order('created_at', { ascending: false }).limit(1).maybeSingle();
+      
       const pdfLink = attachment?.public_url ? `\n📄 ${attachment.public_url}` : '';
+      console.log(`💬 [WHATSAPP] PDF link: ${pdfLink || 'None'}`);
+      
       const text = encodeURIComponent(
         `Hi ${customer?.name || 'there'}, here's your invoice #${invoice.invoice_number} for ₹${(invoice.total_amount || 0).toLocaleString('en-IN')}.\n\nBill generated by AssistMe. Download AssistMe: https://assistme.app${pdfLink}`
       );
-      return c.json({ shared: true, whatsapp_url: `https://wa.me/${phone}?text=${text}` });
+      const waUrl = `https://wa.me/${phone}?text=${text}`;
+      console.log(`💬 [WHATSAPP] WhatsApp URL generated`);
+      return c.json({ shared: true, whatsapp_url: waUrl });
     }
 
     return c.json({ error: 'invalid_channel' }, 400);
