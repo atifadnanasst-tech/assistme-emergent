@@ -83,6 +83,39 @@ export default function CustomerChatScreen() {
   // ── Load conversation ──────────────────────────────────────
   useEffect(() => { loadChat(); }, [customer_id]);
 
+  // ── Supabase Realtime subscription ─────────────────────────
+  useEffect(() => {
+    if (!conversationId) return;
+
+    const channel = supabase
+      .channel(`chat-${conversationId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'messages',
+          filter: `conversation_id=eq.${conversationId}`,
+        },
+        (payload) => {
+          const newMsg = payload.new as ChatMessage;
+          setMessages((prev) => {
+            const alreadyExists = prev.some((m) => m.id === newMsg.id);
+            if (alreadyExists) return prev;
+            return [...prev, newMsg];
+          });
+          setTimeout(() => {
+            flatListRef.current?.scrollToEnd({ animated: true });
+          }, 100);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [conversationId]);
+
   useEffect(() => {
     const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
     const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
