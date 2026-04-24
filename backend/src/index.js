@@ -12,7 +12,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 // Load environment variables
-dotenv.config({ path: '/app/backend/.env' });
+dotenv.config(); // loads .env from current working directory - works on all environments
 
 // Initialize Supabase client with service role key (backend only)
 const supabaseUrl = process.env.SUPABASE_URL;
@@ -150,8 +150,9 @@ app.post('/api/auth/setup-session', async (c) => {
           .single();
 
         if (createUserError) {
-          // Rollback: delete the organisation
+          // Rollback: delete organisation and auth user
           await supabase.from('organisations').delete().eq('id', organisationId);
+          await supabase.auth.admin.deleteUser(authId);
           console.error('User creation failed, rolled back organisation:', createUserError);
           return c.json({ error: 'setup_failed', message: 'User creation failed' }, 500);
         }
@@ -175,14 +176,13 @@ app.post('/api/auth/setup-session', async (c) => {
 
         const { error: tagsError } = await supabase
           .from('tags')
-          .insert(tagsToInsert)
-          .onConflict('organisation_id, name')
-          .ignoreDuplicates();
+          .upsert(tagsToInsert, { onConflict: 'organisation_id,name', ignoreDuplicates: true });
 
         if (tagsError) {
-          // Rollback: delete user and organisation
+          // Rollback: delete user, organisation and auth user
           await supabase.from('users').delete().eq('id', userId);
           await supabase.from('organisations').delete().eq('id', organisationId);
+          await supabase.auth.admin.deleteUser(authId);
           console.error('Tags creation failed, rolled back:', tagsError);
           return c.json({ error: 'setup_failed', message: 'Tags creation failed' }, 500);
         }
@@ -197,6 +197,10 @@ app.post('/api/auth/setup-session', async (c) => {
 
       } catch (err) {
         console.error('Setup attempt error:', err);
+        // Rollback everything on unexpected error
+        if (userId) await supabase.from('users').delete().eq('id', userId);
+        if (organisationId) await supabase.from('organisations').delete().eq('id', organisationId);
+        await supabase.auth.admin.deleteUser(authId);
         attempt++;
       }
     }
@@ -784,19 +788,7 @@ app.get('/api/chat/:customer_id', async (c) => {
 
         if (unreadMsgs && unreadMsgs.length > 0) {
           const unreadIds = unreadMsgs.map(m => m.id);
-          await supabase.rpc('exec_sql', {
-            query: `UPDATE messages SET metadata = jsonb_set(metadata, '{read_by_owner}', 'true') WHERE id = ANY($1)`,
-            params: [unreadIds],
-          }).catch(async () => {
-            // RPC may not exist — fall back to per-row update
-            for (const msg of unreadMsgs) {
-              await supabase
-                .from('messages')
-                .update({ metadata: supabase.rpc ? undefined : undefined })
-                .eq('id', msg.id);
-            }
-          });
-          // Reliable fallback: individual updates using Supabase client
+          // Update read_by_owner per row using Supabase client
           for (const uid of unreadIds) {
             const { data: row } = await supabase.from('messages').select('metadata').eq('id', uid).single();
             if (row) {
@@ -3397,7 +3389,7 @@ if (supabase) {
 }
 
 // Start server
-const port = 8001;
+const port = process.env.PORT ? parseInt(process.env.PORT) : 3000;
 console.log(`🚀 Backend server running on http://0.0.0.0:${port}`);
 
 serve({
