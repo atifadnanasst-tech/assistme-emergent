@@ -22,7 +22,7 @@ let supabase = null;
 
 if (!supabaseUrl || !supabaseServiceKey || supabaseUrl.includes('your_supabase')) {
   console.warn('⚠️  Supabase credentials not configured. Some features will be unavailable.');
-  console.warn('⚠️  Configure SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in /app/backend/.env');
+  console.warn('⚠️  Configure SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in your .env file');
 } else {
   supabase = createClient(supabaseUrl, supabaseServiceKey);
   console.log('✅ Supabase client initialized');
