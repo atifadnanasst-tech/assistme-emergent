@@ -7,7 +7,9 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import * as Contacts from 'expo-contacts';
+// expo-contacts loaded dynamically to avoid crash on APKs without native module
+let Contacts: any = null;
+try { Contacts = require('expo-contacts'); } catch { Contacts = null; }
 import { useAuth } from '../../contexts/AuthContext';
 import { supabase } from '../../lib/supabase';
 import { authService } from '../../lib/auth';
@@ -61,9 +63,13 @@ export default function NewChatScreen() {
   }, []);
 
   const requestContactsPermission = async () => {
+    if (!Contacts) {
+      setContactsPermission('denied');
+      return;
+    }
     try {
       const { status } = await Contacts.requestPermissionsAsync();
-      setContactsPermission(status);
+      setContactsPermission(status as 'granted' | 'denied' | 'undetermined');
       if (status === 'granted') {
         loadDeviceContacts();
       }
