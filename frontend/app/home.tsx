@@ -10,7 +10,7 @@ import {
   ActivityIndicator,
   Modal,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../contexts/AuthContext';
@@ -54,6 +54,7 @@ export default function HomeScreen() {
   const router = useRouter();
   const { setIsAuthenticated } = useAuth();
   
+  const insets = useSafeAreaInsets();
   const [homeData, setHomeData] = useState<HomeData | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -519,7 +520,7 @@ export default function HomeScreen() {
             <View style={styles.sheetHandle} />
             <Text style={styles.sheetTitle}>Settings & more</Text>
             
-            <ScrollView style={styles.sheetContent}>
+            <ScrollView style={styles.sheetContent} contentContainerStyle={{ paddingBottom: insets.bottom + 16 }}>
               <TouchableOpacity style={styles.sheetItem} onPress={() => { setShowToolsSheet(false); router.push('/settings/profile'); }}>
                 <Ionicons name="briefcase-outline" size={24} color="#667781" />
                 <Text style={styles.sheetItemText}>Business profile</Text>
