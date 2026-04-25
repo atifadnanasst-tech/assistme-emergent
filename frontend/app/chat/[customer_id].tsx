@@ -22,6 +22,7 @@ interface ChatMessage {
   sender_type: string | null; visibility: string; message_type: string;
   card_type: string | null; card_data: Record<string, any>;
   preview_text: string | null;
+  delivery_status?: 'sent' | 'delivered' | 'read';
 }
 
 export default function CustomerChatScreen() {
@@ -173,6 +174,7 @@ setTimeout(() => {
       created_at: new Date().toISOString(), sender_type: 'owner',
       visibility: 'both', message_type: 'text', card_type: null,
       card_data: {}, preview_text: text.substring(0, 50),
+      delivery_status: 'sent',
     };
     setMessages(prev => [...prev, optimistic]);
     setSending(true);
@@ -196,7 +198,7 @@ setTimeout(() => {
       if (res.ok) {
         const data = await res.json();
         setMessages(prev => prev.map(m =>
-          m.id === tempId ? { ...m, id: data.message_id, created_at: data.created_at } : m
+          m.id === tempId ? { ...m, id: data.message_id, created_at: data.created_at, delivery_status: 'delivered' } : m
         ));
       } else {
         setMessages(prev => prev.filter(m => m.id !== tempId));
@@ -463,7 +465,15 @@ setTimeout(() => {
         <Text style={styles.outgoingText}>{msg.content}</Text>
         <View style={styles.outgoingTimeRow}>
           <Text style={styles.outgoingTime}>{formatTime(msg.created_at)}</Text>
-          <Ionicons name="checkmark-done" size={14} color="#53BDEB" style={{ marginLeft: 4 }} />
+          {msg.delivery_status === 'sent' && (
+            <Ionicons name="checkmark" size={14} color="#8E9EA8" style={{ marginLeft: 4 }} />
+          )}
+          {msg.delivery_status === 'delivered' && (
+            <Ionicons name="checkmark-done" size={14} color="#8E9EA8" style={{ marginLeft: 4 }} />
+          )}
+          {(msg.delivery_status === 'read' || !msg.delivery_status) && (
+            <Ionicons name="checkmark-done" size={14} color="#53BDEB" style={{ marginLeft: 4 }} />
+          )}
         </View>
       </View>
     </View>
