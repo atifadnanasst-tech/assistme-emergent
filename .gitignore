@@ -85,3 +85,5 @@ frontend/.env.bak
 backend/.env
 backend/package-lock.json
 frontend/assets/images/favicon.png
+
+frontend/package-lock.json
