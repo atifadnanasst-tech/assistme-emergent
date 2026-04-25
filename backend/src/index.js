@@ -591,6 +591,78 @@ app.post('/api/auth/sign-out', async (c) => {
   }
 });
 
+// ─── POST /api/customers ────────────────────────────────────
+app.post('/api/customers', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { userId, organisationId } = auth;
+
+    const body = await c.req.json().catch(() => ({}));
+    const { name, phone, business_name, opening_balance } = body;
+
+    if (!name?.trim()) return c.json({ error: 'validation', message: 'Name is required' }, 400);
+    if (!phone) return c.json({ error: 'validation', message: 'Phone is required' }, 400);
+
+    const normalizedPhone = String(phone).replace(/\D/g, '');
+    if (normalizedPhone.length < 10) return c.json({ error: 'validation', message: 'Invalid phone number' }, 400);
+
+    // Check for duplicate
+    const { data: existing } = await supabase
+      .from('customers')
+      .select('id')
+      .eq('organisation_id', organisationId)
+      .eq('phone', normalizedPhone)
+      .maybeSingle();
+
+    if (existing) {
+      console.log('[ADD CUSTOMER] Duplicate found:', existing.id);
+      return c.json({ error: 'duplicate', customer_id: existing.id }, 409);
+    }
+
+    // Generate avatar color
+    const colors = ['#E53935','#8E24AA','#1E88E5','#43A047','#F57C00','#00897B'];
+    const avatar_color = colors[Math.floor(Math.random() * colors.length)];
+
+    // Create customer
+    const { data: newCustomer, error: customerError } = await supabase
+      .from('customers')
+      .insert({
+        organisation_id: organisationId,
+        name: name.trim(),
+        phone: normalizedPhone,
+        company: business_name || null,
+        currency: 'INR',
+        outstanding_balance: opening_balance || 0,
+        status: 'active',
+        custom_fields: { avatar_color }
+      })
+      .select('id')
+      .single();
+
+    if (customerError) {
+      console.error('[ADD CUSTOMER] Insert error:', customerError);
+      return c.json({ error: 'server_error' }, 500);
+    }
+
+    // Create conversation
+    await supabase.from('conversations').insert({
+      organisation_id: organisationId,
+      user_id: userId,
+      entity_type: 'customer',
+      entity_id: newCustomer.id,
+      model: 'gpt-4o-mini',
+      status: 'active'
+    });
+
+    console.log('[ADD CUSTOMER] Created:', newCustomer.id);
+    return c.json({ success: true, customer_id: newCustomer.id }, 201);
+  } catch (err) {
+    console.error('[ADD CUSTOMER] Error:', err);
+    return c.json({ error: 'server_error' }, 500);
+  }
+});
+
 // Create Custom Filter Tab
 app.post('/api/tags', async (c) => {
   try {
