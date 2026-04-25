@@ -79,4 +79,9 @@ agenthub/agents/youtube/db
 memory/test_credentials.md
 
 # Mobile development
-android-sdk/
+android-sdk/frontend/.metro-cache/
+frontend/.env
+frontend/.env.bak
+backend/.env
+backend/package-lock.json
+frontend/assets/images/favicon.png
