@@ -520,7 +520,7 @@ export default function HomeScreen() {
             <View style={styles.sheetHandle} />
             <Text style={styles.sheetTitle}>Settings & more</Text>
             
-            <ScrollView style={styles.sheetContent} contentContainerStyle={{ paddingBottom: insets.bottom + 16 }}>
+            <ScrollView style={styles.sheetContent} contentContainerStyle={{ paddingBottom: insets.bottom + 48 }}>
               <TouchableOpacity style={styles.sheetItem} onPress={() => { setShowToolsSheet(false); router.push('/settings/profile'); }}>
                 <Ionicons name="briefcase-outline" size={24} color="#667781" />
                 <Text style={styles.sheetItemText}>Business profile</Text>
