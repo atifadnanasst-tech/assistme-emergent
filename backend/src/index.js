@@ -900,7 +900,7 @@ app.post('/api/chat/:customer_id/message', async (c) => {
   try {
     const auth = await authenticateChat(c);
     if (!auth) return c.json({ error: 'unauthorized' }, 401);
-    const { organisationId } = auth;
+    const { organisationId, userId } = auth;
     const customerId = c.req.param('customer_id');
 
     const customer = await validateCustomer(customerId, organisationId);
@@ -948,6 +948,89 @@ app.post('/api/chat/:customer_id/message', async (c) => {
     if (saveErr) {
       console.error('Save owner message error:', saveErr);
       return c.json({ error: 'server_error' }, 500);
+    }
+
+    // ─── CROSS-ORG ROUTING ────────────────────────────────────────
+    // After saving message to sender's org, check if receiver is also an AssistMe user
+    const customerPhone = customer?.phone;
+    const savedMessageId = savedMsg.id;
+
+    if (customerPhone) {
+      try {
+        // Look up if any AssistMe user has this phone number
+        const { data: receiverUser } = await supabase
+          .from('users')
+          .select('id, organisation_id')
+          .eq('phone', customerPhone)
+          .maybeSingle();
+
+        if (receiverUser && receiverUser.organisation_id !== organisationId) {
+          // Receiver is an AssistMe user in a different org
+          // Find or create a conversation in their org for the sender's phone
+          
+          // Get sender's phone to identify them in receiver's org
+          const { data: senderUser } = await supabase
+            .from('users')
+            .select('phone')
+            .eq('id', userId)
+            .maybeSingle();
+
+          if (senderUser?.phone) {
+            // Find the customer record in receiver's org that matches sender's phone
+            const { data: senderAsCustomer } = await supabase
+              .from('customers')
+              .select('id')
+              .eq('organisation_id', receiverUser.organisation_id)
+              .eq('phone', senderUser.phone)
+              .maybeSingle();
+
+            if (senderAsCustomer) {
+              // Find existing conversation in receiver's org for this customer
+              const { data: receiverConversation } = await supabase
+                .from('conversations')
+                .select('id')
+                .eq('organisation_id', receiverUser.organisation_id)
+                .eq('entity_type', 'customer')
+                .eq('entity_id', senderAsCustomer.id)
+                .eq('status', 'active')
+                .maybeSingle();
+
+              if (receiverConversation) {
+                // Insert the message into receiver's org
+                await supabase.from('messages').insert({
+                  organisation_id: receiverUser.organisation_id,
+                  conversation_id: receiverConversation.id,
+                  role: 'user',
+                  content,
+                  metadata: {
+                    sender_type: 'customer',
+                    message_type: 'text',
+                    visibility: 'both',
+                    preview_text: previewText,
+                    read_by_owner: false,
+                    cross_org: true,
+                    sender_org_id: organisationId,
+                  },
+                  delivery_status: 'delivered',
+                  tokens_input: 0,
+                  tokens_output: 0,
+                });
+
+                console.log('[CROSS-ORG] Message routed to org:', receiverUser.organisation_id);
+
+                // Update delivery_status of original message to 'delivered'
+                await supabase
+                  .from('messages')
+                  .update({ delivery_status: 'delivered' })
+                  .eq('id', savedMessageId);
+              }
+            }
+          }
+        }
+      } catch (crossOrgError) {
+        // Cross-org routing failure must NEVER break the main message flow
+        console.error('[CROSS-ORG] Routing error (non-fatal):', crossOrgError);
+      }
     }
 
     return c.json({ message_id: savedMsg.id, created_at: savedMsg.created_at });
