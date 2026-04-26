@@ -70,11 +70,14 @@ app.post('/api/auth/setup-session', async (c) => {
     }
 
     const authId = userData.user.id;
-    const phone = userData.user.phone;
+    const rawPhone = userData.user.phone;
 
-    if (!phone) {
+    if (!rawPhone) {
       return c.json({ error: 'setup_failed', message: 'Phone number not found in token' }, 500);
     }
+    // Normalize to full number without + (E.164 without plus)
+    let phone = rawPhone.replace(/\D/g, '');
+    if (phone.length === 10) phone = '91' + phone;
 
     // Check if user already exists
     const { data: existingUser, error: userCheckError } = await supabase
@@ -604,8 +607,9 @@ app.post('/api/customers', async (c) => {
     if (!name?.trim()) return c.json({ error: 'validation', message: 'Name is required' }, 400);
     if (!phone) return c.json({ error: 'validation', message: 'Phone is required' }, 400);
 
-    const normalizedPhone = String(phone).replace(/\D/g, '');
+    let normalizedPhone = String(phone).replace(/\D/g, '');
     if (normalizedPhone.length < 10) return c.json({ error: 'validation', message: 'Invalid phone number' }, 400);
+    if (normalizedPhone.length === 10) normalizedPhone = '91' + normalizedPhone;
 
     // Check for duplicate
     const { data: existing } = await supabase
@@ -954,15 +958,17 @@ app.post('/api/chat/:customer_id/message', async (c) => {
     // After saving message to sender's org, check if receiver is also an AssistMe user
     const customerPhone = customer?.phone;
     const savedMessageId = savedMsg.id;
+    const normalizePhone = (p) => p ? p.replace(/\D/g, '').padStart(12, '').slice(-12).replace(/^0+/, '') : null;
 
     if (customerPhone) {
       try {
+        const normalizedCustomerPhone = normalizePhone(customerPhone);
         // Look up if any AssistMe user has this phone number
-        const { data: receiverUser } = await supabase
+        const { data: allUsers } = await supabase
           .from('users')
-          .select('id, organisation_id')
-          .eq('phone', customerPhone)
-          .maybeSingle();
+          .select('id, organisation_id, phone')
+          .neq('organisation_id', organisationId);
+        const receiverUser = (allUsers || []).find(u => normalizePhone(u.phone) === normalizedCustomerPhone) || null;
 
         if (receiverUser && receiverUser.organisation_id !== organisationId) {
           // Receiver is an AssistMe user in a different org
@@ -976,13 +982,13 @@ app.post('/api/chat/:customer_id/message', async (c) => {
             .maybeSingle();
 
           if (senderUser?.phone) {
+            const normalizedSenderPhone = normalizePhone(senderUser.phone);
             // Find the customer record in receiver's org that matches sender's phone
-            const { data: senderAsCustomer } = await supabase
+            const { data: allReceiverCustomers } = await supabase
               .from('customers')
-              .select('id')
-              .eq('organisation_id', receiverUser.organisation_id)
-              .eq('phone', senderUser.phone)
-              .maybeSingle();
+              .select('id, phone')
+              .eq('organisation_id', receiverUser.organisation_id);
+            const senderAsCustomer = (allReceiverCustomers || []).find(c => normalizePhone(c.phone) === normalizedSenderPhone) || null;
 
             if (senderAsCustomer) {
               // Find existing conversation in receiver's org for this customer
