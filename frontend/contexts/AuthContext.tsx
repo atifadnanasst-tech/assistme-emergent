@@ -25,6 +25,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       console.log('🔍 [AUTH_CONTEXT] Token check:', token ? 'Token found' : 'No token');
       
       if (token) {
+        // Restore session into Supabase client from stored tokens
+        try {
+          const refreshToken = await authService.getRefreshToken();
+          if (refreshToken) {
+            await supabase.auth.setSession({ access_token: token, refresh_token: refreshToken });
+          }
+        } catch (e) {
+          console.warn('🔄 [AUTH_CONTEXT] Session restore failed:', e);
+        }
         // Validate session with Supabase
         const isValid = await authService.isSessionValid();
         console.log('🔍 [AUTH_CONTEXT] Session validity:', isValid);
