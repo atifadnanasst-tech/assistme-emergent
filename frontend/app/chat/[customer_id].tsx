@@ -632,7 +632,7 @@ setTimeout(() => {
   return (
     <KeyboardAvoidingView
       style={styles.flex1}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      behavior="padding"
       keyboardVerticalOffset={0}
     >
       {/* Header */}
@@ -739,7 +739,7 @@ setTimeout(() => {
       {/* Input bar — different for each tab */}
       {activeTab === 'broadcast' ? null : activeTab === 'ai' ? (
         /* AI Messages input */
-        <View style={[styles.inputBarWrapper, { paddingBottom: keyboardVisible ? 0 : insets.bottom }]}>
+        <View style={[styles.inputBarWrapper, { paddingBottom: insets.bottom }]}>
           {aiQuerying && (
             <View style={styles.sparkProcessingBar}>
               <ActivityIndicator size="small" color="#075E54" />
@@ -774,7 +774,7 @@ setTimeout(() => {
         </View>
       ) : (
         /* Direct Messages input */
-        <View style={[styles.inputBarWrapper, { paddingBottom: keyboardVisible ? 0 : insets.bottom }]}>
+        <View style={[styles.inputBarWrapper, { paddingBottom: insets.bottom }]}>
           {sparkProcessing && (
             <View style={styles.sparkProcessingBar}>
               <ActivityIndicator size="small" color="#075E54" />
