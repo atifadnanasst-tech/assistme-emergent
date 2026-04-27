@@ -988,11 +988,35 @@ app.post('/api/chat/:customer_id/message', async (c) => {
               .from('customers')
               .select('id, phone')
               .eq('organisation_id', receiverUser.organisation_id);
-            const senderAsCustomer = (allReceiverCustomers || []).find(c => normalizePhone(c.phone) === normalizedSenderPhone) || null;
+            let senderAsCustomer = (allReceiverCustomers || []).find(c => normalizePhone(c.phone) === normalizedSenderPhone) || null;
+
+            // Auto-create sender as customer in receiver's org if not exists (WhatsApp behaviour)
+            if (!senderAsCustomer) {
+              const senderName = customer?.name || senderUser.phone;
+              const avatarColors = ['#E53935','#8E24AA','#1E88E5','#43A047','#F57C00','#00897B'];
+              const avatarColor = avatarColors[Math.floor(Math.random() * avatarColors.length)];
+              const { data: newCustomer } = await supabase
+                .from('customers')
+                .insert({
+                  organisation_id: receiverUser.organisation_id,
+                  name: senderName,
+                  phone: normalizedSenderPhone,
+                  currency: 'INR',
+                  outstanding_balance: 0,
+                  status: 'active',
+                  custom_fields: { avatar_color: avatarColor, cross_org: true },
+                })
+                .select('id')
+                .single();
+              if (newCustomer) {
+                senderAsCustomer = newCustomer;
+                console.log('[CROSS-ORG] Auto-created customer in receiver org:', newCustomer.id);
+              }
+            }
 
             if (senderAsCustomer) {
-              // Find existing conversation in receiver's org for this customer
-              const { data: receiverConversation } = await supabase
+              // Find or create conversation in receiver's org
+              let { data: receiverConversation } = await supabase
                 .from('conversations')
                 .select('id')
                 .eq('organisation_id', receiverUser.organisation_id)
@@ -1001,8 +1025,25 @@ app.post('/api/chat/:customer_id/message', async (c) => {
                 .eq('status', 'active')
                 .maybeSingle();
 
+              // Auto-create conversation if not exists (WhatsApp behaviour)
+              if (!receiverConversation) {
+                const { data: newConv } = await supabase
+                  .from('conversations')
+                  .insert({
+                    organisation_id: receiverUser.organisation_id,
+                    user_id: receiverUser.id,
+                    entity_type: 'customer',
+                    entity_id: senderAsCustomer.id,
+                    model: 'gpt-4o-mini',
+                    status: 'active',
+                  })
+                  .select('id')
+                  .single();
+                receiverConversation = newConv;
+                console.log('[CROSS-ORG] Auto-created conversation in receiver org:', newConv?.id);
+              }
+
               if (receiverConversation) {
-                // Insert the message into receiver's org
                 await supabase.from('messages').insert({
                   organisation_id: receiverUser.organisation_id,
                   conversation_id: receiverConversation.id,
@@ -1024,7 +1065,6 @@ app.post('/api/chat/:customer_id/message', async (c) => {
 
                 console.log('[CROSS-ORG] Message routed to org:', receiverUser.organisation_id);
 
-                // Update delivery_status of original message to 'delivered'
                 await supabase
                   .from('messages')
                   .update({ delivery_status: 'delivered' })
