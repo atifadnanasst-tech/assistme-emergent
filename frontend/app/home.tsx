@@ -66,6 +66,39 @@ export default function HomeScreen() {
     loadHomeData();
   }, []);
 
+  // ── Supabase Realtime subscription for home updates ─────────
+  useEffect(() => {
+    let channel: any = null;
+
+    const setupRealtime = async () => {
+      const orgId = await authService.getOrganisationId();
+      if (!orgId) return;
+
+      channel = supabase
+        .channel(`home-${orgId}`)
+        .on(
+          'postgres_changes',
+          {
+            event: 'INSERT',
+            schema: 'public',
+            table: 'messages',
+            filter: `organisation_id=eq.${orgId}`,
+          },
+          () => {
+            console.log('[REALTIME] New message received, refreshing home...');
+            loadHomeData(activeTab === 'all' ? undefined : activeTab || undefined);
+          }
+        )
+        .subscribe();
+    };
+
+    setupRealtime();
+
+    return () => {
+      if (channel) supabase.removeChannel(channel);
+    };
+  }, []);
+
   const loadHomeData = async (filterTab?: string) => {
     try {
       const token = await authService.getAccessToken();
