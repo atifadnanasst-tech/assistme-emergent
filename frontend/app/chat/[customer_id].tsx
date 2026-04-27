@@ -466,13 +466,13 @@ setTimeout(() => {
         <View style={styles.outgoingTimeRow}>
           <Text style={styles.outgoingTime}>{formatTime(msg.created_at)}</Text>
           {msg.delivery_status === 'sent' && (
-            <Ionicons name="checkmark" size={14} color="#8E9EA8" style={{ marginLeft: 4 }} />
+            <Ionicons name="checkmark" size={16} color="#8696A0" style={{ marginLeft: 4 }} />
           )}
           {msg.delivery_status === 'delivered' && (
-            <Ionicons name="checkmark-done" size={14} color="#8E9EA8" style={{ marginLeft: 4 }} />
+            <Ionicons name="checkmark-done" size={16} color="#8696A0" style={{ marginLeft: 4 }} />
           )}
           {(msg.delivery_status === 'read' || !msg.delivery_status) && (
-            <Ionicons name="checkmark-done" size={14} color="#53BDEB" style={{ marginLeft: 4 }} />
+            <Ionicons name="checkmark-done" size={16} color="#53BDEB" style={{ marginLeft: 4 }} />
           )}
         </View>
       </View>
@@ -632,8 +632,8 @@ setTimeout(() => {
   return (
     <KeyboardAvoidingView
       style={styles.flex1}
-      behavior="padding"
-      keyboardVerticalOffset={0}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
     >
       {/* Header */}
       <SafeAreaView style={styles.safeTop} edges={['top']}>
@@ -729,17 +729,10 @@ setTimeout(() => {
         })()}
       </View>
 
-      {/* Spark FAB — only on Direct Messages tab */}
-      {activeTab === 'direct' && !sparkMode && !sparkProcessing && inputText.trim().length === 0 && (
-        <TouchableOpacity style={[styles.sparkFab, { bottom: 68 + (keyboardVisible ? 0 : insets.bottom) }]} onPress={() => setSparkMode(true)}>
-          <Ionicons name="sparkles" size={22} color="#FFF" />
-        </TouchableOpacity>
-      )}
-
       {/* Input bar — different for each tab */}
       {activeTab === 'broadcast' ? null : activeTab === 'ai' ? (
         /* AI Messages input */
-        <View style={[styles.inputBarWrapper, { paddingBottom: insets.bottom }]}>
+        <View style={[styles.inputBarWrapper, { paddingBottom: keyboardVisible ? 0 : insets.bottom }]}>
           {aiQuerying && (
             <View style={styles.sparkProcessingBar}>
               <ActivityIndicator size="small" color="#075E54" />
@@ -774,7 +767,15 @@ setTimeout(() => {
         </View>
       ) : (
         /* Direct Messages input */
-        <View style={[styles.inputBarWrapper, { paddingBottom: insets.bottom }]}>
+        <>
+          {activeTab === 'direct' && !sparkMode && !sparkProcessing && inputText.trim().length === 0 && (
+            <View style={styles.sparkFabRow}>
+              <TouchableOpacity style={styles.sparkFab} onPress={() => setSparkMode(true)}>
+                <Ionicons name="sparkles" size={22} color="#FFF" />
+              </TouchableOpacity>
+            </View>
+          )}
+          <View style={[styles.inputBarWrapper, { paddingBottom: keyboardVisible ? 0 : insets.bottom }]}>
           {sparkProcessing && (
             <View style={styles.sparkProcessingBar}>
               <ActivityIndicator size="small" color="#075E54" />
@@ -830,6 +831,7 @@ setTimeout(() => {
             )}
           </View>
         </View>
+        </>
       )}
 
       {/* 3-dot menu overlay */}
@@ -1212,12 +1214,24 @@ const styles = StyleSheet.create({
   sparkSendBtn: {
     backgroundColor: '#00796B',
   },
+  sparkFabRow: {
+    alignItems: 'flex-end',
+    paddingRight: 16,
+    paddingBottom: 4,
+    backgroundColor: '#F0F2F5',
+  },
   sparkFab: {
-    position: 'absolute', right: 16, zIndex: 20,
-    width: 52, height: 52, borderRadius: 26, backgroundColor: '#075E54',
-    justifyContent: 'center', alignItems: 'center',
-    elevation: 6, shadowColor: '#000', shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.25, shadowRadius: 4,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#075E54',
+    justifyContent: 'center',
+    alignItems: 'center',
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
   },
   micBtn: {
     width: 44, height: 44, borderRadius: 22, backgroundColor: '#075E54',
