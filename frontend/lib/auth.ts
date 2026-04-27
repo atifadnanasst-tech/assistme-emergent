@@ -98,12 +98,17 @@ export const authService = {
   // Refresh session
   async refreshSession(): Promise<boolean> {
     try {
+      const storedAccess = await secureGet(TOKEN_KEY);
+      const storedRefresh = await secureGet(REFRESH_TOKEN_KEY);
+      if (!storedAccess || !storedRefresh) return false;
+      await supabase.auth.setSession({
+        access_token: storedAccess,
+        refresh_token: storedRefresh,
+      });
       const { data, error } = await supabase.auth.refreshSession();
       if (error || !data.session) {
         return false;
       }
-      
-      // Update stored tokens
       await secureSet(TOKEN_KEY, data.session.access_token);
       await secureSet(REFRESH_TOKEN_KEY, data.session.refresh_token);
       return true;
