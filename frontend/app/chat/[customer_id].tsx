@@ -466,13 +466,13 @@ setTimeout(() => {
         <View style={styles.outgoingTimeRow}>
           <Text style={styles.outgoingTime}>{formatTime(msg.created_at)}</Text>
           {msg.delivery_status === 'sent' && (
-            <Ionicons name="checkmark" size={16} color="#8696A0" style={{ marginLeft: 4 }} />
+            <Ionicons name="checkmark" size={20} color="#8696A0" style={{ marginLeft: 4 }} />
           )}
           {msg.delivery_status === 'delivered' && (
-            <Ionicons name="checkmark-done" size={16} color="#8696A0" style={{ marginLeft: 4 }} />
+            <Ionicons name="checkmark-done" size={20} color="#8696A0" style={{ marginLeft: 4 }} />
           )}
           {(msg.delivery_status === 'read' || !msg.delivery_status) && (
-            <Ionicons name="checkmark-done" size={16} color="#53BDEB" style={{ marginLeft: 4 }} />
+            <Ionicons name="checkmark-done" size={20} color="#53BDEB" style={{ marginLeft: 4 }} />
           )}
         </View>
       </View>
@@ -732,7 +732,7 @@ setTimeout(() => {
       {/* Input bar — different for each tab */}
       {activeTab === 'broadcast' ? null : activeTab === 'ai' ? (
         /* AI Messages input */
-        <View style={[styles.inputBarWrapper, { paddingBottom: keyboardVisible ? 0 : insets.bottom }]}>
+        <View style={[styles.inputBarWrapper, { paddingBottom: insets.bottom }]}>
           {aiQuerying && (
             <View style={styles.sparkProcessingBar}>
               <ActivityIndicator size="small" color="#075E54" />
@@ -768,14 +768,7 @@ setTimeout(() => {
       ) : (
         /* Direct Messages input */
         <>
-          {activeTab === 'direct' && !sparkMode && !sparkProcessing && inputText.trim().length === 0 && (
-            <View style={styles.sparkFabRow}>
-              <TouchableOpacity style={styles.sparkFab} onPress={() => setSparkMode(true)}>
-                <Ionicons name="sparkles" size={22} color="#FFF" />
-              </TouchableOpacity>
-            </View>
-          )}
-          <View style={[styles.inputBarWrapper, { paddingBottom: keyboardVisible ? 0 : insets.bottom }]}>
+          <View style={[styles.inputBarWrapper, { paddingBottom: insets.bottom }]}>
           {sparkProcessing && (
             <View style={styles.sparkProcessingBar}>
               <ActivityIndicator size="small" color="#075E54" />
@@ -825,9 +818,14 @@ setTimeout(() => {
                 {sending ? <ActivityIndicator size="small" color="#FFF" /> : <Ionicons name="send" size={20} color="#FFF" />}
               </TouchableOpacity>
             ) : (
-              <TouchableOpacity style={styles.micBtn}>
-                <Ionicons name="mic" size={22} color="#FFF" />
-              </TouchableOpacity>
+              <View style={{ position: 'relative' }}>
+                <TouchableOpacity style={styles.sparkFab} onPress={() => setSparkMode(true)}>
+                  <Ionicons name="sparkles" size={22} color="#FFF" />
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.micBtn}>
+                  <Ionicons name="mic" size={22} color="#FFF" />
+                </TouchableOpacity>
+              </View>
             )}
           </View>
         </View>
@@ -1183,8 +1181,8 @@ const styles = StyleSheet.create({
   invoiceActionDone: { color: '#999', fontSize: 14, marginTop: 10 },
 
   // Input bar
-  inputBarWrapper: { backgroundColor: '#F0F0F0' },
-  inputRow: { flexDirection: 'row', alignItems: 'flex-end', paddingVertical: 4, paddingHorizontal: 6, gap: 6, backgroundColor: '#F0F0F0' },
+  inputBarWrapper: { backgroundColor: '#ECE5DD' },
+  inputRow: { flexDirection: 'row', alignItems: 'flex-end', paddingVertical: 4, paddingHorizontal: 6, gap: 6, backgroundColor: '#ECE5DD' },
   inputPill: {
     flex: 1, flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF',
     borderRadius: 24, paddingHorizontal: 8, minHeight: 44,
@@ -1217,16 +1215,21 @@ const styles = StyleSheet.create({
   sparkFabRow: {
     alignItems: 'flex-end',
     paddingRight: 16,
-    paddingBottom: 4,
-    backgroundColor: '#F0F2F5',
+    paddingBottom: 0,
+    backgroundColor: 'transparent',
   },
   sparkFab: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+    position: 'absolute',
+    bottom: '100%',
+    marginBottom: 8,
+    right: 0,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     backgroundColor: '#075E54',
     justifyContent: 'center',
     alignItems: 'center',
+    zIndex: 10,
     elevation: 4,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
