@@ -992,7 +992,7 @@ app.post('/api/chat/:customer_id/message', async (c) => {
 
             // Auto-create sender as customer in receiver's org if not exists (WhatsApp behaviour)
             if (!senderAsCustomer) {
-              const senderName = customer?.name || senderUser.phone;
+              const senderName = senderUser.phone || 'Unknown';
               const avatarColors = ['#E53935','#8E24AA','#1E88E5','#43A047','#F57C00','#00897B'];
               const avatarColor = avatarColors[Math.floor(Math.random() * avatarColors.length)];
               const { data: newCustomer } = await supabase
