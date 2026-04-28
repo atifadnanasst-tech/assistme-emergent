@@ -529,8 +529,8 @@ app.get('/api/home', async (c) => {
         if (!unreadError && userMsgs) {
           unreadCount = userMsgs.filter(m => {
             const rbo = m.metadata?.read_by_owner;
-            // Unread = read_by_owner is absent, null, false, or string "false"
-            return rbo !== true && rbo !== 'true';
+            // Unread = only explicitly false (boolean or string) — ignore null/absent (old messages)
+            return rbo === false || rbo === 'false';
           }).length;
         }
 
@@ -876,7 +876,7 @@ app.get('/api/chat/:customer_id', async (c) => {
           .from('messages')
           .select('id')
           .eq('conversation_id', conversation.id)
-          .or('metadata->>read_by_owner.eq.false,metadata->>read_by_owner.is.null');
+          .eq('metadata->>read_by_owner', 'false');
 
         if (unreadMsgs && unreadMsgs.length > 0) {
           const unreadIds = unreadMsgs.map(m => m.id);
