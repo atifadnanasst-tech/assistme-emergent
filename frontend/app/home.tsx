@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -11,7 +11,7 @@ import {
   Modal,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { useRouter, useNavigation } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
@@ -62,20 +62,38 @@ export default function HomeScreen() {
   const [showThreeDotMenu, setShowThreeDotMenu] = useState(false);
   const [showToolsSheet, setShowToolsSheet] = useState(false);
 
+  const channelRef = useRef<any>(null);
+  const pollingRef = useRef<NodeJS.Timeout | null>(null);
+  const debounceRef = useRef<NodeJS.Timeout | null>(null);
+
+  const debouncedLoadHomeData = useCallback((tabId?: string) => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      loadHomeData(tabId);
+    }, 500);
+  }, []);
+
   useEffect(() => {
     loadHomeData();
   }, []);
 
-  // ── Supabase Realtime subscription for home updates ─────────
   useEffect(() => {
-    let channel: any = null;
-
     const setupRealtime = async () => {
       const orgId = await authService.getOrganisationId();
       if (!orgId) return;
 
-      channel = supabase
-        .channel(`home-${orgId}`)
+      if (channelRef.current) {
+        supabase.removeChannel(channelRef.current);
+      }
+
+      const tabForRefresh = activeTab === 'all' ? undefined : activeTab || undefined;
+
+      channelRef.current = supabase
+        .channel(`org-${orgId}`)
+        .on('broadcast', { event: 'message_created' }, () => {
+          console.log('[REALTIME] Broadcast received on home');
+          debouncedLoadHomeData(tabForRefresh);
+        })
         .on(
           'postgres_changes',
           {
@@ -85,19 +103,42 @@ export default function HomeScreen() {
             filter: `organisation_id=eq.${orgId}`,
           },
           () => {
-            console.log('[REALTIME] New message received, refreshing home...');
-            loadHomeData(activeTab === 'all' ? undefined : activeTab || undefined);
+            console.log('[REALTIME] postgres_changes received on home');
+            debouncedLoadHomeData(tabForRefresh);
           }
         )
         .subscribe();
+
+      pollingRef.current = setInterval(() => {
+        debouncedLoadHomeData(tabForRefresh);
+      }, 30000);
     };
 
     setupRealtime();
 
     return () => {
-      if (channel) supabase.removeChannel(channel);
+      if (channelRef.current) {
+        supabase.removeChannel(channelRef.current);
+        channelRef.current = null;
+      }
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+        pollingRef.current = null;
+      }
+      if (debounceRef.current) {
+        clearTimeout(debounceRef.current);
+      }
     };
   }, []);
+
+  const navigation = useNavigation();
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('focus', () => {
+      const tabForRefresh = activeTab === 'all' ? undefined : activeTab || undefined;
+      debouncedLoadHomeData(tabForRefresh);
+    });
+    return unsubscribe;
+  }, [navigation, activeTab]);
 
   const loadHomeData = async (filterTab?: string) => {
     try {

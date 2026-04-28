@@ -68,6 +68,16 @@ export default function CustomerChatScreen() {
   const [aiQueryText, setAiQueryText] = useState('');
   const [aiQuerying, setAiQuerying] = useState(false);
 
+  const channelRef = useRef<any>(null);
+  const debounceRef = useRef<NodeJS.Timeout | null>(null);
+
+  const debouncedLoadChat = useCallback(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      loadChat();
+    }, 500);
+  }, []);
+
   // ── Auth helper ────────────────────────────────────────────
   const getToken = async () => {
     const token = await authService.getAccessToken();
@@ -88,32 +98,49 @@ export default function CustomerChatScreen() {
   useEffect(() => {
     if (!conversationId) return;
 
-    const channel = supabase
-      .channel(`chat-${conversationId}`)
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'messages',
-          filter: `conversation_id=eq.${conversationId}`,
-        },
-        (payload) => {
-          const newMsg = payload.new as ChatMessage;
-          setMessages((prev) => {
-            const alreadyExists = prev.some((m) => m.id === newMsg.id);
-            if (alreadyExists) return prev;
-            return [...prev, newMsg];
-          });
-          setTimeout(() => {
-            flatListRef.current?.scrollToEnd({ animated: true });
-          }, 100);
-        }
-      )
-      .subscribe();
+    const setupRealtime = async () => {
+      const orgId = await authService.getOrganisationId();
+      if (!orgId) return;
+
+      if (channelRef.current) {
+        supabase.removeChannel(channelRef.current);
+      }
+
+      channelRef.current = supabase
+        .channel(`org-${orgId}`)
+        .on('broadcast', { event: 'message_created' }, (payload) => {
+          const targetConvId = payload?.payload?.conversation_id;
+          if (!targetConvId || targetConvId === conversationId) {
+            console.log('[REALTIME] Broadcast received on chat screen');
+            debouncedLoadChat();
+          }
+        })
+        .on(
+          'postgres_changes',
+          {
+            event: 'INSERT',
+            schema: 'public',
+            table: 'messages',
+            filter: `organisation_id=eq.${orgId}`,
+          },
+          () => {
+            console.log('[REALTIME] postgres_changes received on chat screen');
+            debouncedLoadChat();
+          }
+        )
+        .subscribe();
+    };
+
+    setupRealtime();
 
     return () => {
-      supabase.removeChannel(channel);
+      if (channelRef.current) {
+        supabase.removeChannel(channelRef.current);
+        channelRef.current = null;
+      }
+      if (debounceRef.current) {
+        clearTimeout(debounceRef.current);
+      }
     };
   }, [conversationId]);
 

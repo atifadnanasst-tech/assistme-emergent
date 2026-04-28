@@ -19,7 +19,9 @@
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#121218"
       },
-      "permissions": ["android.permission.READ_CONTACTS"],
+      "permissions": [
+        "android.permission.READ_CONTACTS"
+      ],
       "edgeToEdgeEnabled": true
     },
     "web": {
@@ -39,7 +41,8 @@
       ],
       "expo-secure-store",
       "@react-native-community/datetimepicker",
-      "expo-contacts"
+      "expo-contacts",
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true
