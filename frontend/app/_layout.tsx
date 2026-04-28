@@ -22,7 +22,7 @@ async function registerForPushNotifications() {
       console.log('[PUSH] Permission not granted');
       return;
     }
-    const tokenData = await Notifications.getExpoPushTokenAsync();
+    const tokenData = await Notifications.getExpoPushTokenAsync({ projectId: '06cec730-38f8-462b-96e3-a7f29fb9b804' });
     const pushToken = tokenData.data;
     console.log('[PUSH] Token obtained:', pushToken);
     const { authService } = require('../lib/auth');
