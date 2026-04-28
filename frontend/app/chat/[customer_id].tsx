@@ -74,19 +74,30 @@ export default function CustomerChatScreen() {
   const debouncedLoadChat = useCallback(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
-      loadChat();
+      loadChat(false);
     }, 500);
   }, []);
 
   // ── Auth helper ────────────────────────────────────────────
   const getToken = async () => {
-    const token = await authService.getAccessToken();
+    let token = await authService.getAccessToken();
     if (!token) {
-      await authService.clearSession();
-      await supabase.auth.signOut();
-      setIsAuthenticated(false);
-      router.replace('/login');
-      return null;
+      const refreshed = await authService.refreshSession();
+      if (!refreshed) {
+        await authService.clearSession();
+        await supabase.auth.signOut();
+        setIsAuthenticated(false);
+        router.replace('/login');
+        return null;
+      }
+      token = await authService.getAccessToken();
+      if (!token) {
+        await authService.clearSession();
+        await supabase.auth.signOut();
+        setIsAuthenticated(false);
+        router.replace('/login');
+        return null;
+      }
     }
     return token;
   };
@@ -152,7 +163,7 @@ export default function CustomerChatScreen() {
     return () => { showSub.remove(); hideSub.remove(); };
   }, []);
 
-  const loadChat = async () => {
+  const loadChat = async (markRead: boolean = true) => {
     try {
       const token = await getToken();
       if (!token || !customer_id) return;
@@ -161,7 +172,8 @@ export default function CustomerChatScreen() {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 8000);
 
-      const res = await fetch(`${backendUrl}/api/chat/${customer_id}`, {
+      const markReadParam = markRead ? '' : '?mark_read=false';
+      const res = await fetch(`${backendUrl}/api/chat/${customer_id}${markReadParam}`, {
         headers: { 'Authorization': `Bearer ${token}` },
         signal: controller.signal,
       });

@@ -142,10 +142,18 @@ export default function HomeScreen() {
 
   const loadHomeData = async (filterTab?: string) => {
     try {
-      const token = await authService.getAccessToken();
+      let token = await authService.getAccessToken();
       if (!token) {
-        router.replace('/login');
-        return;
+        const refreshed = await authService.refreshSession();
+        if (!refreshed) {
+          router.replace('/login');
+          return;
+        }
+        token = await authService.getAccessToken();
+        if (!token) {
+          router.replace('/login');
+          return;
+        }
       }
 
       const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;

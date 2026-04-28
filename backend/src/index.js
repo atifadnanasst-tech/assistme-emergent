@@ -28,6 +28,21 @@ if (!supabaseUrl || !supabaseServiceKey || supabaseUrl.includes('your_supabase')
   console.log('✅ Supabase client initialized');
 }
 
+
+// ─── Realtime Broadcast Helper ────────────────────────────
+async function broadcastNewMessage(orgId, payload) {
+  try {
+    await supabase.channel('org-' + orgId).send({
+      type: 'broadcast',
+      event: 'message_created',
+      payload: payload,
+    });
+    console.log('[BROADCAST] Sent to org:', orgId);
+  } catch (err) {
+    console.warn('[BROADCAST] Failed (non-fatal):', err.message);
+  }
+}
+
 // Create Hono app
 const app = new Hono();
 
@@ -855,12 +870,13 @@ app.get('/api/chat/:customer_id', async (c) => {
       }
 
       // 4. Mark unread messages as read using jsonb_set
-      try {
+      const markRead = c.req.query('mark_read') !== 'false';
+      if (markRead) try {
         const { data: unreadMsgs } = await supabase
           .from('messages')
           .select('id')
           .eq('conversation_id', conversation.id)
-          .eq('metadata->>read_by_owner', 'false');
+          .or('metadata->>read_by_owner.eq.false,metadata->>read_by_owner.is.null');
 
         if (unreadMsgs && unreadMsgs.length > 0) {
           const unreadIds = unreadMsgs.map(m => m.id);
@@ -953,6 +969,9 @@ app.post('/api/chat/:customer_id/message', async (c) => {
       console.error('Save owner message error:', saveErr);
       return c.json({ error: 'server_error' }, 500);
     }
+
+    // Broadcast to sender's org
+    await broadcastNewMessage(organisationId, { conversation_id: conversationId });
 
     // ─── CROSS-ORG ROUTING ────────────────────────────────────────
     // After saving message to sender's org, check if receiver is also an AssistMe user
@@ -1064,6 +1083,7 @@ app.post('/api/chat/:customer_id/message', async (c) => {
                 });
 
                 console.log('[CROSS-ORG] Message routed to org:', receiverUser.organisation_id);
+                await broadcastNewMessage(receiverUser.organisation_id, { conversation_id: receiverConversation.id });
 
                 await supabase
                   .from('messages')
