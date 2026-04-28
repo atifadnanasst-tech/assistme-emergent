@@ -42,7 +42,16 @@
       "expo-secure-store",
       "@react-native-community/datetimepicker",
       "expo-contacts",
-      "expo-web-browser"
+      "expo-web-browser",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/icon.png",
+          "color": "#075E54",
+          "sounds": [],
+          "androidMode": "default"
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true

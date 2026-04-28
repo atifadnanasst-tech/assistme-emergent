@@ -985,7 +985,7 @@ app.post('/api/chat/:customer_id/message', async (c) => {
         // Look up if any AssistMe user has this phone number
         const { data: allUsers } = await supabase
           .from('users')
-          .select('id, organisation_id, phone')
+          .select('id, organisation_id, phone, push_token')
           .neq('organisation_id', organisationId);
         const receiverUser = (allUsers || []).find(u => normalizePhone(u.phone) === normalizedCustomerPhone) || null;
 
@@ -1084,6 +1084,30 @@ app.post('/api/chat/:customer_id/message', async (c) => {
 
                 console.log('[CROSS-ORG] Message routed to org:', receiverUser.organisation_id);
                 await broadcastNewMessage(receiverUser.organisation_id, { conversation_id: receiverConversation.id });
+                // Push notification to receiver
+                if (receiverUser.push_token) {
+                  try {
+                    const senderDisplayName = senderAsCustomer?.name || senderUser?.phone || 'Someone';
+                    await fetch('https://exp.host/--/api/v2/push/send', {
+                      method: 'POST',
+                      headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json',
+                      },
+                      body: JSON.stringify({
+                        to: receiverUser.push_token,
+                        title: senderDisplayName,
+                        body: content.length > 100 ? content.substring(0, 100) + '...' : content,
+                        data: { conversation_id: receiverConversation.id },
+                        sound: 'default',
+                        channelId: 'messages',
+                      }),
+                    });
+                    console.log('[PUSH] Notification sent to:', receiverUser.push_token);
+                  } catch (pushError) {
+                    console.error('[PUSH] Failed (non-fatal):', pushError.message);
+                  }
+                }
 
                 await supabase
                   .from('messages')
@@ -2546,6 +2570,31 @@ app.get('/api/invoice/ai-suggestion', async (c) => {
 });
 
 // ─── PATCH /api/customers/:customer_id/name ────────────────
+
+app.post('/api/users/push-token', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { userId } = auth;
+    const body = await c.req.json();
+    const { push_token } = body;
+    if (!push_token || !push_token.trim()) return c.json({ error: 'missing_push_token' }, 400);
+    const { error: updateErr } = await supabase
+      .from('users')
+      .update({ push_token: push_token.trim() })
+      .eq('id', userId);
+    if (updateErr) {
+      console.error('[PUSH] Token save error:', updateErr);
+      return c.json({ error: 'server_error' }, 500);
+    }
+    console.log('[PUSH] Token saved for user:', userId);
+    return c.json({ saved: true });
+  } catch (error) {
+    console.error('POST /api/users/push-token error:', error);
+    return c.json({ error: 'server_error' }, 500);
+  }
+});
+
 app.patch('/api/customers/:customer_id/name', async (c) => {
   try {
     const auth = await authenticateChat(c);
