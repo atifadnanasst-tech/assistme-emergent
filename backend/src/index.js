@@ -2545,6 +2545,50 @@ app.get('/api/invoice/ai-suggestion', async (c) => {
   }
 });
 
+// ─── PATCH /api/customers/:customer_id/name ────────────────
+app.patch('/api/customers/:customer_id/name', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+    const customerId = c.req.param('customer_id');
+
+    const body = await c.req.json();
+    const { name } = body;
+
+    if (!name || !name.trim()) return c.json({ error: 'missing_name' }, 400);
+
+    // Only update if current name looks like a phone number (digits only)
+    const { data: customer } = await supabase
+      .from('customers')
+      .select('id, name')
+      .eq('id', customerId)
+      .eq('organisation_id', organisationId)
+      .maybeSingle();
+
+    if (!customer) return c.json({ error: 'customer_not_found' }, 404);
+
+    // Guard: only update if name is a phone number pattern
+    const isPhonePattern = /^[0-9+\s()-]{7,15}$/.test(customer.name.trim());
+    if (!isPhonePattern) {
+      return c.json({ updated: false, reason: 'name_already_set' });
+    }
+
+    const { error: updateErr } = await supabase
+      .from('customers')
+      .update({ name: name.trim() })
+      .eq('id', customerId)
+      .eq('organisation_id', organisationId);
+
+    if (updateErr) return c.json({ error: 'server_error' }, 500);
+
+    return c.json({ updated: true });
+  } catch (error) {
+    console.error('PATCH /api/customers/name error:', error);
+    return c.json({ error: 'server_error' }, 500);
+  }
+});
+
 // ─── PATCH /api/customer/:customer_id/defaults ──────────────
 app.patch('/api/customer/:customer_id/defaults', async (c) => {
   try {

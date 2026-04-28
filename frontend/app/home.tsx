@@ -16,6 +16,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import { authService } from '../lib/auth';
+let Contacts: any = null;
+try { Contacts = require('expo-contacts'); } catch { Contacts = null; }
 
 interface FilterTab {
   id: string;
@@ -72,6 +74,58 @@ export default function HomeScreen() {
       loadHomeData(tabId);
     }, 500);
   }, []);
+
+  const syncContactNames = async (conversations: any[]) => {
+    if (!Contacts) return;
+    try {
+      const { status } = await Contacts.getPermissionsAsync();
+      if (status !== 'granted') return;
+      const { data: deviceContacts } = await Contacts.getContactsAsync({
+        fields: [Contacts.Fields.Name, Contacts.Fields.PhoneNumbers],
+      });
+      if (!deviceContacts || deviceContacts.length === 0) return;
+      const phoneMap: Record<string, string> = {};
+      deviceContacts.forEach((contact: any) => {
+        if (!contact.name || !contact.phoneNumbers) return;
+        contact.phoneNumbers.forEach((pn: any) => {
+          if (!pn.number) return;
+          const normalized = pn.number.replace(/\D/g, '');
+          if (normalized.length >= 10) {
+            phoneMap[normalized.slice(-10)] = contact.name;
+          }
+        });
+      });
+      if (Object.keys(phoneMap).length === 0) return;
+      const token = await authService.getAccessToken();
+      if (!token) return;
+      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+      for (const conv of conversations) {
+        const name = conv.name || '';
+        const isPhonePattern = /^[0-9+\s()-]{7,15}$/.test(name.trim());
+        if (!isPhonePattern) continue;
+        const digits = name.replace(/\D/g, '');
+        if (digits.length < 10) continue;
+        const last10 = digits.slice(-10);
+        const contactName = phoneMap[last10];
+        if (!contactName) continue;
+        try {
+          await fetch(`${backendUrl}/api/customers/${conv.customer_id}/name`, {
+            method: 'PATCH',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ name: contactName }),
+          });
+          console.log('[CONTACTS] Updated ' + name + ' -> ' + contactName);
+        } catch (err) {
+          console.warn('[CONTACTS] Update failed:', err);
+        }
+      }
+    } catch (err) {
+      console.warn('[CONTACTS] Sync failed:', err);
+    }
+  };
 
   useEffect(() => {
     loadHomeData();
@@ -187,7 +241,10 @@ export default function HomeScreen() {
 
       const data: HomeData = await response.json();
       setHomeData(data);
-      
+      // Sync contact names for phone-number-named customers
+      if (data.conversations && data.conversations.length > 0) {
+        syncContactNames(data.conversations);
+      }
       // Set default active tab to 'all' if not set
       if (!activeTab) {
         setActiveTab('all');
