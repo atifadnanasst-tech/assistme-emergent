@@ -1088,6 +1088,14 @@ app.post('/api/chat/:customer_id/message', async (c) => {
                 if (receiverUser.push_token) {
                   try {
                     const senderDisplayName = senderAsCustomer?.name || senderUser?.phone || 'Someone';
+                    // Count total unread messages for receiver org
+                    const { count: unreadCount } = await supabase
+                      .from('messages')
+                      .select('*', { count: 'exact', head: true })
+                      .eq('organisation_id', receiverUser.organisation_id)
+                      .eq('role', 'user')
+                      .eq('metadata->>read_by_owner', 'false');
+                    const badgeCount = (unreadCount || 0) + 1;
                     await fetch('https://exp.host/--/api/v2/push/send', {
                       method: 'POST',
                       headers: {
@@ -1101,6 +1109,7 @@ app.post('/api/chat/:customer_id/message', async (c) => {
                         data: { conversation_id: receiverConversation.id },
                         sound: 'default',
                         channelId: 'messages_v2',
+                        badge: badgeCount,
                       }),
                     });
                     console.log('[PUSH] Notification sent to:', receiverUser.push_token);
