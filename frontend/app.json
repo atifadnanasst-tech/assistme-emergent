@@ -22,7 +22,8 @@
       "permissions": [
         "android.permission.READ_CONTACTS"
       ],
-      "edgeToEdgeEnabled": true
+      "edgeToEdgeEnabled": true,
+      "googleServicesFile": "./google-services.json"
     },
     "web": {
       "bundler": "metro",
