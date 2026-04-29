@@ -47,6 +47,18 @@ async function registerForPushNotifications() {
     }
   } catch (err) {
     console.error('[PUSH] Registration failed (non-fatal):', err);
+    try {
+      const { authService } = require('../lib/auth');
+      const accessToken = await authService.getAccessToken();
+      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+      if (accessToken && backendUrl) {
+        await fetch(`${backendUrl}/api/debug/push-error`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${accessToken}` },
+          body: JSON.stringify({ error: err?.message || String(err), stack: err?.stack }),
+        });
+      }
+    } catch (_) {}
   }
 }
 

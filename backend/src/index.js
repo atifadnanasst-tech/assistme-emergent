@@ -2571,6 +2571,17 @@ app.get('/api/invoice/ai-suggestion', async (c) => {
 
 // ─── PATCH /api/customers/:customer_id/name ────────────────
 
+
+app.post('/api/debug/push-error', async (c) => {
+  try {
+    const body = await c.req.json();
+    console.error('[PUSH-DEBUG] Error from device:', JSON.stringify(body));
+    return c.json({ received: true });
+  } catch (e) {
+    return c.json({ received: true });
+  }
+});
+
 app.post('/api/users/push-token', async (c) => {
   try {
     const auth = await authenticateChat(c);
