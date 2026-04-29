@@ -1005,7 +1005,7 @@ app.post('/api/chat/:customer_id/message', async (c) => {
             // Find the customer record in receiver's org that matches sender's phone
             const { data: allReceiverCustomers } = await supabase
               .from('customers')
-              .select('id, phone')
+              .select('id, name, phone')
               .eq('organisation_id', receiverUser.organisation_id);
             let senderAsCustomer = (allReceiverCustomers || []).find(c => normalizePhone(c.phone) === normalizedSenderPhone) || null;
 
@@ -1100,7 +1100,7 @@ app.post('/api/chat/:customer_id/message', async (c) => {
                         body: content.length > 100 ? content.substring(0, 100) + '...' : content,
                         data: { conversation_id: receiverConversation.id },
                         sound: 'default',
-                        channelId: 'messages',
+                        channelId: 'messages_v2',
                       }),
                     });
                     console.log('[PUSH] Notification sent to:', receiverUser.push_token);

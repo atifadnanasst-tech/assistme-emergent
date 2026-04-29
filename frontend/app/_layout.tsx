@@ -39,7 +39,7 @@ async function registerForPushNotifications() {
     });
     console.log('[PUSH] Token saved to backend');
     if (Platform.OS === 'android') {
-      await Notifications.setNotificationChannelAsync('messages', {
+      await Notifications.setNotificationChannelAsync('messages_v2', {
         name: 'Messages',
         importance: Notifications.AndroidImportance.MAX,
         sound: 'default',
