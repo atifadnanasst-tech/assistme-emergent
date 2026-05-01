@@ -1011,8 +1011,19 @@ setTimeout(() => {
                           )}
                         </View>
                       ))}
+                      {action.parameters?.freight > 0 && (
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 8, borderTopWidth: 1, borderTopColor: '#E0E0E0' }}>
+                          <Text style={{ fontSize: 15, color: '#333', fontWeight: '500' }}>Freight</Text>
+                          <Text style={{ fontSize: 15, color: '#333', fontWeight: '600' }}>₹{action.parameters.freight.toLocaleString('en-IN')}</Text>
+                        </View>
+                      )}
                       {action.parameters?.amount > 0 && (
-                        <Text style={styles.invoiceTotalText}>Total: ₹{action.parameters.amount.toLocaleString('en-IN')}</Text>
+                        <Text style={styles.invoiceTotalText}>
+                          Total: ₹{(
+                            (action.items?.reduce((s: number, i: any) => s + (i.line_total || 0), 0) || 0) + 
+                            (action.parameters?.freight || 0)
+                          ).toLocaleString('en-IN')}
+                        </Text>
                       )}
                       {action.parameters?.due_date && (
                         <Text style={styles.invoiceDueText}>Due: {action.parameters.due_date}</Text>
