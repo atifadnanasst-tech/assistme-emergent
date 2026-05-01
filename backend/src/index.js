@@ -2018,7 +2018,7 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
                   card_data: {
                     invoice_id: newInvoice.id,
                     invoice_number: invoiceNumber,
-                    total_amount: totalAmount,
+                    total_amount: totals.grand_total,
                     due_date: params.due_date || new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0],
                     status: 'sent',
                     items_summary: itemsSummary,
@@ -2030,7 +2030,7 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
 
             // Update customer outstanding balance
             await supabase.from('customers')
-              .update({ outstanding_balance: (customer.outstanding_balance || 0) + totalAmount })
+              .update({ outstanding_balance: (customer.outstanding_balance || 0) + totals.grand_total })
               .eq('id', customerId).eq('organisation_id', organisationId);
 
             executed.push(actionId);
@@ -2978,7 +2978,7 @@ app.post('/api/invoices', async (c) => {
     const { data: newInvoice, error: invErr } = await supabase.from('invoices').insert({
       organisation_id: organisationId, customer_id, invoice_number: invoiceNumber,
       status, issue_date: new Date().toISOString().split('T')[0], due_date: computedDueDate,
-      currency: 'INR', subtotal, tax_amount: totalTax, total_amount: totalAmount,
+      currency: 'INR', subtotal, tax_amount: totalTax, total_amount: totals.grand_total,
       amount_due: totalAmount, amount_paid: 0,
       custom_fields: {
         invoice_type: invoice_type || 'Tax Invoice', po_number: po_number || null,
@@ -3002,11 +3002,11 @@ app.post('/api/invoices', async (c) => {
     // Update customer outstanding_balance
     if (status !== 'draft') {
       await supabase.from('customers')
-        .update({ outstanding_balance: (customer.outstanding_balance || 0) + totalAmount })
+        .update({ outstanding_balance: (customer.outstanding_balance || 0) + totals.grand_total })
         .eq('id', customer_id).eq('organisation_id', organisationId);
     }
 
-    return c.json({ invoice_id: newInvoice.id, invoice_number: invoiceNumber, total_amount: totalAmount, pdf_url: null });
+    return c.json({ invoice_id: newInvoice.id, invoice_number: invoiceNumber, total_amount: totals.grand_total, pdf_url: null });
   } catch (error) {
     console.error('POST /api/invoices error:', error);
     return c.json({ error: 'server_error' }, 500);
