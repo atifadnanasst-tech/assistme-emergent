@@ -1517,6 +1517,7 @@ Extract ALL actions from the owner's instruction. Output ONLY this JSON — no o
 
 Action rules:
 - create_invoice: ALL products in entities.items as ONE action. Extract freight separately into entities.freight — never put freight in amount. Extract discount_pct per item if mentioned.
+- STRICT product rule: Only extract products the owner explicitly names with a quantity. Never infer, add, or suggest products from chat history, context, or memory. Extract exactly what was said, nothing more.
 - create_quote: same structure as create_invoice but output is a quote. Use when owner says quote, quotation, estimate, bhav batao.
 - convert_quote_to_invoice: use when owner says convert quote to invoice. Set quote_number if mentioned.
 - schedule_delivery: one action, set delivery_date.
