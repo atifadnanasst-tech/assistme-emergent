@@ -1491,37 +1491,54 @@ Extract ALL actions from the owner's instruction. Output ONLY this JSON — no o
 {
   "actions": [
     {
-      "action_type": "create_invoice | schedule_delivery | set_reminder | record_payment",
+      "action_type": "create_invoice | create_quote | convert_quote_to_invoice | schedule_delivery | update_delivery_status | set_reminder | record_payment | goods_returned | record_expense",
       "entities": {
-        "items": [{"product_name": "string", "quantity": number}],
+        "items": [{"product_name": "string", "quantity": number, "discount_pct": number}],
         "amount": number or null,
+        "freight": number or null,
+        "freight_taxable": true or false,
+        "overall_discount": number or null,
+        "invoice_type": "Tax Invoice | Bill of Supply | null",
         "due_date": "YYYY-MM-DD or null",
-        "delivery_date": "YYYY-MM-DD or null"
+        "delivery_date": "YYYY-MM-DD or null",
+        "bank_account_name": "string or null",
+        "payment_mode": "cash | upi | neft | cheque | null",
+        "status": "completed | in_progress | cancelled or null",
+        "category": "string or null",
+        "description": "string or null",
+        "quote_number": "string or null",
+        "reason": "string or null"
       }
     }
   ],
   "confidence_score": 0.0 to 1.0,
   "reasoning": "one sentence"
 }
-Rules:
-- create_invoice: put ALL products inside entities.items array as one action (never split into multiple create_invoice)
-- schedule_delivery: one action, set delivery_date
-- set_reminder: one action, set due_date
-- record_payment: one action, set amount
-- Resolve relative dates: "tomorrow"/"kal" = next day, "7 din baad" = +7 days from today
-- If intent is truly unclear, return empty actions array with confidence_score < 0.50
+
+Action rules:
+- create_invoice: ALL products in entities.items as ONE action. Extract freight separately into entities.freight — never put freight in amount. Extract discount_pct per item if mentioned.
+- create_quote: same structure as create_invoice but output is a quote. Use when owner says quote, quotation, estimate, bhav batao.
+- convert_quote_to_invoice: use when owner says convert quote to invoice. Set quote_number if mentioned.
+- schedule_delivery: one action, set delivery_date.
+- update_delivery_status: use when owner says maal pahunch gaya, delivered, delivery complete. Set status=completed.
+- set_reminder: one action, set due_date.
+- record_payment: extract amount AND bank_account_name if owner mentions a bank name. Extract payment_mode if mentioned.
+- goods_returned: use when owner says maal wapis aaya, return, goods returned. Extract items and reason.
+- record_expense: use when owner says kharcha hua, expense, paid for. Extract amount, category, description.
+- invoice_type: set Bill of Supply if owner says bina GST, without GST, composition. Default is Tax Invoice.
+- freight_taxable: set true only if owner explicitly says freight has GST. Default false.
+- Resolve relative dates: tomorrow or kal = next day, 7 din baad = plus 7 days from today.
+- If intent is truly unclear return empty actions array with confidence_score below 0.50.
 - No markdown. No preamble. JSON only.`;
 
-const FINANCIAL_INTENTS = ['create_invoice', 'record_payment', 'set_reminder'];
-const ALLOWED_INTENTS = ['create_invoice', 'schedule_delivery', 'set_reminder', 'record_payment', 'query', 'ambiguous'];
+const FINANCIAL_INTENTS = ['create_invoice', 'create_quote', 'record_payment', 'set_reminder', 'goods_returned', 'record_expense', 'convert_quote_to_invoice'];
+const ALLOWED_INTENTS = ['create_invoice', 'create_quote', 'convert_quote_to_invoice', 'schedule_delivery', 'update_delivery_status', 'set_reminder', 'record_payment', 'goods_returned', 'record_expense', 'query', 'ambiguous'];
 
 function parseSparkResponse(text) {
   try {
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    const jsonMatch = text.match(/{[\s\S]*}/);
     if (!jsonMatch) return { actions: [], confidence_score: 0.0, reasoning: 'Could not parse response' };
     const parsed = JSON.parse(jsonMatch[0]);
-
-    // Handle new multi-action format
     if (Array.isArray(parsed.actions)) {
       const validActions = parsed.actions
         .filter(a => a && ALLOWED_INTENTS.includes(a.action_type))
@@ -1535,8 +1552,6 @@ function parseSparkResponse(text) {
         reasoning: parsed.reasoning || '',
       };
     }
-
-    // Fallback: old single-intent format
     let intent = parsed.intent || 'ambiguous';
     if (!ALLOWED_INTENTS.includes(intent)) intent = 'ambiguous';
     let confidence = parseFloat(parsed.confidence_score) || 0.0;
