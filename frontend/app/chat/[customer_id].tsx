@@ -282,6 +282,13 @@ setTimeout(() => {
     setSparkMode(false);
     setSparkProcessing(true);
 
+    // BUG FIX 1: Clear all previous spark state before making new API call
+    setPreviewDraftId(null);
+    setPreviewActions([]);
+    setPreviewInsight(null);
+    setCheckedActions(new Set());
+    setPreviewVisible(false);
+
     // Do NOT add instruction to messages — it is NOT a chat message to the customer.
     // The sparkProcessing indicator shows the owner that AI is working.
 
@@ -292,6 +299,7 @@ setTimeout(() => {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 15000);
 
+      // ALWAYS make fresh POST to /api/chat/:customer_id/spark
       const res = await fetch(`${backendUrl}/api/chat/${customer_id}/spark`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
@@ -361,9 +369,12 @@ setTimeout(() => {
       });
       const data = await res.json();
 
+      // BUG FIX 2: Clear draft state immediately on Confirm All
       setPreviewVisible(false);
       setPreviewDraftId(null);
       setPreviewActions([]);
+      setPreviewInsight(null);
+      setCheckedActions(new Set());
 
       if (data.executed?.length > 0) {
         await loadChat(); // Refresh to show invoice card
@@ -385,13 +396,17 @@ setTimeout(() => {
       const token = await getToken();
       if (!token) return;
       const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+      // BUG FIX 2: Call DELETE endpoint on cancel
       await fetch(`${backendUrl}/api/chat/${customer_id}/spark/${previewDraftId}`, {
         method: 'DELETE', headers: { 'Authorization': `Bearer ${token}` },
       });
     } catch {}
+    // BUG FIX 2: Clear draft state immediately on Cancel
     setPreviewVisible(false);
     setPreviewDraftId(null);
     setPreviewActions([]);
+    setPreviewInsight(null);
+    setCheckedActions(new Set());
   };
 
   // ── Banner Undo handler ────────────────────────────────────
@@ -948,16 +963,46 @@ setTimeout(() => {
                             <View style={styles.altRow}>
                               <Text style={styles.altLabel}>Also found:</Text>
                               {item.alternatives.filter((a: any) => a.id !== item.product_id).slice(0, 3).map((alt: any) => (
-                                <TouchableOpacity key={alt.id} style={styles.altChip} onPress={() => {
-                                  // Swap product in this item
-                                  const updated = previewActions.map((pa: any) => {
-                                    if (pa.action_id !== action.action_id) return pa;
-                                    const newItems = [...pa.items];
-                                    newItems[idx] = { ...newItems[idx], product_name: alt.name, product_id: alt.id, unit_price: alt.selling_price, line_total: alt.selling_price * newItems[idx].quantity };
-                                    const newTotal = newItems.reduce((s: number, i: any) => s + (i.line_total || 0), 0);
-                                    return { ...pa, items: newItems, parameters: { ...pa.parameters, items: newItems, amount: newTotal } };
-                                  });
-                                  setPreviewActions(updated);
+                                <TouchableOpacity key={alt.id} style={styles.altChip} onPress={async () => {
+                                  // BUG FIX 3: Send complete replacement to PATCH endpoint
+                                  try {
+                                    const token = await getToken();
+                                    if (!token) return;
+                                    const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+                                    
+                                    const replacementItem = {
+                                      product_id: alt.id,
+                                      product_name: alt.name,
+                                      unit_price: alt.selling_price,
+                                      quantity: item.quantity,
+                                      line_total: alt.selling_price * item.quantity,
+                                      alternatives: item.alternatives, // Preserve alternatives array
+                                    };
+
+                                    await fetch(`${backendUrl}/api/chat/${customer_id}/spark/action/${action.action_id}`, {
+                                      method: 'PATCH',
+                                      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+                                      body: JSON.stringify({
+                                        parameters: {
+                                          items: [replacementItem]
+                                        }
+                                      }),
+                                    });
+
+                                    // Update local state to reflect the swap
+                                    const updated = previewActions.map((pa: any) => {
+                                      if (pa.action_id !== action.action_id) return pa;
+                                      const newItems = [...pa.items];
+                                      newItems[idx] = replacementItem;
+                                      // Recalculate total by summing all line_total values
+                                      const newTotal = newItems.reduce((s: number, i: any) => s + (i.line_total || 0), 0);
+                                      return { ...pa, items: newItems, parameters: { ...pa.parameters, items: newItems, amount: newTotal } };
+                                    });
+                                    setPreviewActions(updated);
+                                  } catch (error) {
+                                    console.error('Swap product error:', error);
+                                    Alert.alert('Error', 'Could not swap product');
+                                  }
                                 }}>
                                   <Text style={styles.altChipText}>{alt.name} (₹{alt.selling_price})</Text>
                                 </TouchableOpacity>
