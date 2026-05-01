@@ -1313,6 +1313,172 @@ app.post('/api/payments', async (c) => {
 });
 
 
+// ──────────────────────────────────────────────────────────────
+// calculateInvoiceTotals — SINGLE SOURCE OF TRUTH FOR ALL FINANCIAL MATH
+// Called by: spark confirm, form invoice, quote creation, photo invoice,
+//            convert quote to invoice.
+// NEVER compute totals inline anywhere. Always call this function.
+// Does NOT write to DB. Pure async calculation only.
+// ──────────────────────────────────────────────────────────────
+async function calculateInvoiceTotals(supabaseClient, organisationId, customerId, items, options = {}) {
+  /*
+   * items: array of {
+   *   product_id: uuid or null,
+   *   product_name: string,
+   *   quantity: number,
+   *   unit_price: number or null,   // if null, fetched from products table
+   *   tax_rate: number or null,     // if null, fetched from products table
+   *   discount_pct: number,         // 0 if none
+   * }
+   * options: {
+   *   freight: number,              // additional freight/packing charge
+   *   freight_taxable: boolean,     // whether freight attracts GST
+   *   freight_tax_rate: number,     // GST rate on freight (default 18)
+   *   apply_gst: boolean,           // false for Bill of Supply / unregistered
+   *   overall_discount: number,     // flat discount on subtotal
+   *   invoice_type: string,         // 'Tax Invoice' | 'Bill of Supply' | 'Export Invoice'
+   * }
+   * Returns: {
+   *   line_items, subtotal, total_discount, taxable_amount,
+   *   cgst, sgst, igst, total_tax, freight_amount, freight_tax,
+   *   round_off, grand_total, is_interstate
+   * }
+   */
+
+  // invoice_type drives GST application
+  const invoiceType = options.invoice_type || 'Tax Invoice';
+  const applyGST = options.apply_gst !== false &&
+                   invoiceType !== 'Bill of Supply';
+
+  // Determine intra/interstate from org settings and customer billing address
+  let supplierState = null;
+  let customerState = null;
+  try {
+    const { data: orgData } = await supabaseClient
+      .from('organisations').select('settings')
+      .eq('id', organisationId).single();
+    supplierState = orgData?.settings?.gstin_state || null;
+  } catch {}
+  try {
+    const { data: addrs } = await supabaseClient
+      .from('customer_addresses').select('state')
+      .eq('customer_id', customerId)
+      .eq('organisation_id', organisationId)
+      .eq('type', 'billing')
+      .limit(1);
+    customerState = addrs?.[0]?.state || null;
+  } catch {}
+
+  // Both states known and different = interstate = IGST
+  // Same states or either unknown = intrastate = CGST+SGST
+  const isInterstate = !!(supplierState && customerState &&
+    supplierState.toLowerCase() !== customerState.toLowerCase());
+
+  let subtotal = 0;
+  let cgst = 0, sgst = 0, igst = 0, totalTax = 0;
+  const lineItems = [];
+
+  for (const item of items) {
+    const qty = Number(item.quantity) || 1;
+    let unitPrice = item.unit_price != null ? Number(item.unit_price) : null;
+    let taxRate = item.tax_rate != null ? Number(item.tax_rate) : null;
+    let productId = item.product_id || null;
+    let productName = item.product_name || 'Item';
+
+    // Fetch price and tax rate from products table if not supplied
+    if ((unitPrice === null || taxRate === null) && productId) {
+      try {
+        const { data: product } = await supabaseClient
+          .from('products').select('id, name, selling_price, tax_rate')
+          .eq('id', productId)
+          .eq('organisation_id', organisationId)
+          .eq('is_active', true)
+          .single();
+        if (product) {
+          if (unitPrice === null) unitPrice = Number(product.selling_price) || 0;
+          if (taxRate === null) taxRate = Number(product.tax_rate) || 0;
+          productName = product.name;
+        }
+      } catch {}
+    }
+
+    unitPrice = unitPrice || 0;
+    taxRate = taxRate || 0;
+    const discountPct = Number(item.discount_pct) || 0;
+
+    const grossLine = Math.round(qty * unitPrice * 100) / 100;
+    const discountAmount = Math.round(grossLine * (discountPct / 100) * 100) / 100;
+    const taxableLine = Math.round((grossLine - discountAmount) * 100) / 100;
+    const taxAmount = applyGST
+      ? Math.round(taxableLine * (taxRate / 100) * 100) / 100
+      : 0;
+
+    subtotal += taxableLine;
+    totalTax += taxAmount;
+
+    if (applyGST && taxAmount > 0) {
+      if (isInterstate) {
+        igst += taxAmount;
+      } else {
+        cgst += Math.round(taxAmount / 2 * 100) / 100;
+        sgst += Math.round(taxAmount / 2 * 100) / 100;
+      }
+    }
+
+    lineItems.push({
+      product_id: productId,
+      product_name: productName,
+      quantity: qty,
+      unit_price: unitPrice,
+      discount_pct: discountPct,
+      tax_rate: applyGST ? taxRate : 0,
+      taxable_amount: taxableLine,
+      tax_amount: taxAmount,
+      line_total: Math.round((taxableLine + taxAmount) * 100) / 100,
+    });
+  }
+
+  const overallDiscount = Number(options.overall_discount) || 0;
+  const adjustedSubtotal = Math.round((subtotal - overallDiscount) * 100) / 100;
+
+  // Freight and its GST
+  const freightAmount = Math.round((Number(options.freight) || 0) * 100) / 100;
+  let freightTax = 0;
+  if (freightAmount > 0 && options.freight_taxable && applyGST) {
+    const freightTaxRate = Number(options.freight_tax_rate) || 18;
+    freightTax = Math.round(freightAmount * (freightTaxRate / 100) * 100) / 100;
+    totalTax += freightTax;
+    if (isInterstate) {
+      igst += freightTax;
+    } else {
+      cgst += Math.round(freightTax / 2 * 100) / 100;
+      sgst += Math.round(freightTax / 2 * 100) / 100;
+    }
+  }
+
+  const preRoundTotal = adjustedSubtotal + totalTax + freightAmount;
+  const grandTotal = Math.round(preRoundTotal);
+  const roundOff = Math.round((grandTotal - preRoundTotal) * 100) / 100;
+
+  return {
+    line_items: lineItems,
+    subtotal: Math.round(adjustedSubtotal * 100) / 100,
+    total_discount: Math.round(overallDiscount * 100) / 100,
+    taxable_amount: Math.round(adjustedSubtotal * 100) / 100,
+    cgst: Math.round(cgst * 100) / 100,
+    sgst: Math.round(sgst * 100) / 100,
+    igst: Math.round(igst * 100) / 100,
+    total_tax: Math.round(totalTax * 100) / 100,
+    freight_amount: freightAmount,
+    freight_tax: freightTax,
+    round_off: roundOff,
+    grand_total: grandTotal,
+    is_interstate: isInterstate,
+    invoice_type: invoiceType,
+    apply_gst: applyGST,
+  };
+}
+
 // ══════════════════════════════════════════════════════════════
 // FLOW 3A — AI SPARK ROUTES
 // ══════════════════════════════════════════════════════════════
