@@ -1528,6 +1528,7 @@ Action rules:
 - record_expense: use when owner says kharcha hua, expense, paid for. Extract amount, category, description.
 - invoice_type: set Bill of Supply if owner says bina GST, without GST, composition. Default is Tax Invoice.
 - freight_taxable: set true only if owner explicitly says freight has GST. Default false.
+- freight notation examples: "freight 50", "freight rupees 50", "freight Rs 50", "freight 50/-", "dhulai 50", "transport 50" — all mean freight=50. Always extract as number only into entities.freight.
 - Resolve relative dates: tomorrow or kal = next day, 7 din baad = plus 7 days from today.
 - If intent is truly unclear return empty actions array with confidence_score below 0.50.
 - No markdown. No preamble. JSON only.`;
@@ -1740,6 +1741,9 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
           amount: ent.amount || totalAmount || null,
           due_date: ent.due_date || null,
           delivery_date: ent.delivery_date || null,
+          freight: ent.freight || 0,
+          freight_taxable: ent.freight_taxable || false,
+          freight_tax_rate: ent.freight_tax_rate || 18,
         };
 
         const { data: savedAction, error: actionErr } = await supabase
