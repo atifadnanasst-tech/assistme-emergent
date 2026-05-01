@@ -11,8 +11,7 @@ if (!supabaseUrl || !supabaseAnonKey) {
 }
 
 // Determine if we are running on a native device (not SSR, not web)
-const isNative =
-  typeof window !== 'undefined' && Platform.OS !== 'web';
+const isNative = Platform.OS === 'ios' || Platform.OS === 'android';
 
 // No-op storage for SSR / web — silent, returns null
 const NoOpStorage = {
