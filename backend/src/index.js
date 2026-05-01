@@ -1916,9 +1916,36 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
             const invoiceNumber = ((invCount || 0) + 1).toString();
 
             const itemsArr = Array.isArray(params.items) ? params.items : [];
-            const subtotal = params.amount || itemsArr.reduce((s, i) => s + (i.line_total || (i.quantity || 1) * (i.unit_price || 0)), 0) || 0;
-            const taxAmount = 0;
-            const totalAmount = subtotal + taxAmount;
+
+            // Build items array for calculateInvoiceTotals
+            const itemsForCalc = itemsArr.length > 0
+              ? itemsArr.map(i => ({
+                  product_id: i.product_id || null,
+                  product_name: i.product_name || 'Item',
+                  quantity: i.quantity || 1,
+                  unit_price: i.unit_price != null ? i.unit_price : null,
+                  tax_rate: i.tax_rate != null ? i.tax_rate : null,
+                  discount_pct: i.discount_pct || 0,
+                }))
+              : params.product_name
+                ? [{ product_id: null, product_name: params.product_name, quantity: params.quantity || 1, unit_price: params.unit_price || null, tax_rate: null, discount_pct: 0 }]
+                : [];
+
+            // Single source of truth for all financial math
+            const totals = await calculateInvoiceTotals(
+              supabase,
+              organisationId,
+              customerId,
+              itemsForCalc,
+              {
+                freight: params.freight || 0,
+                freight_taxable: params.freight_taxable || false,
+                freight_tax_rate: params.freight_tax_rate || 18,
+                apply_gst: params.apply_gst !== false,
+                overall_discount: params.overall_discount || 0,
+                invoice_type: params.invoice_type || 'Tax Invoice',
+              }
+            );
 
             const { data: newInvoice, error: invErr } = await supabase
               .from('invoices').insert({
@@ -1929,40 +1956,41 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
                 issue_date: new Date().toISOString().split('T')[0],
                 due_date: params.due_date || new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0],
                 currency: 'INR',
-                subtotal, tax_amount: taxAmount, total_amount: totalAmount,
-                amount_due: totalAmount, amount_paid: 0,
+                subtotal: totals.subtotal,
+                tax_amount: totals.total_tax,
+                total_amount: totals.grand_total,
+                discount_amount: totals.total_discount,
+                amount_due: totals.grand_total,
+                amount_paid: 0,
+                custom_fields: {
+                  invoice_type: totals.invoice_type,
+                  cgst_amount: totals.cgst,
+                  sgst_amount: totals.sgst,
+                  igst_amount: totals.igst,
+                  freight_amount: totals.freight_amount,
+                  freight_tax: totals.freight_tax,
+                  round_off: totals.round_off,
+                  is_interstate: totals.is_interstate,
+                },
               }).select('id').single();
-
             if (invErr) { console.error('Create invoice failed:', invErr); failed.push(actionId); continue; }
 
-            // Insert invoice items — handle items[] array or legacy single product
-            if (itemsArr.length > 0) {
-              for (let idx = 0; idx < itemsArr.length; idx++) {
-                const item = itemsArr[idx];
-                await supabase.from('invoice_items').insert({
-                  organisation_id: organisationId,
-                  invoice_id: newInvoice.id,
-                  description: item.product_name || 'Item',
-                  quantity: item.quantity || 1,
-                  unit_price: item.unit_price || 0,
-                  tax_rate: 0,
-                  line_total: item.line_total || (item.quantity || 1) * (item.unit_price || 0),
-                  sort_order: idx + 1,
-                });
-              }
-            } else if (params.product_name) {
+            // Insert invoice items using calculated line items
+            for (let idx = 0; idx < totals.line_items.length; idx++) {
+              const li = totals.line_items[idx];
               await supabase.from('invoice_items').insert({
                 organisation_id: organisationId,
                 invoice_id: newInvoice.id,
-                description: params.product_name,
-                quantity: params.quantity || 1,
-                unit_price: params.unit_price || params.amount || 0,
-                tax_rate: 0,
-                line_total: subtotal,
-                sort_order: 1,
+                product_id: li.product_id || null,
+                description: li.product_name || 'Item',
+                quantity: li.quantity,
+                unit_price: li.unit_price,
+                discount_pct: li.discount_pct,
+                tax_rate: li.tax_rate,
+                line_total: li.line_total,
+                sort_order: idx + 1,
               });
             }
-
             // Build items summary for card
             const itemsSummary = itemsArr.length > 0
               ? itemsArr.map(i => `${i.product_name} × ${i.quantity || 1}`).join(', ')
