@@ -3263,6 +3263,46 @@ app.post('/api/invoices/:invoice_id/share', async (c) => {
 // FLOW 5 — SMART CATALOG ROUTES
 // ══════════════════════════════════════════════════════════════
 
+// ─── POST /api/products ─────────────────────────────────────
+app.post('/api/products', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+
+    const body = await c.req.json().catch(() => ({}));
+    const { name, selling_price } = body;
+
+    if (!name?.trim()) return c.json({ error: 'validation', message: 'Product name is required' }, 400);
+    if (!selling_price || selling_price <= 0) return c.json({ error: 'validation', message: 'Valid selling price is required' }, 400);
+
+    const { data: newProduct, error: productError } = await supabase
+      .from('products')
+      .insert({
+        organisation_id: organisationId,
+        name: name.trim(),
+        selling_price,
+        unit: 'pcs',
+        cost_price: 0,
+        tax_rate: 0,
+        is_active: true,
+      })
+      .select('id, name, selling_price')
+      .single();
+
+    if (productError) {
+      console.error('[ADD PRODUCT] Insert error:', productError);
+      return c.json({ error: 'server_error' }, 500);
+    }
+
+    console.log('[ADD PRODUCT] Created:', newProduct.id, newProduct.name);
+    return c.json({ id: newProduct.id, name: newProduct.name, selling_price: newProduct.selling_price }, 201);
+  } catch (err) {
+    console.error('[ADD PRODUCT] Error:', err);
+    return c.json({ error: 'server_error' }, 500);
+  }
+});
+
 // ─── GET /api/catalog ───────────────────────────────────────
 app.get('/api/catalog', async (c) => {
   try {
