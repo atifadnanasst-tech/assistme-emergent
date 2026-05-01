@@ -917,7 +917,7 @@ setTimeout(() => {
       <Modal visible={previewVisible} transparent animationType="slide" onRequestClose={handleCancelDraft}>
         <View style={styles.sheetOverlay}>
           <Pressable style={styles.sheetDismiss} onPress={handleCancelDraft} />
-          <View style={styles.sheetContainer}>
+          <View style={[styles.sheetContainer, { paddingBottom: insets.bottom }]}>
             <View style={styles.sheetHandle} />
             <Text style={styles.sheetHeading}>I've prepared this:</Text>
             <ScrollView style={{ maxHeight: 400 }} showsVerticalScrollIndicator={false}>
