@@ -602,41 +602,34 @@ setTimeout(() => {
           {cd.items_summary && <Text style={styles.invoiceItems}>{cd.items_summary}</Text>}
           {cd.due_date && <Text style={styles.invoiceItems}>Due {new Date(cd.due_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}</Text>}
           <Text style={[styles.invoiceAmount, isOverdue && { color: '#D32F2F' }]}>{formatCurrency(cd.total_amount || 0)}</Text>
-          {cd.pdf_url && (
-            <TouchableOpacity onPress={() => Linking.openURL(cd.pdf_url).catch(() => Alert.alert('Error', 'Could not open PDF'))} style={{ marginTop: 8 }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 8, paddingHorizontal: 12, backgroundColor: '#F0F0F0', borderRadius: 8 }}>
-                <Ionicons name="document" size={16} color="#075E54" />
-                <Text style={{ fontSize: 14, fontWeight: '600', color: '#075E54' }}>View PDF</Text>
+          <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
+            {cd.pdf_url && (
+              <TouchableOpacity onPress={() => Linking.openURL(cd.pdf_url).catch(() => Alert.alert('Error', 'Could not open PDF'))} style={{ flex: 1 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 8, paddingHorizontal: 12, backgroundColor: '#F0F0F0', borderRadius: 8 }}>
+                  <Ionicons name="document" size={16} color="#075E54" />
+                  <Text style={{ fontSize: 14, fontWeight: '600', color: '#075E54' }}>View PDF</Text>
+                </View>
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity onPress={() => {
+              const rawPhone = customer?.phone?.replace(/[^0-9]/g, '') || '';
+              const phone = rawPhone.startsWith('91') ? rawPhone : rawPhone ? '91' + rawPhone : '';
+              const isQuote = cd.is_quote || false;
+              const docType = isQuote ? 'Quote' : 'Invoice';
+              const dueText = cd.due_date ? '\nDue Date: ' + new Date(cd.due_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
+              const pdfText = cd.pdf_url ? '\n\nDownload ' + docType + ': ' + cd.pdf_url : '';
+              const confirmText = isQuote ? '\n\nPlease reply to confirm your acceptance of this quote.' : '';
+              const footer = '\n\n--\nGenerated in seconds by voice using AssistMe - India\'s fastest business assistant for traders. Try free: https://assistme.app';
+              const msg = 'Dear ' + (customer?.name || 'Customer') + ',\n\nPlease find your ' + docType + ' #' + cd.invoice_number + '.\n\nAmount: ' + formatCurrency(cd.total_amount || 0) + dueText + pdfText + confirmText + footer;
+              const waUrl = phone ? 'https://wa.me/' + phone + '?text=' + encodeURIComponent(msg) : 'https://wa.me/?text=' + encodeURIComponent(msg);
+              Linking.openURL(waUrl).catch(() => {});
+            }} style={{ flex: 1 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 8, paddingHorizontal: 12, backgroundColor: '#E8F5E9', borderRadius: 8 }}>
+                <Ionicons name="logo-whatsapp" size={16} color="#25D366" />
+                <Text style={{ fontSize: 14, fontWeight: '600', color: '#25D366' }}>WhatsApp</Text>
               </View>
             </TouchableOpacity>
-          )}
-          {cd.status !== 'paid' && !cd.pdf_url && (
-            isOverdue ? (
-              sentReminders.has(invoiceId) ? (
-                <Text style={styles.invoiceActionDone}>Reminder sent ✓</Text>
-              ) : (
-                <TouchableOpacity onPress={() => handleSendReminder(invoiceId)}>
-                  <Text style={styles.invoiceActionRed}>Send reminder ›</Text>
-                </TouchableOpacity>
-              )
-            ) : (
-              <TouchableOpacity onPress={() => {
-                const rawPhone = customer?.phone?.replace(/[^0-9]/g, '') || '';
-                const phone = rawPhone.startsWith('91') ? rawPhone : rawPhone ? '91' + rawPhone : '';
-                const isQuote = cd.is_quote || false;
-                const docType = isQuote ? 'Quote' : 'Invoice';
-                const dueText = cd.due_date ? '\nDue Date: ' + new Date(cd.due_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
-                const pdfText = cd.pdf_url ? '\n\nDownload ' + docType + ': ' + cd.pdf_url : '';
-                const confirmText = isQuote ? '\n\nPlease reply to confirm your acceptance of this quote.' : '';
-                const footer = '\n\n--\nGenerated in seconds by voice using AssistMe - India\'s fastest business assistant for traders. Try free: https://assistme.app';
-                const msg = 'Dear ' + (customer?.name || 'Customer') + ',\n\nPlease find your ' + docType + ' #' + cd.invoice_number + '.\n\nAmount: ' + formatCurrency(cd.total_amount || 0) + dueText + pdfText + confirmText + footer;
-                const waUrl = phone ? 'https://wa.me/' + phone + '?text=' + encodeURIComponent(msg) : 'https://wa.me/?text=' + encodeURIComponent(msg);
-                Linking.openURL(waUrl).catch(() => {});
-              }}>
-                <Text style={styles.invoiceActionGreen}>Share via WhatsApp</Text>
-              </TouchableOpacity>
-            )
-          )}
+          </View>
         </View>
       </View>
     );
