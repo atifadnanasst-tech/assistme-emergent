@@ -87,3 +87,5 @@ backend/package-lock.json
 frontend/assets/images/favicon.png
 
 frontend/package-lock.json
+frontend/.metro-cache/
+frontend/.metro-cache/
