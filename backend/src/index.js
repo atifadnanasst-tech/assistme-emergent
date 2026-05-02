@@ -1683,7 +1683,7 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
     async function resolveProduct(productName) {
       if (!productName) return { resolved: null, alternatives: [] };
       const { data: products } = await supabase
-        .from('products').select('id, name, selling_price, sku')
+        .from('products').select('id, name, selling_price, tax_rate, sku')
         .eq('organisation_id', organisationId).eq('is_active', true)
         .ilike('name', `%${productName}%`).limit(5);
       if (!products || products.length === 0) return { resolved: null, alternatives: [] };
@@ -1729,6 +1729,7 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
             product_id: resolved?.id || null,
             quantity: qty,
             unit_price: unitPrice,
+            tax_rate: resolved?.tax_rate || 0,
             line_total: lineTotal,
             alternatives: alternatives.map(a => ({ id: a.id, name: a.name, selling_price: a.selling_price })),
           });
