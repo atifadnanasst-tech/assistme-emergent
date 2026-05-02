@@ -58,6 +58,10 @@ export default function CustomerChatScreen() {
   const [bannerText, setBannerText] = useState('');
   const [bannerDraftId, setBannerDraftId] = useState<string | null>(null);
   const [bannerActionIds, setBannerActionIds] = useState<string[]>([]);
+  // Unresolved product prices, GST and removed items
+  const [unresolvedPrices, setUnresolvedPrices] = useState<Record<string, string>>({});
+  const [unresolvedGst, setUnresolvedGst] = useState<Record<string, string>>({});
+  const [removedItems, setRemovedItems] = useState<Set<string>>(new Set());
   // Date edit sheet
   const [dateEditVisible, setDateEditVisible] = useState(false);
   const [dateEditAction, setDateEditAction] = useState<any>(null);
@@ -360,8 +364,46 @@ setTimeout(() => {
       const token = await getToken();
       if (!token) return;
       const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
-      const selectedIds = Array.from(checkedActions);
 
+      // Step 1: validate and insert unresolved products
+      for (const action of previewActions) {
+        if (action.action_type !== 'create_invoice') continue;
+        const items = action.items || [];
+        for (let idx = 0; idx < items.length; idx++) {
+          const item = items[idx];
+          const itemKey = `${action.action_id}-${idx}`;
+          if (item.product_id !== null) continue;
+          if (removedItems.has(itemKey)) continue;
+          const price = parseFloat(unresolvedPrices[itemKey] || '0') || 0;
+          if (price <= 0) {
+            Alert.alert('Missing Price', `Enter a selling price for "${item.product_name}" or remove it.`);
+            setConfirming(false);
+            return;
+          }
+          const gstPct = parseFloat(unresolvedGst[itemKey] || '0') || 0;
+          const prodRes = await fetch(`${backendUrl}/api/products`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: item.product_name, selling_price: price, tax_rate: gstPct }),
+          });
+          if (!prodRes.ok) {
+            Alert.alert('Error', `Could not add "${item.product_name}" to catalog. Try again.`);
+            setConfirming(false);
+            return;
+          }
+          const newProduct = await prodRes.json();
+          const updatedItems = [...items];
+          updatedItems[idx] = { ...item, product_id: newProduct.id, unit_price: price, tax_rate: gstPct, line_total: price * item.quantity };
+          await fetch(`${backendUrl}/api/chat/${customer_id}/spark/action/${action.action_id}`, {
+            method: 'PATCH',
+            headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ parameters: { items: updatedItems } }),
+          });
+        }
+      }
+
+      // Step 2: confirm all selected actions
+      const selectedIds = Array.from(checkedActions);
       const res = await fetch(`${backendUrl}/api/chat/${customer_id}/spark/confirm`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
@@ -369,15 +411,17 @@ setTimeout(() => {
       });
       const data = await res.json();
 
-      // BUG FIX 2: Clear draft state immediately on Confirm All
       setPreviewVisible(false);
       setPreviewDraftId(null);
       setPreviewActions([]);
       setPreviewInsight(null);
       setCheckedActions(new Set());
+      setUnresolvedPrices({});
+      setUnresolvedGst({});
+      setRemovedItems(new Set());
 
       if (data.executed?.length > 0) {
-        await loadChat(); // Refresh to show invoice card
+        await loadChat();
       }
       if (data.failed?.length > 0) {
         Alert.alert('Warning', `${data.failed.length} action(s) failed to execute.`);
@@ -949,85 +993,166 @@ setTimeout(() => {
                   {/* Rich invoice items rendering */}
                   {action.action_type === 'create_invoice' && action.items?.length > 0 ? (
                     <View>
-                      {action.items.map((item: any, idx: number) => (
-                        <View key={idx} style={styles.invoiceItemRow}>
-                          <Text style={styles.invoiceItemName}>
-                            {item.quantity} × {item.product_name}
-                          </Text>
-                          {item.unit_price != null && (
-                            <Text style={styles.invoiceItemPrice}>
-                              @ ₹{item.unit_price.toLocaleString('en-IN')} = ₹{(item.line_total || item.unit_price * item.quantity).toLocaleString('en-IN')}
-                            </Text>
-                          )}
-                          {item.alternatives?.length > 1 && (
-                            <View style={styles.altRow}>
-                              <Text style={styles.altLabel}>Also found:</Text>
-                              {item.alternatives.filter((a: any) => a.id !== item.product_id).slice(0, 3).map((alt: any) => (
-                                <TouchableOpacity key={alt.id} style={styles.altChip} onPress={async () => {
-                                  // BUG FIX 3: Send complete replacement to PATCH endpoint
-                                  try {
-                                    const token = await getToken();
-                                    if (!token) return;
-                                    const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
-                                    
-                                    const replacementItem = {
-                                      product_id: alt.id,
-                                      product_name: alt.name,
-                                      unit_price: alt.selling_price,
-                                      quantity: item.quantity,
-                                      line_total: alt.selling_price * item.quantity,
-                                      alternatives: item.alternatives, // Preserve alternatives array
-                                    };
-
-                                    await fetch(`${backendUrl}/api/chat/${customer_id}/spark/action/${action.action_id}`, {
-                                      method: 'PATCH',
-                                      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-                                      body: JSON.stringify({
-                                        parameters: {
-                                          items: [replacementItem]
-                                        }
-                                      }),
-                                    });
-
-                                    // Update local state to reflect the swap
-                                    const updated = previewActions.map((pa: any) => {
-                                      if (pa.action_id !== action.action_id) return pa;
-                                      const newItems = [...pa.items];
-                                      newItems[idx] = replacementItem;
-                                      // Recalculate total by summing all line_total values
-                                      const newTotal = newItems.reduce((s: number, i: any) => s + (i.line_total || 0), 0);
-                                      return { ...pa, items: newItems, parameters: { ...pa.parameters, items: newItems, amount: newTotal } };
-                                    });
-                                    setPreviewActions(updated);
-                                  } catch (error) {
-                                    console.error('Swap product error:', error);
-                                    Alert.alert('Error', 'Could not swap product');
-                                  }
-                                }}>
-                                  <Text style={styles.altChipText}>{alt.name} (₹{alt.selling_price})</Text>
-                                </TouchableOpacity>
-                              ))}
+                      {action.items.map((item: any, idx: number) => {
+                        const itemKey = `${action.action_id}-${idx}`;
+                        const isUnresolved = item.product_id === null;
+                        const isRemoved = removedItems.has(itemKey);
+                        const unresolvedPrice = unresolvedPrices[itemKey] || '';
+                        const unresolvedGstVal = unresolvedGst[itemKey] || '';
+                        if (isRemoved) return null;
+                        return (
+                          <View key={idx} style={[styles.invoiceItemRow, isUnresolved && {
+                            backgroundColor: '#FFFDE7',
+                            borderLeftWidth: 3,
+                            borderLeftColor: '#F9A825',
+                            paddingLeft: 8,
+                            borderRadius: 6,
+                            marginBottom: 8,
+                          }]}>
+                            <View style={{ flex: 1 }}>
+                              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                                <Text style={styles.invoiceItemName}>
+                                  {item.quantity} × {item.product_name}
+                                </Text>
+                                {isUnresolved && (
+                                  <TouchableOpacity onPress={() => setRemovedItems(prev => new Set([...prev, itemKey]))} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                                    <Text style={{ fontSize: 18, color: '#F9A825', fontWeight: '700', paddingHorizontal: 6 }}>×</Text>
+                                  </TouchableOpacity>
+                                )}
+                              </View>
+                              {isUnresolved && (
+                                <Text style={{ fontSize: 11, color: '#F9A825', marginTop: 2 }}>
+                                  New · Add to catalog
+                                </Text>
+                              )}
+                              {!isUnresolved && item.unit_price != null && (
+                                <Text style={styles.invoiceItemPrice}>
+                                  @ ₹{item.unit_price.toLocaleString('en-IN')} = ₹{(item.line_total || item.unit_price * item.quantity).toLocaleString('en-IN')}
+                                  {item.tax_rate > 0 ? <Text style={{ fontSize: 11, color: '#888' }}> (GST {item.tax_rate}%)</Text> : null}
+                                </Text>
+                              )}
+                              {isUnresolved && (
+                                <View style={{ flexDirection: 'row', gap: 6, marginTop: 6 }}>
+                                  <TextInput
+                                    style={{ borderWidth: 1, borderColor: '#F9A825', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 4, width: 110, fontSize: 14, color: '#333' }}
+                                    placeholder="₹ Price"
+                                    placeholderTextColor="#999"
+                                    keyboardType="numeric"
+                                    value={unresolvedPrice}
+                                    onChangeText={(text) => setUnresolvedPrices(prev => ({ ...prev, [itemKey]: text }))}
+                                  />
+                                  <TextInput
+                                    style={{ borderWidth: 1, borderColor: '#F9A825', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 4, width: 70, fontSize: 14, color: '#333' }}
+                                    placeholder="GST %"
+                                    placeholderTextColor="#999"
+                                    keyboardType="numeric"
+                                    value={unresolvedGstVal}
+                                    onChangeText={(text) => setUnresolvedGst(prev => ({ ...prev, [itemKey]: text }))}
+                                  />
+                                </View>
+                              )}
                             </View>
-                          )}
-                        </View>
-                      ))}
-                      {action.parameters?.freight > 0 && (
-                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 8, borderTopWidth: 1, borderTopColor: '#E0E0E0' }}>
-                          <Text style={{ fontSize: 15, color: '#333', fontWeight: '500' }}>Freight</Text>
-                          <Text style={{ fontSize: 15, color: '#333', fontWeight: '600' }}>₹{action.parameters.freight.toLocaleString('en-IN')}</Text>
-                        </View>
-                      )}
-                      {action.parameters?.amount > 0 && (
-                        <Text style={styles.invoiceTotalText}>
-                          Total: ₹{(
-                            (action.items?.reduce((s: number, i: any) => s + (i.line_total || 0), 0) || 0) + 
-                            (action.parameters?.freight || 0)
-                          ).toLocaleString('en-IN')}
-                        </Text>
-                      )}
-                      {action.parameters?.due_date && (
-                        <Text style={styles.invoiceDueText}>Due: {action.parameters.due_date}</Text>
-                      )}
+                            {!isUnresolved && item.alternatives?.length > 1 && (
+                              <View style={styles.altRow}>
+                                <Text style={styles.altLabel}>Also found:</Text>
+                                {item.alternatives.filter((a: any) => a.id !== item.product_id).slice(0, 3).map((alt: any) => (
+                                  <TouchableOpacity key={alt.id} style={styles.altChip} onPress={async () => {
+                                    try {
+                                      const token = await getToken();
+                                      if (!token) return;
+                                      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+                                      const replacementItem = {
+                                        product_id: alt.id,
+                                        product_name: alt.name,
+                                        unit_price: alt.selling_price,
+                                        quantity: item.quantity,
+                                        line_total: alt.selling_price * item.quantity,
+                                        alternatives: item.alternatives,
+                                      };
+                                      await fetch(`${backendUrl}/api/chat/${customer_id}/spark/action/${action.action_id}`, {
+                                        method: 'PATCH',
+                                        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({ parameters: { items: [replacementItem] } }),
+                                      });
+                                      const updated = previewActions.map((pa: any) => {
+                                        if (pa.action_id !== action.action_id) return pa;
+                                        const newItems = [...pa.items];
+                                        newItems[idx] = replacementItem;
+                                        const newTotal = newItems.reduce((s: number, i: any) => s + (i.line_total || 0), 0);
+                                        return { ...pa, items: newItems, parameters: { ...pa.parameters, items: newItems, amount: newTotal } };
+                                      });
+                                      setPreviewActions(updated);
+                                    } catch (error) {
+                                      console.error('Swap product error:', error);
+                                      Alert.alert('Error', 'Could not swap product');
+                                    }
+                                  }}>
+                                    <Text style={styles.altChipText}>{alt.name} (₹{alt.selling_price})</Text>
+                                  </TouchableOpacity>
+                                ))}
+                              </View>
+                            )}
+                          </View>
+                        );
+                      })}
+                      {(() => {
+                        const freight = action.parameters?.freight || 0;
+                        const freightTaxable = action.parameters?.freight_taxable || false;
+                        let resolvedSubtotal = 0;
+                        let resolvedGst = 0;
+                        let maxTaxRate = 0;
+                        (action.items || []).forEach((item: any, idx: number) => {
+                          const itemKey = `${action.action_id}-${idx}`;
+                          if (removedItems.has(itemKey)) return;
+                          if (item.product_id !== null && item.line_total) {
+                            const sub = item.unit_price * item.quantity;
+                            resolvedSubtotal += sub;
+                            const gst = sub * (item.tax_rate || 0) / 100;
+                            resolvedGst += gst;
+                            if ((item.tax_rate || 0) > maxTaxRate) maxTaxRate = item.tax_rate || 0;
+                          }
+                        });
+                        let unresolvedSubtotal = 0;
+                        let unresolvedGstTotal = 0;
+                        (action.items || []).forEach((item: any, idx: number) => {
+                          const itemKey = `${action.action_id}-${idx}`;
+                          if (removedItems.has(itemKey)) return;
+                          if (item.product_id === null) {
+                            const price = parseFloat(unresolvedPrices[itemKey] || '0') || 0;
+                            const gstPct = parseFloat(unresolvedGst[itemKey] || '0') || 0;
+                            const lineAmt = price * item.quantity;
+                            unresolvedSubtotal += lineAmt;
+                            unresolvedGstTotal += lineAmt * gstPct / 100;
+                            if (gstPct > maxTaxRate) maxTaxRate = gstPct;
+                          }
+                        });
+                        const freightGst = freightTaxable ? freight * maxTaxRate / 100 : 0;
+                        const totalGst = resolvedGst + unresolvedGstTotal + freightGst;
+                        const grandTotal = resolvedSubtotal + unresolvedSubtotal + totalGst + freight;
+                        if (grandTotal <= 0) return null;
+                        return (
+                          <View>
+                            {freight > 0 && (
+                              <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 4, borderTopWidth: 1, borderTopColor: '#E0E0E0', marginTop: 4 }}>
+                                <Text style={{ fontSize: 13, color: '#666' }}>Freight</Text>
+                                <Text style={{ fontSize: 13, color: '#666' }}>₹{freight.toLocaleString('en-IN')}</Text>
+                              </View>
+                            )}
+                            {totalGst > 0 && (
+                              <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 4 }}>
+                                <Text style={{ fontSize: 12, color: '#888' }}>GST{freightTaxable && freight > 0 ? ` (max ${maxTaxRate}%)` : ''}</Text>
+                                <Text style={{ fontSize: 12, color: '#888' }}>₹{Math.round(totalGst).toLocaleString('en-IN')}</Text>
+                              </View>
+                            )}
+                            <View style={{ borderTopWidth: 1, borderTopColor: '#E0E0E0', marginTop: 4, paddingTop: 6 }}>
+                              <Text style={styles.invoiceTotalText}>Total: ₹{Math.round(grandTotal).toLocaleString('en-IN')}</Text>
+                            </View>
+                            {action.parameters?.due_date && (
+                              <Text style={styles.invoiceDueText}>Due: {action.parameters.due_date}</Text>
+                            )}
+                          </View>
+                        );
+                      })()}
                     </View>
                   ) : (
                     <Text style={styles.actionDetails}>{action.details}</Text>
