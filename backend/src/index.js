@@ -1711,7 +1711,7 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
     for (const action of parsed.actions) {
       const ent = action.entities || {};
 
-      if (action.action_type === 'create_invoice') {
+      if (action.action_type === 'create_invoice' || action.action_type === 'create_quote') {
         // Handle items[] array for invoice
         const items = Array.isArray(ent.items) ? ent.items : (ent.product_name ? [{ product_name: ent.product_name, quantity: ent.quantity }] : []);
         const resolvedItems = [];
@@ -1750,8 +1750,8 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
         const { data: savedAction, error: actionErr } = await supabase
           .from('ai_actions').insert({
             organisation_id: organisationId,
-            action_name: `create invoice for ${customer.name}`,
-            action_type: 'create_invoice',
+            action_name: `${action.action_type === 'create_quote' ? 'create quote' : 'create invoice'} for ${customer.name}`,
+            action_type: action.action_type,
             prompt_template: query,
             parameters: actionParams,
             confidence_score: parsed.confidence_score,
@@ -1769,7 +1769,7 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
 
         responseActions.push({
           action_id: savedAction.id,
-          action_type: 'create_invoice',
+          action_type: action.action_type,
           details: itemLines.join('\n') + (totalStr ? `\nTotal: ${totalStr}` : '') + (ent.due_date ? `\nDue: ${ent.due_date}` : ''),
           parameters: actionParams,
           items: resolvedItems,
@@ -2141,10 +2141,297 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
                   });
                 } catch {}
               }
+              // Write bank_transactions if bank account name provided
+              if (params.bank_account_name) {
+                try {
+                  const { data: bankAcc } = await supabase
+                    .from('bank_accounts').select('id')
+                    .eq('organisation_id', organisationId)
+                    .ilike('name', `%${params.bank_account_name}%`)
+                    .eq('is_active', true).limit(1).maybeSingle();
+                  if (bankAcc) {
+                    await supabase.from('bank_transactions').insert({
+                      organisation_id: organisationId,
+                      bank_account_id: bankAcc.id,
+                      type: 'credit',
+                      amount: params.amount,
+                      currency: 'INR',
+                      description: `Payment from ${customer.name}`,
+                      reference: inv.id,
+                      transaction_date: new Date().toISOString().split('T')[0],
+                      reference_type: 'invoice',
+                      reference_id: inv.id,
+                    });
+                  }
+                } catch (btErr) {
+                  console.warn('bank_transactions write failed:', btErr.message);
+                }
+              }
             }
             executed.push(actionId);
             break;
           }
+
+          case 'create_quote': {
+            // Same financial math as create_invoice, writes to quotations + quotation_items
+            const { count: qtCount } = await supabase
+              .from('quotations').select('*', { count: 'exact', head: true })
+              .eq('organisation_id', organisationId);
+            const quoteNumber = `Q-${((qtCount || 0) + 1).toString().padStart(3, '0')}`;
+
+            const itemsArr = Array.isArray(params.items) ? params.items : [];
+            const itemsForCalc = itemsArr.length > 0
+              ? itemsArr.map(i => ({
+                  product_id: i.product_id || null,
+                  product_name: i.product_name || 'Item',
+                  quantity: i.quantity || 1,
+                  unit_price: i.unit_price != null ? i.unit_price : null,
+                  tax_rate: i.tax_rate != null ? i.tax_rate : null,
+                  discount_pct: i.discount_pct || 0,
+                }))
+              : [];
+
+            const totals = await calculateInvoiceTotals(
+              supabase, organisationId, customerId, itemsForCalc,
+              {
+                freight: params.freight || 0,
+                freight_taxable: params.freight_taxable || false,
+                freight_tax_rate: params.freight_tax_rate || 18,
+                apply_gst: params.apply_gst !== false,
+                overall_discount: params.overall_discount || 0,
+                invoice_type: params.invoice_type || 'Tax Invoice',
+              }
+            );
+
+            const { data: newQuote, error: qtErr } = await supabase
+              .from('quotations').insert({
+                organisation_id: organisationId,
+                customer_id: customerId,
+                quote_number: quoteNumber,
+                status: 'sent',
+                issue_date: new Date().toISOString().split('T')[0],
+                expiry_date: params.due_date || new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
+                currency: 'INR',
+                subtotal: totals.subtotal,
+                discount_amount: totals.total_discount,
+                tax_amount: totals.total_tax,
+                total_amount: totals.grand_total,
+              }).select('id').single();
+
+            if (qtErr) { console.error('Create quote failed:', qtErr); failed.push(actionId); continue; }
+
+            for (let idx = 0; idx < totals.line_items.length; idx++) {
+              const li = totals.line_items[idx];
+              await supabase.from('quotation_items').insert({
+                organisation_id: organisationId,
+                quotation_id: newQuote.id,
+                product_id: li.product_id || null,
+                description: li.product_name || 'Item',
+                quantity: li.quantity,
+                unit_price: li.unit_price,
+                discount_pct: li.discount_pct,
+                tax_rate: li.tax_rate,
+                line_total: li.line_total,
+                sort_order: idx + 1,
+              });
+            }
+
+            // Confirmation message
+            const { data: qtConv } = await supabase
+              .from('conversations').select('id')
+              .eq('organisation_id', organisationId).eq('entity_type', 'customer')
+              .eq('entity_id', customerId).eq('status', 'active').maybeSingle();
+            if (qtConv) {
+              await supabase.from('messages').insert({
+                organisation_id: organisationId, conversation_id: qtConv.id,
+                role: 'system', content: `✓ Quote ${quoteNumber} created for ${customer.name} — ₹${totals.grand_total.toLocaleString('en-IN')}`,
+                metadata: { sender_type: 'system', visibility: 'owner_only', message_type: 'system_alert', read_by_owner: true, preview_text: `Quote ${quoteNumber} created` },
+                tokens_input: 0, tokens_output: 0,
+              });
+            }
+            executed.push(actionId);
+            break;
+          }
+
+          case 'convert_quote_to_invoice': {
+            // Find the quote by quote_number if provided, else latest sent quote for this customer
+            let quoteId = params.quote_id || null;
+            if (!quoteId && params.quote_number) {
+              const { data: qt } = await supabase
+                .from('quotations').select('id')
+                .eq('organisation_id', organisationId).eq('quote_number', params.quote_number).maybeSingle();
+              if (qt) quoteId = qt.id;
+            }
+            if (!quoteId) {
+              const { data: qt } = await supabase
+                .from('quotations').select('id')
+                .eq('organisation_id', organisationId).eq('customer_id', customerId)
+                .eq('status', 'sent').order('created_at', { ascending: false }).limit(1).maybeSingle();
+              if (qt) quoteId = qt.id;
+            }
+            if (!quoteId) { failed.push(actionId); break; }
+
+            // Fetch quote and its items
+            const { data: quote } = await supabase
+              .from('quotations').select('*').eq('id', quoteId).maybeSingle();
+            const { data: quoteItems } = await supabase
+              .from('quotation_items').select('*').eq('quotation_id', quoteId).is('deleted_at', null);
+
+            if (!quote) { failed.push(actionId); break; }
+
+            const { count: invCount } = await supabase
+              .from('invoices').select('*', { count: 'exact', head: true })
+              .eq('organisation_id', organisationId);
+            const invoiceNumber = ((invCount || 0) + 1).toString();
+
+            const { data: newInv, error: convErr } = await supabase
+              .from('invoices').insert({
+                organisation_id: organisationId,
+                customer_id: customerId,
+                quotation_id: quoteId,
+                invoice_number: invoiceNumber,
+                status: 'sent',
+                issue_date: new Date().toISOString().split('T')[0],
+                due_date: params.due_date || new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0],
+                currency: 'INR',
+                subtotal: quote.subtotal,
+                discount_amount: quote.discount_amount,
+                tax_amount: quote.tax_amount,
+                total_amount: quote.total_amount,
+                amount_paid: 0,
+                amount_due: quote.total_amount,
+              }).select('id').single();
+
+            if (convErr) { console.error('Convert quote failed:', convErr); failed.push(actionId); continue; }
+
+            // Copy quote items to invoice items
+            for (let idx = 0; idx < (quoteItems || []).length; idx++) {
+              const qi = quoteItems[idx];
+              await supabase.from('invoice_items').insert({
+                organisation_id: organisationId,
+                invoice_id: newInv.id,
+                product_id: qi.product_id || null,
+                description: qi.description,
+                quantity: qi.quantity,
+                unit_price: qi.unit_price,
+                discount_pct: qi.discount_pct,
+                tax_rate: qi.tax_rate,
+                line_total: qi.line_total,
+                sort_order: qi.sort_order,
+              });
+            }
+
+            // Mark quote as converted
+            await supabase.from('quotations').update({ status: 'converted' }).eq('id', quoteId);
+
+            // Invoice card message
+            const { data: convConv } = await supabase
+              .from('conversations').select('id')
+              .eq('organisation_id', organisationId).eq('entity_type', 'customer')
+              .eq('entity_id', customerId).eq('status', 'active').maybeSingle();
+            if (convConv) {
+              await supabase.from('messages').insert({
+                organisation_id: organisationId, conversation_id: convConv.id,
+                role: 'tool', content: `Invoice #${invoiceNumber} created`,
+                metadata: {
+                  sender_type: 'system', visibility: 'both', message_type: 'invoice_card',
+                  read_by_owner: true, preview_text: `Invoice #${invoiceNumber} created`,
+                  card_type: 'invoice_card',
+                  card_data: {
+                    invoice_id: newInv.id, invoice_number: invoiceNumber,
+                    total_amount: quote.total_amount,
+                    due_date: params.due_date || new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0],
+                    status: 'sent', items_summary: `Converted from ${quote.quote_number}`,
+                  },
+                },
+                tokens_input: 0, tokens_output: 0,
+              });
+            }
+            executed.push(actionId);
+            break;
+          }
+
+          case 'update_delivery_status': {
+            // Update task status for this customer's delivery task
+            await supabase.from('tasks')
+              .update({ status: 'completed' })
+              .eq('organisation_id', organisationId)
+              .eq('entity_id', customerId)
+              .eq('entity_type', 'delivery')
+              .eq('status', 'pending');
+
+            const { data: delConv } = await supabase
+              .from('conversations').select('id')
+              .eq('organisation_id', organisationId).eq('entity_type', 'customer')
+              .eq('entity_id', customerId).eq('status', 'active').maybeSingle();
+            if (delConv) {
+              await supabase.from('messages').insert({
+                organisation_id: organisationId, conversation_id: delConv.id,
+                role: 'system', content: `✓ Delivery marked as completed for ${customer.name}`,
+                metadata: { sender_type: 'system', visibility: 'owner_only', message_type: 'system_alert', read_by_owner: true, preview_text: `Delivery completed for ${customer.name}` },
+                tokens_input: 0, tokens_output: 0,
+              });
+            }
+            executed.push(actionId);
+            break;
+          }
+
+          case 'goods_returned': {
+            // Record return — create a negative invoice or credit note as system alert
+            const returnAmount = params.amount || 0;
+            if (returnAmount > 0) {
+              // Reduce outstanding balance
+              const newBalance = Math.max(0, (customer.outstanding_balance || 0) - returnAmount);
+              await supabase.from('customers').update({ outstanding_balance: newBalance })
+                .eq('id', customerId).eq('organisation_id', organisationId);
+            }
+            // System message
+            const { data: retConv } = await supabase
+              .from('conversations').select('id')
+              .eq('organisation_id', organisationId).eq('entity_type', 'customer')
+              .eq('entity_id', customerId).eq('status', 'active').maybeSingle();
+            if (retConv) {
+              const itemDesc = Array.isArray(params.items) && params.items.length > 0
+                ? params.items.map(i => `${i.quantity || 1} × ${i.product_name}`).join(', ')
+                : 'goods';
+              await supabase.from('messages').insert({
+                organisation_id: organisationId, conversation_id: retConv.id,
+                role: 'system', content: `✓ Goods returned by ${customer.name}: ${itemDesc}${params.reason ? ` — ${params.reason}` : ''}`,
+                metadata: { sender_type: 'system', visibility: 'owner_only', message_type: 'system_alert', read_by_owner: true, preview_text: `Goods returned by ${customer.name}` },
+                tokens_input: 0, tokens_output: 0,
+              });
+            }
+            executed.push(actionId);
+            break;
+          }
+
+          case 'record_expense': {
+            await supabase.from('expenses').insert({
+              organisation_id: organisationId,
+              category: params.category || 'general',
+              description: params.description || `Expense for ${customer.name}`,
+              amount: params.amount || 0,
+              currency: 'INR',
+              expense_date: new Date().toISOString().split('T')[0],
+              payment_method: params.payment_mode || null,
+              status: 'pending',
+            });
+            const { data: expConv } = await supabase
+              .from('conversations').select('id')
+              .eq('organisation_id', organisationId).eq('entity_type', 'customer')
+              .eq('entity_id', customerId).eq('status', 'active').maybeSingle();
+            if (expConv) {
+              await supabase.from('messages').insert({
+                organisation_id: organisationId, conversation_id: expConv.id,
+                role: 'system', content: `✓ Expense recorded: ₹${(params.amount || 0).toLocaleString('en-IN')} — ${params.description || params.category || 'general'}`,
+                metadata: { sender_type: 'system', visibility: 'owner_only', message_type: 'system_alert', read_by_owner: true, preview_text: `Expense recorded for ${customer.name}` },
+                tokens_input: 0, tokens_output: 0,
+              });
+            }
+            executed.push(actionId);
+            break;
+          }
+
 
           default:
             failed.push(actionId);

@@ -367,7 +367,7 @@ setTimeout(() => {
 
       // Step 1: validate and insert unresolved products
       for (const action of previewActions) {
-        if (action.action_type !== 'create_invoice') continue;
+        if (action.action_type !== 'create_invoice' && action.action_type !== 'create_quote') continue;
         const items = action.items || [];
         for (let idx = 0; idx < items.length; idx++) {
           const item = items[idx];
@@ -984,6 +984,7 @@ setTimeout(() => {
                 <View style={styles.actionContent}>
                   <Text style={styles.actionName}>
                     {action.action_type === 'create_invoice' ? 'Create Invoice' :
+                     action.action_type === 'create_quote' ? 'Create Quote' :
                      action.action_type === 'schedule_delivery' ? 'Delivery' :
                      action.action_type === 'set_reminder' ? 'Payment Reminder' :
                      action.action_type === 'record_payment' ? 'Record Payment' :
@@ -991,7 +992,7 @@ setTimeout(() => {
                   </Text>
 
                   {/* Rich invoice items rendering */}
-                  {action.action_type === 'create_invoice' && action.items?.length > 0 ? (
+                  {(action.action_type === 'create_invoice' || action.action_type === 'create_quote') && action.items?.length > 0 ? (
                     <View>
                       {action.items.map((item: any, idx: number) => {
                         const itemKey = `${action.action_id}-${idx}`;
@@ -1159,7 +1160,7 @@ setTimeout(() => {
                   )}
                 </View>
                 <TouchableOpacity style={styles.actionEditBtn} onPress={() => {
-                  if (action.action_type === 'create_invoice') {
+                  if (action.action_type === 'create_invoice' || action.action_type === 'create_quote') {
                     setPreviewVisible(false);
                     const p = action.parameters || {};
                     const params: Record<string, string> = {};
