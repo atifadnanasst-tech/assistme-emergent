@@ -1479,6 +1479,176 @@ async function calculateInvoiceTotals(supabaseClient, organisationId, customerId
   };
 }
 
+// ─── generateDocumentPDF ─────────────────────────────────────
+// Unified PDF generator for invoices and quotations.
+// documentType: 'invoice' | 'quotation'
+async function generateDocumentPDF({ documentId, organisationId, documentType, documentNumber, title, storageBucket, entityType }) {
+  try {
+    // Fetch document data
+    const itemsTable = documentType === 'invoice' ? 'invoice_items' : 'quotation_items';
+    const itemsForeignKey = documentType === 'invoice' ? 'invoice_id' : 'quotation_id';
+    const { data: doc } = await supabase.from(documentType === 'invoice' ? 'invoices' : 'quotations')
+      .select('*').eq('id', documentId).single();
+    if (!doc) { console.error(`[PDF] ${documentType} not found:`, documentId); return null; }
+
+    const { data: items } = await supabase.from(itemsTable).select('*')
+      .eq(itemsForeignKey, documentId).order('sort_order');
+    const { data: customer } = await supabase.from('customers')
+      .select('name, phone, tax_id').eq('id', doc.customer_id).single();
+    const { data: org } = await supabase.from('organisations')
+      .select('name').eq('id', organisationId).single();
+
+    // Fetch business profile header_cache
+    const { data: bizProfile } = await supabase.from('business_profiles')
+      .select('business_name, gstin, address_line1, address_line2, city, state, postal_code, phone, email, terms_text, header_cache')
+      .eq('organisation_id', organisationId).eq('is_default', true).eq('is_active', true)
+      .is('deleted_at', null).maybeSingle();
+
+    // Fetch footer promo from system_config
+    let footerPromo = '';
+    try {
+      const { data: sysConfig } = await supabase.from('system_config')
+        .select('value').eq('key', 'pdf_footer_promo').eq('is_active', true).maybeSingle();
+      if (sysConfig) footerPromo = sysConfig.value || '';
+    } catch {}
+
+    const PDFDocument = (await import('pdfkit')).default;
+    const doc2 = new PDFDocument({ size: 'A4', margin: 50 });
+    const chunks = [];
+    doc2.on('data', chunk => chunks.push(chunk));
+    const pdfReady = new Promise((resolve) => doc2.on('end', resolve));
+
+    // ── Header: Business Profile
+    const biz = bizProfile || {};
+    const businessName = biz.business_name || org?.name || 'Business';
+    doc2.fontSize(18).font('Helvetica-Bold').text(businessName, { align: 'center' });
+    if (biz.gstin) doc2.fontSize(9).font('Helvetica').text(`GSTIN: ${biz.gstin}`, { align: 'center' });
+    const addressParts = [biz.address_line1, biz.address_line2, biz.city, biz.state, biz.postal_code].filter(Boolean);
+    if (addressParts.length > 0) doc2.fontSize(9).text(addressParts.join(', '), { align: 'center' });
+    if (biz.phone) doc2.fontSize(9).text(`Phone: ${biz.phone}`, { align: 'center' });
+    doc2.moveDown(0.5);
+    doc2.moveTo(50, doc2.y).lineTo(545, doc2.y).stroke();
+    doc2.moveDown(0.3);
+
+    // ── Document title and number
+    doc2.fontSize(14).font('Helvetica-Bold').text(title, { align: 'center' });
+    doc2.moveDown(0.3);
+    doc2.fontSize(10).font('Helvetica').text(`${documentType === 'invoice' ? 'Invoice' : 'Quote'} #: ${documentNumber}`, { align: 'right' });
+    doc2.text(`Date: ${doc.issue_date}`, { align: 'right' });
+    if (doc.due_date) doc2.text(`${documentType === 'invoice' ? 'Due' : 'Valid Until'}: ${doc.due_date || doc.expiry_date}`, { align: 'right' });
+    doc2.moveDown(0.5);
+
+    // ── Bill To
+    doc2.fontSize(11).font('Helvetica-Bold').text('BILL TO:');
+    doc2.font('Helvetica').fontSize(10).text(customer?.name || '');
+    if (customer?.tax_id) doc2.text(`GSTIN: ${customer.tax_id}`);
+    doc2.moveDown(1);
+
+    // ── Items table header
+    const tableTop = doc2.y;
+    doc2.font('Helvetica-Bold').fontSize(9);
+    doc2.text('#', 50, tableTop, { width: 20 });
+    doc2.text('Item', 75, tableTop, { width: 200 });
+    doc2.text('Qty', 280, tableTop, { width: 40, align: 'right' });
+    doc2.text('Rate', 330, tableTop, { width: 70, align: 'right' });
+    doc2.text('Tax', 405, tableTop, { width: 40, align: 'right' });
+    doc2.text('Amount', 450, tableTop, { width: 95, align: 'right' });
+    doc2.moveDown(0.3);
+    doc2.moveTo(50, doc2.y).lineTo(545, doc2.y).stroke();
+    doc2.moveDown(0.3);
+
+    // ── Items
+    doc2.font('Helvetica').fontSize(9);
+    (items || []).forEach((item, i) => {
+      const y = doc2.y;
+      doc2.text(`${i + 1}`, 50, y, { width: 20 });
+      doc2.text(item.description || '', 75, y, { width: 200 });
+      doc2.text(`${item.quantity}`, 280, y, { width: 40, align: 'right' });
+      doc2.text(`₹${(item.unit_price || 0).toFixed(2)}`, 330, y, { width: 70, align: 'right' });
+      doc2.text(`${item.tax_rate || 0}%`, 405, y, { width: 40, align: 'right' });
+      doc2.text(`₹${(item.line_total || 0).toFixed(2)}`, 450, y, { width: 95, align: 'right' });
+      doc2.moveDown(0.5);
+    });
+
+    doc2.moveDown(0.3);
+    doc2.moveTo(50, doc2.y).lineTo(545, doc2.y).stroke();
+    doc2.moveDown(0.5);
+
+    // ── Totals
+    const totalsX = 380;
+    doc2.font('Helvetica').fontSize(10);
+    doc2.text('Subtotal:', totalsX, doc2.y, { width: 70 });
+    doc2.text(`₹${(doc.subtotal || 0).toFixed(2)}`, 450, doc2.y - 12, { width: 95, align: 'right' });
+    doc2.moveDown(0.3);
+    if (doc.tax_amount > 0) {
+      doc2.text('GST:', totalsX, doc2.y, { width: 70 });
+      doc2.text(`₹${(doc.tax_amount || 0).toFixed(2)}`, 450, doc2.y - 12, { width: 95, align: 'right' });
+      doc2.moveDown(0.3);
+    }
+    if (doc.custom_fields?.freight_amount > 0) {
+      doc2.text('Freight:', totalsX, doc2.y, { width: 70 });
+      doc2.text(`₹${doc.custom_fields.freight_amount.toFixed(2)}`, 450, doc2.y - 12, { width: 95, align: 'right' });
+      doc2.moveDown(0.3);
+    }
+    doc2.moveDown(0.2);
+    doc2.font('Helvetica-Bold').fontSize(12);
+    doc2.text('TOTAL:', totalsX, doc2.y, { width: 70 });
+    doc2.text(`₹${(doc.total_amount || 0).toFixed(2)}`, 450, doc2.y - 14, { width: 95, align: 'right' });
+
+    // ── Footer
+    if (biz.terms_text || footerPromo) {
+      doc2.moveDown(2);
+      doc2.moveTo(50, doc2.y).lineTo(545, doc2.y).stroke();
+      doc2.moveDown(0.3);
+      if (biz.terms_text) {
+        doc2.fontSize(8).font('Helvetica').text(biz.terms_text, { align: 'left' });
+        doc2.moveDown(0.3);
+      }
+      if (footerPromo) {
+        doc2.fontSize(8).font('Helvetica').fillColor('#888888').text(footerPromo, { align: 'center' });
+        doc2.fillColor('#000000');
+      }
+    }
+
+    doc2.end();
+    await pdfReady;
+
+    const pdfBuffer = Buffer.concat(chunks);
+    const fileName = `${documentNumber}.pdf`;
+    const storagePath = `${organisationId}/${fileName}`;
+
+    const { error: uploadErr } = await supabase.storage.from(storageBucket).upload(storagePath, pdfBuffer, {
+      contentType: 'application/pdf', upsert: true,
+    });
+    if (uploadErr) { console.error(`[PDF] Upload error:`, uploadErr); return null; }
+
+    const { data: publicUrl } = supabase.storage.from(storageBucket).getPublicUrl(storagePath);
+    const pdfUrl = publicUrl.publicUrl;
+
+    // Save to attachments
+    try {
+      await supabase.from('attachments').insert({
+        organisation_id: organisationId,
+        entity_type: entityType,
+        entity_id: documentId,
+        file_name: fileName,
+        mime_type: 'application/pdf',
+        storage_path: storagePath,
+        public_url: pdfUrl,
+      });
+    } catch (attErr) {
+      console.warn('[PDF] Attachment record failed:', attErr);
+    }
+
+    console.log(`[PDF] Generated: ${pdfUrl}`);
+    return pdfUrl;
+  } catch (err) {
+    console.error('[PDF] generateDocumentPDF error:', err);
+    return null;
+  }
+}
+
+
 // ══════════════════════════════════════════════════════════════
 // FLOW 3A — AI SPARK ROUTES
 // ══════════════════════════════════════════════════════════════
@@ -2023,6 +2193,23 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
               .eq('organisation_id', organisationId).eq('entity_type', 'customer')
               .eq('entity_id', customerId).eq('status', 'active').maybeSingle();
 
+
+            // Generate PDF at confirm time
+            let invoicePdfUrl = null;
+            try {
+              invoicePdfUrl = await generateDocumentPDF({
+                documentId: newInvoice.id,
+                organisationId,
+                documentType: 'invoice',
+                documentNumber: invoiceNumber,
+                title: totals.invoice_type === 'Bill of Supply' ? 'BILL OF SUPPLY' : 'TAX INVOICE',
+                storageBucket: 'invoices',
+                entityType: 'invoice',
+              });
+            } catch (pdfErr) {
+              console.warn('[PDF] Invoice PDF generation failed:', pdfErr.message);
+            }
+
             if (conv) {
               await supabase.from('messages').insert({
                 organisation_id: organisationId,
@@ -2043,6 +2230,7 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
                     due_date: params.due_date || new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0],
                     status: 'sent',
                     items_summary: itemsSummary,
+                    pdf_url: invoicePdfUrl,
                   },
                 },
                 tokens_input: 0, tokens_output: 0,
@@ -2241,11 +2429,45 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
               .from('conversations').select('id')
               .eq('organisation_id', organisationId).eq('entity_type', 'customer')
               .eq('entity_id', customerId).eq('status', 'active').maybeSingle();
+            // Generate PDF at confirm time
+            let quotePdfUrl = null;
+            try {
+              quotePdfUrl = await generateDocumentPDF({
+                documentId: newQuote.id,
+                organisationId,
+                documentType: 'quotation',
+                documentNumber: quoteNumber,
+                title: 'QUOTATION',
+                storageBucket: 'quotes',
+                entityType: 'quotation',
+              });
+            } catch (pdfErr) {
+              console.warn('[PDF] Quote PDF generation failed:', pdfErr.message);
+            }
             if (qtConv) {
               await supabase.from('messages').insert({
-                organisation_id: organisationId, conversation_id: qtConv.id,
-                role: 'system', content: `✓ Quote ${quoteNumber} created for ${customer.name} — ₹${totals.grand_total.toLocaleString('en-IN')}`,
-                metadata: { sender_type: 'system', visibility: 'owner_only', message_type: 'system_alert', read_by_owner: true, preview_text: `Quote ${quoteNumber} created` },
+                organisation_id: organisationId,
+                conversation_id: qtConv.id,
+                role: 'tool',
+                content: `Quote ${quoteNumber} created`,
+                metadata: {
+                  sender_type: 'system',
+                  visibility: 'both',
+                  message_type: 'invoice_card',
+                  read_by_owner: true,
+                  preview_text: `Quote ${quoteNumber} created`,
+                  card_type: 'invoice_card',
+                  card_data: {
+                    invoice_id: newQuote.id,
+                    invoice_number: quoteNumber,
+                    total_amount: totals.grand_total,
+                    due_date: params.due_date || new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
+                    status: 'sent',
+                    items_summary: itemsArr.map(i => `${i.product_name} × ${i.quantity || 1}`).join(', '),
+                    pdf_url: quotePdfUrl,
+                    is_quote: true,
+                  },
+                },
                 tokens_input: 0, tokens_output: 0,
               });
             }
