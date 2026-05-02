@@ -15,7 +15,7 @@ import { authService } from '../../lib/auth';
 // ── Types ────────────────────────────────────────────────────
 interface CustomerData {
   id: string; name: string; initials: string; avatar_color: string;
-  outstanding_balance: number | null; health_score: number | null; status: string;
+  outstanding_balance: number | null; health_score: number | null; status: string; phone?: string;
 }
 interface ChatMessage {
   id: string; role: string; content: string; created_at: string;
@@ -621,12 +621,19 @@ setTimeout(() => {
               )
             ) : (
               <TouchableOpacity onPress={() => {
-                if (customer?.id) {
-                  const phone = ''; // Would need customer phone
-                  Linking.openURL(`https://wa.me/?text=${encodeURIComponent(`Invoice #${cd.invoice_number} - ${formatCurrency(cd.total_amount || 0)}`)}`).catch(() => {});
-                }
+                const rawPhone = customer?.phone?.replace(/[^0-9]/g, '') || '';
+                const phone = rawPhone.startsWith('91') ? rawPhone : rawPhone ? '91' + rawPhone : '';
+                const isQuote = cd.is_quote || false;
+                const docType = isQuote ? 'Quote' : 'Invoice';
+                const dueText = cd.due_date ? '\nDue Date: ' + new Date(cd.due_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
+                const pdfText = cd.pdf_url ? '\n\nDownload ' + docType + ': ' + cd.pdf_url : '';
+                const confirmText = isQuote ? '\n\nPlease reply to confirm your acceptance of this quote.' : '';
+                const footer = '\n\n--\nGenerated in seconds by voice using AssistMe - India\'s fastest business assistant for traders. Try free: https://assistme.app';
+                const msg = 'Dear ' + (customer?.name || 'Customer') + ',\n\nPlease find your ' + docType + ' #' + cd.invoice_number + '.\n\nAmount: ' + formatCurrency(cd.total_amount || 0) + dueText + pdfText + confirmText + footer;
+                const waUrl = phone ? 'https://wa.me/' + phone + '?text=' + encodeURIComponent(msg) : 'https://wa.me/?text=' + encodeURIComponent(msg);
+                Linking.openURL(waUrl).catch(() => {});
               }}>
-                <Text style={styles.invoiceActionGreen}>Share via WhatsApp ›</Text>
+                <Text style={styles.invoiceActionGreen}>Share via WhatsApp</Text>
               </TouchableOpacity>
             )
           )}
