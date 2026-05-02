@@ -3272,7 +3272,7 @@ app.post('/api/products', async (c) => {
     const { organisationId } = auth;
 
     const body = await c.req.json().catch(() => ({}));
-    const { name, selling_price } = body;
+    const { name, selling_price, tax_rate } = body;
 
     if (!name?.trim()) return c.json({ error: 'validation', message: 'Product name is required' }, 400);
     if (!selling_price || selling_price <= 0) return c.json({ error: 'validation', message: 'Valid selling price is required' }, 400);
@@ -3285,7 +3285,7 @@ app.post('/api/products', async (c) => {
         selling_price,
         unit: 'pcs',
         cost_price: 0,
-        tax_rate: 0,
+        tax_rate: parseFloat(tax_rate) || 0,
         is_active: true,
       })
       .select('id, name, selling_price')
