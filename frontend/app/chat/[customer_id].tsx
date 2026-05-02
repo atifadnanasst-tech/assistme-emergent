@@ -67,9 +67,6 @@ export default function CustomerChatScreen() {
   // AI query
   const [aiQueryText, setAiQueryText] = useState('');
   const [aiQuerying, setAiQuerying] = useState(false);
-  // Unresolved products
-  const [unresolvedPrices, setUnresolvedPrices] = useState<{ [key: string]: string }>({});
-  const [unresolvedChecked, setUnresolvedChecked] = useState<Set<string>>(new Set());
 
   const channelRef = useRef<any>(null);
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
@@ -291,8 +288,6 @@ setTimeout(() => {
     setPreviewInsight(null);
     setCheckedActions(new Set());
     setPreviewVisible(false);
-    setUnresolvedPrices({});
-    setUnresolvedChecked(new Set());
 
     // Do NOT add instruction to messages — it is NOT a chat message to the customer.
     // The sparkProcessing indicator shows the owner that AI is working.
@@ -954,73 +949,17 @@ setTimeout(() => {
                   {/* Rich invoice items rendering */}
                   {action.action_type === 'create_invoice' && action.items?.length > 0 ? (
                     <View>
-                      {action.items.map((item: any, idx: number) => {
-                        const itemKey = `${action.action_id}-${idx}`;
-                        const isUnresolved = item.product_id === null;
-                        const unresolvedPrice = unresolvedPrices[itemKey] || '';
-                        const isUnresolvedChecked = unresolvedChecked.has(itemKey);
-                        
-                        return (
-                          <View key={idx} style={[styles.invoiceItemRow, isUnresolved && {
-                            backgroundColor: '#FFFDE7',
-                            borderLeftWidth: 3,
-                            borderLeftColor: '#F9A825',
-                            paddingLeft: 13,
-                          }]}>
-                            <View style={{ flex: 1 }}>
-                              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                                {isUnresolved && (
-                                  <TouchableOpacity onPress={() => {
-                                    setUnresolvedChecked(prev => {
-                                      const newSet = new Set(prev);
-                                      if (newSet.has(itemKey)) {
-                                        newSet.delete(itemKey);
-                                      } else {
-                                        newSet.add(itemKey);
-                                      }
-                                      return newSet;
-                                    });
-                                  }}>
-                                    <Ionicons name={isUnresolvedChecked ? 'checkbox' : 'square-outline'} size={20} color="#F9A825" />
-                                  </TouchableOpacity>
-                                )}
-                                <Text style={styles.invoiceItemName}>
-                                  {item.quantity} × {item.product_name}
-                                </Text>
-                              </View>
-                              {isUnresolved && (
-                                <Text style={{ fontSize: 11, color: '#F9A825', marginTop: 4, marginLeft: isUnresolvedChecked ? 28 : 0 }}>
-                                  New · Add to catalog
-                                </Text>
-                              )}
-                              {!isUnresolved && item.unit_price != null && (
-                                <Text style={styles.invoiceItemPrice}>
-                                  @ ₹{item.unit_price.toLocaleString('en-IN')} = ₹{(item.line_total || item.unit_price * item.quantity).toLocaleString('en-IN')}
-                                </Text>
-                              )}
-                            </View>
-                            {isUnresolved && (
-                              <TextInput
-                                style={{
-                                  borderWidth: 1,
-                                  borderColor: '#F9A825',
-                                  borderRadius: 6,
-                                  paddingHorizontal: 8,
-                                  paddingVertical: 6,
-                                  width: 100,
-                                  fontSize: 14,
-                                  color: '#333',
-                                }}
-                                placeholder="₹ Price"
-                                placeholderTextColor="#999"
-                                keyboardType="numeric"
-                                value={unresolvedPrice}
-                                onChangeText={(text) => {
-                                  setUnresolvedPrices(prev => ({ ...prev, [itemKey]: text }));
-                                }}
-                              />
-                            )}
-                            {!isUnresolved && item.alternatives?.length > 1 && (
+                      {action.items.map((item: any, idx: number) => (
+                        <View key={idx} style={styles.invoiceItemRow}>
+                          <Text style={styles.invoiceItemName}>
+                            {item.quantity} × {item.product_name}
+                          </Text>
+                          {item.unit_price != null && (
+                            <Text style={styles.invoiceItemPrice}>
+                              @ ₹{item.unit_price.toLocaleString('en-IN')} = ₹{(item.line_total || item.unit_price * item.quantity).toLocaleString('en-IN')}
+                            </Text>
+                          )}
+                          {item.alternatives?.length > 1 && (
                             <View style={styles.altRow}>
                               <Text style={styles.altLabel}>Also found:</Text>
                               {item.alternatives.filter((a: any) => a.id !== item.product_id).slice(0, 3).map((alt: any) => (
