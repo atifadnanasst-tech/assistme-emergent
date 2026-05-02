@@ -1149,7 +1149,15 @@ setTimeout(() => {
                               <Text style={styles.invoiceTotalText}>Total: ₹{Math.round(grandTotal).toLocaleString('en-IN')}</Text>
                             </View>
                             {action.parameters?.due_date && (
-                              <Text style={styles.invoiceDueText}>Due: {action.parameters.due_date}</Text>
+                              <TouchableOpacity onPress={() => {
+                                setDateEditAction(action);
+                                setDateEditValue(action.parameters.due_date ? new Date(action.parameters.due_date + 'T00:00:00') : new Date());
+                                setDateEditDesc('');
+                                setShowDatePicker(Platform.OS === 'ios');
+                                setDateEditVisible(true);
+                              }}>
+                                <Text style={[styles.invoiceDueText, { textDecorationLine: 'underline' }]}>Due: {action.parameters.due_date} (tap to change)</Text>
+                              </TouchableOpacity>
                             )}
                           </View>
                         );
@@ -1224,7 +1232,7 @@ setTimeout(() => {
           <View style={[styles.sheetContainer, { paddingBottom: 40 }]}>
             <View style={styles.sheetHandle} />
             <Text style={styles.sheetHeading}>
-              {dateEditAction?.action_type === 'schedule_delivery' ? 'Edit Delivery' : 'Edit Payment Reminder'}
+              {dateEditAction?.action_type === 'schedule_delivery' ? 'Edit Delivery' : dateEditAction?.action_type === 'create_invoice' || dateEditAction?.action_type === 'create_quote' ? 'Edit Due Date' : 'Edit Payment Reminder'}
             </Text>
 
             {/* Date picker */}
@@ -1278,7 +1286,7 @@ setTimeout(() => {
                   const key = pa.action_type === 'schedule_delivery' ? 'delivery_date' : 'due_date';
                   return {
                     ...pa,
-                    details: pa.action_type === 'schedule_delivery' ? `Schedule: ${dateStr}` : `Send on: ${dateStr}`,
+                    details: pa.action_type === 'schedule_delivery' ? `Schedule: ${dateStr}` : pa.action_type === 'create_invoice' || pa.action_type === 'create_quote' ? `Due: ${dateStr}` : `Send on: ${dateStr}`,
                     parameters: { ...pa.parameters, [key]: dateStr, description: dateEditDesc },
                   };
                 });
