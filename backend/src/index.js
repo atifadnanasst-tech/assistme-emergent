@@ -43,6 +43,81 @@ async function broadcastNewMessage(orgId, payload) {
   }
 }
 
+// ─── Cross-Org Card Mirror Helper ────────────────────────────
+async function mirrorCardToReceiverOrg({ supabase, senderOrgId, senderUserId, customerPhone, originalMetadata, originalContent }) {
+  try {
+    if (!customerPhone) return;
+    const normalizePhone = (p) => p ? p.replace(/\D/g, '').padStart(12, '').slice(-12).replace(/^0+/, '') : null;
+    const normalizedCustomerPhone = normalizePhone(customerPhone);
+
+    const { data: allUsers } = await supabase.from('users').select('id, organisation_id, phone').neq('organisation_id', senderOrgId);
+    const receiverUser = (allUsers || []).find(u => normalizePhone(u.phone) === normalizedCustomerPhone) || null;
+    if (!receiverUser) return;
+
+    const { data: senderUser } = await supabase.from('users').select('phone').eq('id', senderUserId).maybeSingle();
+    if (!senderUser?.phone) return;
+    const normalizedSenderPhone = normalizePhone(senderUser.phone);
+
+    const { data: allReceiverCustomers } = await supabase.from('customers').select('id, phone').eq('organisation_id', receiverUser.organisation_id);
+    let senderAsCustomer = (allReceiverCustomers || []).find(c => normalizePhone(c.phone) === normalizedSenderPhone) || null;
+
+    if (!senderAsCustomer) {
+      const avatarColors = ['#E53935','#8E24AA','#1E88E5','#43A047','#F57C00','#00897B'];
+      const { data: newCust } = await supabase.from('customers').insert({
+        organisation_id: receiverUser.organisation_id,
+        name: senderUser.phone,
+        phone: normalizedSenderPhone,
+        currency: 'INR',
+        outstanding_balance: 0,
+        status: 'active',
+        custom_fields: { avatar_color: avatarColors[Math.floor(Math.random() * avatarColors.length)], cross_org: true },
+      }).select('id').single();
+      if (newCust) senderAsCustomer = newCust;
+    }
+    if (!senderAsCustomer) return;
+
+    let { data: receiverConv } = await supabase.from('conversations').select('id')
+      .eq('organisation_id', receiverUser.organisation_id)
+      .eq('entity_type', 'customer')
+      .eq('entity_id', senderAsCustomer.id)
+      .eq('status', 'active').maybeSingle();
+
+    if (!receiverConv) {
+      const { data: newConv } = await supabase.from('conversations').insert({
+        organisation_id: receiverUser.organisation_id,
+        user_id: receiverUser.id,
+        entity_type: 'customer',
+        entity_id: senderAsCustomer.id,
+        model: 'gpt-4o-mini',
+        status: 'active',
+      }).select('id').single();
+      receiverConv = newConv;
+    }
+    if (!receiverConv) return;
+
+    await supabase.from('messages').insert({
+      organisation_id: receiverUser.organisation_id,
+      conversation_id: receiverConv.id,
+      role: 'tool',
+      content: originalContent,
+      metadata: {
+        ...originalMetadata,
+        cross_org: true,
+        read_by_owner: false,
+        sender_org_id: senderOrgId,
+      },
+      tokens_input: 0,
+      tokens_output: 0,
+    });
+
+    console.log('[MIRROR] Card mirrored to org:', receiverUser.organisation_id);
+    await broadcastNewMessage(receiverUser.organisation_id, { conversation_id: receiverConv.id });
+
+  } catch (err) {
+    console.warn('[MIRROR] Card mirror failed (non-fatal):', err?.message);
+  }
+}
+
 // Create Hono app
 const app = new Hono();
 
@@ -2212,7 +2287,7 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
             }
 
             if (conv) {
-              await supabase.from('messages').insert({
+              const { data: cardMsg } = await supabase.from('messages').insert({
                 organisation_id: organisationId,
                 conversation_id: conv.id,
                 role: 'tool',
@@ -2235,6 +2310,15 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
                   },
                 },
                 tokens_input: 0, tokens_output: 0,
+              }).select('id, metadata, content').single();
+
+              await mirrorCardToReceiverOrg({
+                supabase,
+                senderOrgId: organisationId,
+                senderUserId: userId,
+                customerPhone: customer?.phone,
+                originalMetadata: cardMsg?.metadata || {},
+                originalContent: cardMsg?.content || '',
               });
             }
 
@@ -2446,7 +2530,7 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
               console.warn('[PDF] Quote PDF generation failed:', pdfErr.message);
             }
             if (qtConv) {
-              await supabase.from('messages').insert({
+              const { data: cardMsg } = await supabase.from('messages').insert({
                 organisation_id: organisationId,
                 conversation_id: qtConv.id,
                 role: 'tool',
@@ -2470,6 +2554,15 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
                   },
                 },
                 tokens_input: 0, tokens_output: 0,
+              }).select('id, metadata, content').single();
+
+              await mirrorCardToReceiverOrg({
+                supabase,
+                senderOrgId: organisationId,
+                senderUserId: userId,
+                customerPhone: customer?.phone,
+                originalMetadata: cardMsg?.metadata || {},
+                originalContent: cardMsg?.content || '',
               });
             }
             executed.push(actionId);
@@ -2553,7 +2646,7 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
               .eq('organisation_id', organisationId).eq('entity_type', 'customer')
               .eq('entity_id', customerId).eq('status', 'active').maybeSingle();
             if (convConv) {
-              await supabase.from('messages').insert({
+              const { data: cardMsg } = await supabase.from('messages').insert({
                 organisation_id: organisationId, conversation_id: convConv.id,
                 role: 'tool', content: `Invoice #${invoiceNumber} created`,
                 metadata: {
@@ -2568,6 +2661,15 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
                   },
                 },
                 tokens_input: 0, tokens_output: 0,
+              }).select('id, metadata, content').single();
+
+              await mirrorCardToReceiverOrg({
+                supabase,
+                senderOrgId: organisationId,
+                senderUserId: userId,
+                customerPhone: customer?.phone,
+                originalMetadata: cardMsg?.metadata || {},
+                originalContent: cardMsg?.content || '',
               });
             }
             executed.push(actionId);
@@ -3683,7 +3785,7 @@ app.post('/api/invoices/:invoice_id/share', async (c) => {
   try {
     const auth = await authenticateChat(c);
     if (!auth) return c.json({ error: 'unauthorized' }, 401);
-    const { organisationId } = auth;
+    const { organisationId, userId } = auth;
     const invoiceId = c.req.param('invoice_id');
     const body = await c.req.json();
     const channel = body.channel || 'app';
@@ -3732,12 +3834,21 @@ app.post('/api/invoices/:invoice_id/share', async (c) => {
           },
         },
         tokens_input: 0, tokens_output: 0,
-      }).select('id').single();
+      }).select('id, metadata, content').single();
       
       if (msgErr) {
         console.error(`📱 [SHARE] Message insert error:`, msgErr);
         return c.json({ shared: false, error: msgErr.message }, 500);
       }
+
+      await mirrorCardToReceiverOrg({
+        supabase,
+        senderOrgId: organisationId,
+        senderUserId: userId,
+        customerPhone: customer?.phone,
+        originalMetadata: msg?.metadata || {},
+        originalContent: msg?.content || '',
+      });
       
       await broadcastNewMessage(organisationId, { conversation_id: conv.id });
       console.log(`📱 [SHARE] Message created: ${msg?.id}`);
