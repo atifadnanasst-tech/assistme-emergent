@@ -2180,7 +2180,7 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
             const { count: invCount } = await supabase
               .from('invoices').select('*', { count: 'exact', head: true })
               .eq('organisation_id', organisationId);
-            const invoiceNumber = ((invCount || 0) + 1).toString();
+            const invoiceNumber = 'INV-' + ((invCount || 0) + 1).toString().padStart(3, '0');
 
             const itemsArr = Array.isArray(params.items) ? params.items : [];
 
@@ -2598,7 +2598,7 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
             const { count: invCount } = await supabase
               .from('invoices').select('*', { count: 'exact', head: true })
               .eq('organisation_id', organisationId);
-            const invoiceNumber = ((invCount || 0) + 1).toString();
+            const invoiceNumber = 'INV-' + ((invCount || 0) + 1).toString().padStart(3, '0');
 
             const { data: newInv, error: convErr } = await supabase
               .from('invoices').insert({
