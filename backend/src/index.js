@@ -1615,7 +1615,7 @@ async function generateDocumentPDF({ documentId, organisationId, documentType, d
     await pdfReady;
 
     const pdfBuffer = Buffer.concat(chunks);
-    const fileName = `${documentNumber}_${new Date().toISOString().replace(/[-:T]/g, '').slice(0,15)}.pdf`;
+    const fileName = `${documentNumber}_${new Date().toISOString().replace(/[-:T.Z]/g, '').slice(0,15)}.pdf`;
     const storagePath = `${organisationId}/${fileName}`;
 
     const { error: uploadErr } = await supabase.storage.from(storageBucket).upload(storagePath, pdfBuffer, {
@@ -3642,7 +3642,7 @@ app.post('/api/invoices/:invoice_id/pdf', async (c) => {
     await pdfReady;
 
     const pdfBuffer = Buffer.concat(chunks);
-    const fileName = `${invoice.invoice_number}_${new Date().toISOString().replace(/[-:T]/g, '').slice(0,15)}.pdf`;
+    const fileName = `${invoice.invoice_number}_${new Date().toISOString().replace(/[-:T.Z]/g, '').slice(0,15)}.pdf`;
     const storagePath = `${organisationId}/${fileName}`;
 
     console.log(`📄 [PDF] Uploading to storage: ${storagePath}`);
