@@ -98,21 +98,18 @@ export const authService = {
   // Refresh session
   async refreshSession(): Promise<boolean> {
     try {
-      const storedAccess = await secureGet(TOKEN_KEY);
-      const storedRefresh = await secureGet(REFRESH_TOKEN_KEY);
-      if (!storedAccess || !storedRefresh) return false;
-      await supabase.auth.setSession({
-        access_token: storedAccess,
-        refresh_token: storedRefresh,
-      });
+      console.log('🔐 [AUTH] Attempting session refresh...');
       const { data, error } = await supabase.auth.refreshSession();
       if (error || !data.session) {
+        console.warn('🔐 [AUTH] Refresh failed:', error);
         return false;
       }
       await secureSet(TOKEN_KEY, data.session.access_token);
       await secureSet(REFRESH_TOKEN_KEY, data.session.refresh_token);
+      console.log('🔐 [AUTH] Session refreshed successfully');
       return true;
-    } catch {
+    } catch (err) {
+      console.warn('🔐 [AUTH] Session refresh error:', err);
       return false;
     }
   },
