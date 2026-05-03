@@ -851,7 +851,7 @@ app.get('/api/chat/:customer_id', async (c) => {
         .select('id, role, content, metadata, created_at')
         .eq('conversation_id', conversation.id)
         .is('deleted_at', null)
-        .order('created_at', { ascending: true })
+        .order('created_at', { ascending: false })
         .limit(50);
 
       if (!msgErr && msgData) {
@@ -866,7 +866,7 @@ app.get('/api/chat/:customer_id', async (c) => {
           card_type: m.metadata?.card_type || null,
           card_data: m.metadata?.card_data || {},
           preview_text: m.metadata?.preview_text || null,
-        }));
+        })).reverse();
       }
 
       // 4. Mark unread messages as read using jsonb_set
@@ -3509,7 +3509,7 @@ app.post('/api/invoices', async (c) => {
     const { data: newInvoice, error: invErr } = await supabase.from('invoices').insert({
       organisation_id: organisationId, customer_id, invoice_number: invoiceNumber,
       status, issue_date: new Date().toISOString().split('T')[0], due_date: computedDueDate,
-      currency: 'INR', subtotal, tax_amount: totalTax, total_amount: totals.grand_total,
+      currency: 'INR', subtotal, tax_amount: totalTax, total_amount: totalAmount,
       amount_due: totalAmount, amount_paid: 0,
       custom_fields: {
         invoice_type: invoice_type || 'Tax Invoice', po_number: po_number || null,
@@ -3533,11 +3533,11 @@ app.post('/api/invoices', async (c) => {
     // Update customer outstanding_balance
     if (status !== 'draft') {
       await supabase.from('customers')
-        .update({ outstanding_balance: (customer.outstanding_balance || 0) + totals.grand_total })
+        .update({ outstanding_balance: (customer.outstanding_balance || 0) + totalAmount })
         .eq('id', customer_id).eq('organisation_id', organisationId);
     }
 
-    return c.json({ invoice_id: newInvoice.id, invoice_number: invoiceNumber, total_amount: totals.grand_total, pdf_url: null });
+    return c.json({ invoice_id: newInvoice.id, invoice_number: invoiceNumber, total_amount: totalAmount, pdf_url: null });
   } catch (error) {
     console.error('POST /api/invoices error:', error);
     return c.json({ error: 'server_error' }, 500);
@@ -3739,6 +3739,7 @@ app.post('/api/invoices/:invoice_id/share', async (c) => {
         return c.json({ shared: false, error: msgErr.message }, 500);
       }
       
+      await broadcastNewMessage(organisationId, { conversation_id: conv.id });
       console.log(`📱 [SHARE] Message created: ${msg?.id}`);
       return c.json({ shared: true, message_id: msg?.id });
 
