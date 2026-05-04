@@ -76,9 +76,8 @@ export default function CustomerChatScreen() {
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [oldestTimestamp, setOldestTimestamp] = useState<string | null>(null);
   const loadingOlderRef = useRef(false);
+  const hasTriggeredInitialEndReached = useRef(false);
 
-  const initialLoadRef = useRef(true);
-  const hasScrolledRef = useRef(false);
   const inputRef = useRef<any>(null);
   const channelRef = useRef<any>(null);
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
@@ -148,9 +147,12 @@ export default function CustomerChatScreen() {
               setMessages(prev => {
                 const existingIds = new Set(prev.map(m => m.id));
                 const newOnly = incoming.filter((m: any) => !existingIds.has(m.id));
-                return newOnly.length > 0 ? [...prev, ...newOnly] : prev;
+                const deduped = newOnly.filter((m: any) => !existingIds.has(m.id));
+                // Backend currently returns ASC (oldest→newest).
+                // Reverse so newest is at index 0 for inverted list.
+                // If backend order changes in future, this line must be revisited.
+                return deduped.length > 0 ? [...deduped.reverse(), ...prev] : prev;
               });
-              setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
             }, 500);
           }
         })
@@ -172,9 +174,12 @@ export default function CustomerChatScreen() {
               setMessages(prev => {
                 const existingIds = new Set(prev.map(m => m.id));
                 const newOnly = incoming.filter((m: any) => !existingIds.has(m.id));
-                return newOnly.length > 0 ? [...prev, ...newOnly] : prev;
+                const deduped = newOnly.filter((m: any) => !existingIds.has(m.id));
+                // Backend currently returns ASC (oldest→newest).
+                // Reverse so newest is at index 0 for inverted list.
+                // If backend order changes in future, this line must be revisited.
+                return deduped.length > 0 ? [...deduped.reverse(), ...prev] : prev;
               });
-              setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
             }, 500);
           }
         )
@@ -227,10 +232,10 @@ export default function CustomerChatScreen() {
       const data = await res.json();
       setConversationId(data.conversation_id);
       setCustomer(data.customer);
-      setMessages(data.messages || []);
+      setMessages([...(data.messages || [])].reverse());
       setHasMore(data.has_more || false);
       if (data.messages?.length > 0) {
-        setOldestTimestamp(data.messages[0].created_at);
+        setOldestTimestamp(data.messages[data.messages.length - 1].created_at);
       }
       InteractionManager.runAfterInteractions(() => {
         flatListRef.current?.scrollToEnd({ animated: false });
@@ -262,9 +267,12 @@ export default function CustomerChatScreen() {
         setMessages(prev => {
           const existingIds = new Set(prev.map(m => m.id));
           const uniqueOlder = older.filter((m: any) => !existingIds.has(m.id));
-          return [...uniqueOlder, ...prev];
+          // Backend currently returns ASC (oldest→newest).
+          // Reverse so oldest appear at bottom of inverted list.
+          // If backend order changes in future, this line must be revisited.
+          return [...prev, ...uniqueOlder.reverse()];
         });
-        setOldestTimestamp(older[0].created_at);
+        setOldestTimestamp(older[older.length - 1].created_at);
         setHasMore(data.has_more || false);
       } else {
         setHasMore(false);
@@ -292,9 +300,8 @@ export default function CustomerChatScreen() {
       card_data: {}, preview_text: text.substring(0, 50),
       delivery_status: 'sent',
     };
-    setMessages(prev => [...prev, optimistic]);
+    setMessages(prev => [optimistic, ...prev]);
     setSending(true);
-    setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
 
     try {
       const token = await getToken();
@@ -559,8 +566,7 @@ export default function CustomerChatScreen() {
       visibility: 'owner_only', message_type: 'ai_query', card_type: null,
       card_data: {}, preview_text: text.substring(0, 50),
     };
-    setMessages(prev => [...prev, queryMsg]);
-    setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
+    setMessages(prev => [queryMsg, ...prev]);
 
     try {
       const token = await getToken();
@@ -579,8 +585,7 @@ export default function CustomerChatScreen() {
           visibility: 'owner_only', message_type: 'ai_response', card_type: null,
           card_data: {}, preview_text: data.response?.substring(0, 50),
         };
-        setMessages(prev => [...prev, respMsg]);
-        setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
+        setMessages(prev => [respMsg, ...prev]);
       } else {
         Alert.alert('Error', 'Could not get AI response. Try again.');
       }
@@ -710,15 +715,15 @@ export default function CustomerChatScreen() {
   };
 
   // ── Date divider logic ─────────────────────────────────────
-  const shouldShowDateDivider = (index: number) => {
-    if (index === 0) return true;
-    const curr = new Date(messages[index].created_at);
-    const prev = new Date(messages[index - 1].created_at);
-    return curr.toDateString() !== prev.toDateString();
+  const shouldShowDateDivider = (index: number, data: ChatMessage[]) => {
+    if (index === data.length - 1) return true;
+    const curr = new Date(data[index].created_at);
+    const next = new Date(data[index + 1].created_at);
+    return curr.toDateString() !== next.toDateString();
   };
 
   const renderMessage = ({ item, index }: { item: ChatMessage; index: number }) => {
-    const divider = shouldShowDateDivider(index) ? (
+    const divider = shouldShowDateDivider(index, filtered) ? (
       <View style={styles.dateDividerContainer}>
         <View style={styles.dateDividerPill}>
           <Text style={styles.dateDividerText}>{formatDateDivider(item.created_at)}</Text>
@@ -800,6 +805,17 @@ export default function CustomerChatScreen() {
     );
   }
 
+  // ── Filter messages based on active tab ───────────────────
+  const filtered = messages.filter(m => {
+    if (activeTab === 'direct') {
+      // Direct: customer-facing messages + invoice cards + system alerts (pink strips)
+      return m.visibility === 'both' || m.message_type === 'invoice_card' || m.message_type === 'system_alert' || m.message_type === 'spark_clarify';
+    } else {
+      // AI: owner-only messages (pink strips, AI queries, AI responses)
+      return m.visibility === 'owner_only' || m.message_type === 'ai_query' || m.message_type === 'ai_response' || m.message_type === 'system_alert' || m.message_type === 'spark_clarify';
+    }
+  });
+
   // ── Main render ────────────────────────────────────────────
   return (
     <KeyboardAvoidingView
@@ -868,50 +884,39 @@ export default function CustomerChatScreen() {
             <Text style={styles.emptyText}>Broadcast Messages</Text>
             <Text style={[styles.emptyText, { fontSize: 13, marginTop: 4 }]}>Coming soon</Text>
           </View>
-        ) : (() => {
-          const filtered = messages.filter(m => {
-            if (activeTab === 'direct') {
-              // Direct: customer-facing messages + invoice cards + system alerts (pink strips)
-              return m.visibility === 'both' || m.message_type === 'invoice_card' || m.message_type === 'system_alert' || m.message_type === 'spark_clarify';
-            } else {
-              // AI: owner-only messages (pink strips, AI queries, AI responses)
-              return m.visibility === 'owner_only' || m.message_type === 'ai_query' || m.message_type === 'ai_response' || m.message_type === 'system_alert' || m.message_type === 'spark_clarify';
-            }
-          });
-          return filtered.length === 0 ? (
-            <View style={styles.emptyState}>
-              <Ionicons name={activeTab === 'ai' ? 'sparkles-outline' : 'chatbubbles-outline'} size={48} color="#CCC" />
-              <Text style={styles.emptyText}>
-                {activeTab === 'ai' ? `Ask AI anything about ${customer?.name || 'this customer'}` : 'No messages yet'}
-              </Text>
-            </View>
-          ) : (
-            <FlatList
-              ref={flatListRef}
-              data={filtered}
-              renderItem={renderMessage}
-              keyExtractor={item => item.id}
-              contentContainerStyle={styles.chatContent}
-              showsVerticalScrollIndicator={false}
-              refreshing={refreshing}
-              onRefresh={loadChat}
-              maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
-              scrollEventThrottle={200}
-              onScroll={({ nativeEvent }) => {
-                const offsetY = nativeEvent.contentOffset.y;
-                if (!hasScrolledRef.current && offsetY > 0) {
-                  hasScrolledRef.current = true;
-                }
-                if (hasScrolledRef.current && offsetY <= 0 && hasMore && !loadingOlderRef.current) {
-                  loadOlderMessages();
-                }
-              }}
-              ListHeaderComponent={loadingOlder ? (
-                <ActivityIndicator size="small" color="#075E54" style={{ marginVertical: 8 }} />
-              ) : null}
-            />
-          );
-        })()}
+        ) : filtered.length === 0 ? (
+          <View style={styles.emptyState}>
+            <Ionicons name={activeTab === 'ai' ? 'sparkles-outline' : 'chatbubbles-outline'} size={48} color="#CCC" />
+            <Text style={styles.emptyText}>
+              {activeTab === 'ai' ? `Ask AI anything about ${customer?.name || 'this customer'}` : 'No messages yet'}
+            </Text>
+          </View>
+        ) : (
+          <FlatList
+            ref={flatListRef}
+            data={filtered}
+            renderItem={renderMessage}
+            keyExtractor={item => item.id}
+            contentContainerStyle={styles.chatContent}
+            showsVerticalScrollIndicator={false}
+            refreshing={refreshing}
+            onRefresh={loadChat}
+            inverted={true}
+            onEndReached={() => {
+              if (!hasTriggeredInitialEndReached.current) {
+                hasTriggeredInitialEndReached.current = true;
+                return;
+              }
+              if (hasMore && !loadingOlderRef.current) {
+                loadOlderMessages();
+              }
+            }}
+            onEndReachedThreshold={0.2}
+            ListFooterComponent={loadingOlder ? (
+              <ActivityIndicator size="small" color="#075E54" style={{ marginVertical: 8 }} />
+            ) : null}
+          />
+        )}
       </View>
 
       {/* Input bar — different for each tab */}
