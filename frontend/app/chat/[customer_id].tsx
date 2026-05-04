@@ -232,9 +232,9 @@ export default function CustomerChatScreen() {
       if (data.messages?.length > 0) {
         setOldestTimestamp(data.messages[0].created_at);
       }
-      InteractionManager.runAfterInteractions(() => {
+      setTimeout(() => {
         flatListRef.current?.scrollToEnd({ animated: false });
-      });
+      }, 0);
     } catch (err: any) {
       if (err.name !== 'AbortError') console.error('Load chat error:', err);
     } finally {
@@ -895,7 +895,7 @@ export default function CustomerChatScreen() {
               showsVerticalScrollIndicator={false}
               refreshing={refreshing}
               onRefresh={loadChat}
-              maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
+              maintainVisibleContentPosition={{ minIndexForVisible: 1, autoscrollToTopThreshold: 10 }}
               scrollEventThrottle={200}
               onScroll={({ nativeEvent }) => {
                 const offsetY = nativeEvent.contentOffset.y;
