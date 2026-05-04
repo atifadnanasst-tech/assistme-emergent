@@ -235,7 +235,7 @@ export default function CustomerChatScreen() {
       setMessages([...(data.messages || [])].reverse());
       setHasMore(data.has_more || false);
       if (data.messages?.length > 0) {
-        setOldestTimestamp(data.messages[data.messages.length - 1].created_at);
+        setOldestTimestamp(data.messages[0].created_at);
       }
     } catch (err: any) {
       if (err.name !== 'AbortError') console.error('Load chat error:', err);
@@ -269,7 +269,7 @@ export default function CustomerChatScreen() {
           // If backend order changes in future, this line must be revisited.
           return [...prev, ...uniqueOlder.reverse()];
         });
-        setOldestTimestamp(older[older.length - 1].created_at);
+        setOldestTimestamp(older[0].created_at);
         setHasMore(data.has_more || false);
       } else {
         setHasMore(false);
