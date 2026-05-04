@@ -900,15 +900,11 @@ export default function CustomerChatScreen() {
             onRefresh={loadChat}
             inverted={true}
             onEndReached={() => {
-              if (!hasTriggeredInitialEndReached.current) {
-                hasTriggeredInitialEndReached.current = true;
-                return;
-              }
               if (hasMore && !loadingOlderRef.current) {
                 loadOlderMessages();
               }
             }}
-            onEndReachedThreshold={0.2}
+            onEndReachedThreshold={0.5}
             ListFooterComponent={loadingOlder ? (
               <ActivityIndicator size="small" color="#075E54" style={{ marginVertical: 8 }} />
             ) : null}
