@@ -77,6 +77,9 @@ export default function CustomerChatScreen() {
   const [oldestTimestamp, setOldestTimestamp] = useState<string | null>(null);
   const loadingOlderRef = useRef(false);
 
+  const initialLoadRef = useRef(true);
+  const hasScrolledRef = useRef(false);
+  const inputRef = useRef<any>(null);
   const channelRef = useRef<any>(null);
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -225,6 +228,9 @@ export default function CustomerChatScreen() {
       setConversationId(data.conversation_id);
       setCustomer(data.customer);
       setMessages(data.messages || []);
+      initialLoadRef.current = true;
+      hasScrolledRef.current = false;
+      requestAnimationFrame(() => { flatListRef.current?.scrollToEnd({ animated: false }); });
       setHasMore(data.has_more || false);
       if (data.messages?.length > 0) {
         setOldestTimestamp(data.messages[0].created_at);
@@ -278,7 +284,7 @@ setTimeout(() => {
   const handleSend = async () => {
     const text = inputText.trim();
     if (!text || sending || !conversationId) return;
-    Keyboard.dismiss();
+    inputRef.current?.focus();
     setInputText('');
 
     const tempId = `temp-${Date.now()}`;
@@ -889,13 +895,19 @@ setTimeout(() => {
               renderItem={renderMessage}
               keyExtractor={item => item.id}
               contentContainerStyle={styles.chatContent}
-              onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: false })}
+              onContentSizeChange={() => {
+                if (initialLoadRef.current) {
+                  flatListRef.current?.scrollToEnd({ animated: false });
+                  initialLoadRef.current = false;
+                }
+              }}
               showsVerticalScrollIndicator={false}
               refreshing={refreshing}
               onRefresh={loadChat}
               maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
               scrollEventThrottle={200}
               onScroll={({ nativeEvent }) => {
+                if (!hasScrolledRef.current) { hasScrolledRef.current = true; return; }
                 if (nativeEvent.contentOffset.y < 80 && hasMore && !loadingOlderRef.current) {
                   loadOlderMessages();
                 }
@@ -970,6 +982,8 @@ setTimeout(() => {
               </TouchableOpacity>
               <TextInput
                 style={styles.textInput}
+                ref={inputRef}
+                blurOnSubmit={false}
                 placeholder={sparkMode ? 'What would you like to do?' : 'Message or voice...'}
                 placeholderTextColor={sparkMode ? '#075E54' : '#999'}
                 value={inputText}
