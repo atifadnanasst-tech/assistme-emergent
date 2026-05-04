@@ -232,14 +232,16 @@ export default function CustomerChatScreen() {
       if (data.messages?.length > 0) {
         setOldestTimestamp(data.messages[0].created_at);
       }
-      setTimeout(() => {
-        flatListRef.current?.scrollToEnd({ animated: false });
-      }, 0);
     } catch (err: any) {
       if (err.name !== 'AbortError') console.error('Load chat error:', err);
     } finally {
       setLoading(false);
       setRefreshing(false);
+      setTimeout(() => {
+        if (flatListRef.current) {
+          flatListRef.current.scrollToEnd({ animated: false });
+        }
+      }, 50);
     }
   };
 
