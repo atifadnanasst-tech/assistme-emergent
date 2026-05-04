@@ -672,7 +672,7 @@ setTimeout(() => {
           {cd.items_summary && <Text style={styles.invoiceItems}>{cd.items_summary}</Text>}
           {cd.due_date && <Text style={styles.invoiceItems}>Due {new Date(cd.due_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}</Text>}
           <Text style={[styles.invoiceAmount, isOverdue && { color: '#D32F2F' }]}>{formatCurrency(cd.total_amount || 0)}</Text>
-          <Text style={{ fontSize: 11, color: '#999', marginTop: 4, textAlign: 'right' }}>{formatTime(item.created_at)}</Text>
+          <Text style={{ fontSize: 11, color: '#999', marginTop: 4, textAlign: 'right' }}>{formatTime(msg.created_at)}</Text>
           <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
             {cd.pdf_url && (
               <TouchableOpacity onPress={() => Linking.openURL(cd.pdf_url).catch(() => Alert.alert('Error', 'Could not open PDF'))} style={{ flex: 1 }}>
