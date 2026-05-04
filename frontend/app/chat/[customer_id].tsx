@@ -237,9 +237,6 @@ export default function CustomerChatScreen() {
       if (data.messages?.length > 0) {
         setOldestTimestamp(data.messages[data.messages.length - 1].created_at);
       }
-      InteractionManager.runAfterInteractions(() => {
-        flatListRef.current?.scrollToEnd({ animated: false });
-      });
     } catch (err: any) {
       if (err.name !== 'AbortError') console.error('Load chat error:', err);
     } finally {
