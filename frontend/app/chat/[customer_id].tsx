@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, FlatList, TextInput,
   ActivityIndicator, Alert, Linking, KeyboardAvoidingView, Platform,
-  Keyboard, Modal, Pressable, ScrollView,
+  Keyboard, Modal, Pressable, ScrollView, InteractionManager,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
@@ -228,16 +228,13 @@ export default function CustomerChatScreen() {
       setConversationId(data.conversation_id);
       setCustomer(data.customer);
       setMessages(data.messages || []);
-      initialLoadRef.current = true;
-      hasScrolledRef.current = false;
-      requestAnimationFrame(() => { flatListRef.current?.scrollToEnd({ animated: false }); });
       setHasMore(data.has_more || false);
       if (data.messages?.length > 0) {
         setOldestTimestamp(data.messages[0].created_at);
       }
-setTimeout(() => {
-  flatListRef.current?.scrollToEnd({ animated: false });
-}, 100);
+      InteractionManager.runAfterInteractions(() => {
+        flatListRef.current?.scrollToEnd({ animated: false });
+      });
     } catch (err: any) {
       if (err.name !== 'AbortError') console.error('Load chat error:', err);
     } finally {
@@ -895,20 +892,17 @@ setTimeout(() => {
               renderItem={renderMessage}
               keyExtractor={item => item.id}
               contentContainerStyle={styles.chatContent}
-              onContentSizeChange={() => {
-                if (initialLoadRef.current) {
-                  flatListRef.current?.scrollToEnd({ animated: false });
-                  initialLoadRef.current = false;
-                }
-              }}
               showsVerticalScrollIndicator={false}
               refreshing={refreshing}
               onRefresh={loadChat}
               maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
               scrollEventThrottle={200}
               onScroll={({ nativeEvent }) => {
-                if (!hasScrolledRef.current) { hasScrolledRef.current = true; return; }
-                if (nativeEvent.contentOffset.y < 80 && hasMore && !loadingOlderRef.current) {
+                const offsetY = nativeEvent.contentOffset.y;
+                if (!hasScrolledRef.current && offsetY > 0) {
+                  hasScrolledRef.current = true;
+                }
+                if (hasScrolledRef.current && offsetY <= 0 && hasMore && !loadingOlderRef.current) {
                   loadOlderMessages();
                 }
               }}
