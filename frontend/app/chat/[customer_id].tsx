@@ -71,6 +71,11 @@ export default function CustomerChatScreen() {
   // AI query
   const [aiQueryText, setAiQueryText] = useState('');
   const [aiQuerying, setAiQuerying] = useState(false);
+  // Pagination
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [oldestTimestamp, setOldestTimestamp] = useState<string | null>(null);
+  const loadingOlderRef = useRef(false);
 
   const channelRef = useRef<any>(null);
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
@@ -126,21 +131,48 @@ export default function CustomerChatScreen() {
         .on('broadcast', { event: 'message_created' }, (payload) => {
           const targetConvId = payload?.payload?.conversation_id;
           if (!targetConvId || targetConvId === conversationId) {
-            console.log('[REALTIME] Broadcast received on chat screen');
-            debouncedLoadChat();
+            if (debounceRef.current) clearTimeout(debounceRef.current);
+            debounceRef.current = setTimeout(async () => {
+              const token = await getToken();
+              if (!token || !customer_id) return;
+              const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+              const res = await fetch(`${backendUrl}/api/chat/${customer_id}?mark_read=false`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+              });
+              if (!res.ok) return;
+              const data = await res.json();
+              const incoming = data.messages || [];
+              setMessages(prev => {
+                const existingIds = new Set(prev.map(m => m.id));
+                const newOnly = incoming.filter((m: any) => !existingIds.has(m.id));
+                return newOnly.length > 0 ? [...prev, ...newOnly] : prev;
+              });
+              setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
+            }, 500);
           }
         })
         .on(
           'postgres_changes',
-          {
-            event: 'INSERT',
-            schema: 'public',
-            table: 'messages',
-            filter: `organisation_id=eq.${orgId}`,
-          },
+          { event: 'INSERT', schema: 'public', table: 'messages', filter: `organisation_id=eq.${orgId}` },
           () => {
-            console.log('[REALTIME] postgres_changes received on chat screen');
-            debouncedLoadChat();
+            if (debounceRef.current) clearTimeout(debounceRef.current);
+            debounceRef.current = setTimeout(async () => {
+              const token = await getToken();
+              if (!token || !customer_id) return;
+              const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+              const res = await fetch(`${backendUrl}/api/chat/${customer_id}?mark_read=false`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+              });
+              if (!res.ok) return;
+              const data = await res.json();
+              const incoming = data.messages || [];
+              setMessages(prev => {
+                const existingIds = new Set(prev.map(m => m.id));
+                const newOnly = incoming.filter((m: any) => !existingIds.has(m.id));
+                return newOnly.length > 0 ? [...prev, ...newOnly] : prev;
+              });
+              setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
+            }, 500);
           }
         )
         .subscribe();
@@ -193,6 +225,10 @@ export default function CustomerChatScreen() {
       setConversationId(data.conversation_id);
       setCustomer(data.customer);
       setMessages(data.messages || []);
+      setHasMore(data.has_more || false);
+      if (data.messages?.length > 0) {
+        setOldestTimestamp(data.messages[0].created_at);
+      }
 setTimeout(() => {
   flatListRef.current?.scrollToEnd({ animated: false });
 }, 100);
@@ -201,6 +237,40 @@ setTimeout(() => {
     } finally {
       setLoading(false);
       setRefreshing(false);
+    }
+  };
+
+  const loadOlderMessages = async () => {
+    if (!hasMore || loadingOlderRef.current || !oldestTimestamp) return;
+    loadingOlderRef.current = true;
+    setLoadingOlder(true);
+    try {
+      const token = await getToken();
+      if (!token || !customer_id) return;
+      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+      const res = await fetch(
+        `${backendUrl}/api/chat/${customer_id}?mark_read=false&before=${encodeURIComponent(oldestTimestamp)}`,
+        { headers: { 'Authorization': `Bearer ${token}` } }
+      );
+      if (!res.ok) return;
+      const data = await res.json();
+      const older = data.messages || [];
+      if (older.length > 0) {
+        setMessages(prev => {
+          const existingIds = new Set(prev.map(m => m.id));
+          const uniqueOlder = older.filter((m: any) => !existingIds.has(m.id));
+          return [...uniqueOlder, ...prev];
+        });
+        setOldestTimestamp(older[0].created_at);
+        setHasMore(data.has_more || false);
+      } else {
+        setHasMore(false);
+      }
+    } catch (err) {
+      console.error('loadOlderMessages error:', err);
+    } finally {
+      loadingOlderRef.current = false;
+      setLoadingOlder(false);
     }
   };
 
@@ -823,6 +893,16 @@ setTimeout(() => {
               showsVerticalScrollIndicator={false}
               refreshing={refreshing}
               onRefresh={loadChat}
+              maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
+              scrollEventThrottle={200}
+              onScroll={({ nativeEvent }) => {
+                if (nativeEvent.contentOffset.y < 80 && hasMore && !loadingOlderRef.current) {
+                  loadOlderMessages();
+                }
+              }}
+              ListHeaderComponent={loadingOlder ? (
+                <ActivityIndicator size="small" color="#075E54" style={{ marginVertical: 8 }} />
+              ) : null}
             />
           );
         })()}

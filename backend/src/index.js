@@ -920,17 +920,27 @@ app.get('/api/chat/:customer_id', async (c) => {
 
     // 3. Fetch messages (only if conversation exists)
     let messages = [];
+    let hasMore = false;
     if (conversation?.id) {
-      const { data: msgData, error: msgErr } = await supabase
+      const before = c.req.query('before');
+      let query = supabase
         .from('messages')
         .select('id, role, content, metadata, created_at')
         .eq('conversation_id', conversation.id)
         .is('deleted_at', null)
         .order('created_at', { ascending: false })
-        .limit(50);
+        .limit(31);
+
+      if (before) {
+        query = query.lt('created_at', before);
+      }
+
+      const { data: msgData, error: msgErr } = await query;
 
       if (!msgErr && msgData) {
-        messages = msgData.map(m => ({
+        hasMore = msgData.length === 31;
+        const slice = hasMore ? msgData.slice(0, 30) : msgData;
+        messages = slice.map(m => ({
           id: m.id,
           role: m.role,
           content: m.content,
@@ -983,6 +993,7 @@ app.get('/api/chat/:customer_id', async (c) => {
         phone: customer.phone || null,
       },
       messages,
+      has_more: hasMore,
     });
 
   } catch (error) {
