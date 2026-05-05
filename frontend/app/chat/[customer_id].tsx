@@ -78,6 +78,12 @@ export default function CustomerChatScreen() {
   const loadingOlderRef = useRef(false);
   const hasTriggeredInitialEndReached = useRef(false);
 
+  // Attachment sheet
+  const [attachSheetVisible, setAttachSheetVisible] = useState(false);
+  const [attachmentPreview, setAttachmentPreview] = useState<{
+    uri: string; name: string; mime_type: string; size?: number;
+  } | null>(null);
+
   const inputRef = useRef<any>(null);
   const channelRef = useRef<any>(null);
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
@@ -296,9 +302,22 @@ export default function CustomerChatScreen() {
       visibility: 'both', message_type: 'text', card_type: null,
       card_data: {}, preview_text: text.substring(0, 50),
       delivery_status: 'sent',
+      metadata: {
+        ...(attachmentPreview ? {
+          message_type: attachmentPreview.mime_type?.startsWith?.('image') ? 'image' :
+                        attachmentPreview.mime_type?.startsWith?.('audio') ? 'audio' : 'file',
+          attachment: {
+            uri: attachmentPreview.uri,
+            name: attachmentPreview.name,
+            mime_type: attachmentPreview.mime_type,
+            size: attachmentPreview.size,
+          }
+        } : {})
+      },
     };
     setMessages(prev => [optimistic, ...prev]);
     setSending(true);
+    setAttachmentPreview(null);
 
     try {
       const token = await getToken();
@@ -729,6 +748,63 @@ export default function CustomerChatScreen() {
     ) : null;
 
     let content = null;
+    
+    // Attachment messages
+    {(() => {
+      const msgType = item.metadata?.message_type || item.message_type;
+      if (msgType === 'image' && item.metadata?.attachment) {
+        content = (
+          <View style={styles.outgoingContainer}>
+            <View style={styles.outgoingBubble}>
+              <View style={styles.attachMsgCard}>
+                <Ionicons name="image-outline" size={32} color="#075E54" />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.attachMsgName} numberOfLines={1}>{item.metadata.attachment?.name}</Text>
+                  <Text style={styles.attachMsgMeta}>Image</Text>
+                </View>
+              </View>
+              <Text style={styles.outgoingTime}>{formatTime(item.created_at)}</Text>
+            </View>
+          </View>
+        );
+        return;
+      }
+      if (msgType === 'file' && item.metadata?.attachment) {
+        content = (
+          <View style={styles.outgoingContainer}>
+            <View style={styles.outgoingBubble}>
+              <View style={styles.attachMsgCard}>
+                <Ionicons name="document-outline" size={32} color="#075E54" />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.attachMsgName} numberOfLines={1}>{item.metadata.attachment?.name}</Text>
+                  <Text style={styles.attachMsgMeta}>Document</Text>
+                </View>
+              </View>
+              <Text style={styles.outgoingTime}>{formatTime(item.created_at)}</Text>
+            </View>
+          </View>
+        );
+        return;
+      }
+      if (msgType === 'audio' && item.metadata?.attachment) {
+        content = (
+          <View style={styles.outgoingContainer}>
+            <View style={styles.outgoingBubble}>
+              <View style={styles.attachMsgCard}>
+                <Ionicons name="musical-notes-outline" size={32} color="#075E54" />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.attachMsgName} numberOfLines={1}>{item.metadata.attachment?.name}</Text>
+                  <Text style={styles.attachMsgMeta}>Audio</Text>
+                </View>
+              </View>
+              <Text style={styles.outgoingTime}>{formatTime(item.created_at)}</Text>
+            </View>
+          </View>
+        );
+        return;
+      }
+    })()}
+
     if (item.message_type === 'invoice_card' || item.card_type === 'invoice_card') {
       content = renderInvoiceCard(item);
     } else if (item.message_type === 'ai_query') {
@@ -952,6 +1028,27 @@ export default function CustomerChatScreen() {
         /* Direct Messages input */
         <>
           <View style={[styles.inputBarWrapper, { paddingBottom: insets.bottom }]}>
+          {attachmentPreview && (
+            <View style={styles.attachPreviewStrip}>
+              <Ionicons
+                name={
+                  attachmentPreview.mime_type?.startsWith?.('image') ? 'image-outline' :
+                  attachmentPreview.mime_type?.startsWith?.('audio') ? 'musical-notes-outline' :
+                  'document-outline'
+                }
+                size={28} color="#075E54"
+              />
+              <Text style={styles.attachPreviewName} numberOfLines={1}>
+                {attachmentPreview.name}
+              </Text>
+              <TouchableOpacity
+                onPress={() => setAttachmentPreview(null)}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Ionicons name="close-circle" size={20} color="#999" />
+              </TouchableOpacity>
+            </View>
+          )}
           {sparkProcessing && (
             <View style={styles.sparkProcessingBar}>
               <ActivityIndicator size="small" color="#075E54" />
@@ -985,7 +1082,7 @@ export default function CustomerChatScreen() {
               />
               {!sparkMode && (
                 <>
-                  <TouchableOpacity style={styles.inputIconBtn}>
+                  <TouchableOpacity style={styles.inputIconBtn} onPress={() => setAttachSheetVisible(true)}>
                     <Ionicons name="attach" size={22} color="#667781" />
                   </TouchableOpacity>
                   <TouchableOpacity style={styles.inputIconBtn}>
@@ -1414,6 +1511,46 @@ export default function CustomerChatScreen() {
           <View style={styles.bannerTimerBar} />
         </View>
       )}
+
+      {/* Attachment Sheet */}
+      <Modal
+        visible={attachSheetVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setAttachSheetVisible(false)}
+      >
+        <Pressable style={styles.attachSheetOverlay} onPress={() => setAttachSheetVisible(false)}>
+          <Pressable onPress={() => {}}>
+            <View style={styles.attachSheetContainer}>
+              <View style={styles.attachSheetHandle} />
+              <View style={styles.attachGrid}>
+                {[
+                  { icon: 'images-outline', label: 'Gallery', color: '#1E88E5' },
+                  { icon: 'camera-outline', label: 'Camera', color: '#E53935' },
+                  { icon: 'document-outline', label: 'Document', color: '#FB8C00' },
+                  { icon: 'mic-outline', label: 'Audio', color: '#8E24AA' },
+                  { icon: 'qr-code-outline', label: 'Share QR', color: '#00897B' },
+                  { icon: 'grid-outline', label: 'Catalog', color: '#F57C00' },
+                ].map((item) => (
+                  <TouchableOpacity
+                    key={item.label}
+                    style={styles.attachGridItem}
+                    onPress={() => {
+                      setAttachSheetVisible(false);
+                      Alert.alert(item.label, 'Coming soon');
+                    }}
+                  >
+                    <View style={[styles.attachGridIcon, { backgroundColor: item.color + '20' }]}>
+                      <Ionicons name={item.icon as any} size={28} color={item.color} />
+                    </View>
+                    <Text style={styles.attachGridLabel}>{item.label}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }
@@ -1651,4 +1788,29 @@ const styles = StyleSheet.create({
   bannerBtn: { paddingVertical: 6, paddingHorizontal: 16, borderRadius: 8, backgroundColor: '#F5F5F5' },
   bannerBtnText: { fontSize: 14, fontWeight: '600', color: '#075E54' },
   bannerTimerBar: { height: 3, backgroundColor: '#075E54', borderRadius: 2, marginTop: 10 },
+  // Attachment sheet
+  attachSheetOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.4)' },
+  attachSheetContainer: {
+    backgroundColor: '#FFF', borderTopLeftRadius: 20, borderTopRightRadius: 20,
+    paddingHorizontal: 20, paddingBottom: 32, paddingTop: 8,
+  },
+  attachSheetHandle: { width: 40, height: 4, backgroundColor: '#DDD', borderRadius: 2, alignSelf: 'center', marginBottom: 20 },
+  attachGrid: { flexDirection: 'row', flexWrap: 'wrap' },
+  attachGridItem: { width: '33%', alignItems: 'center', marginBottom: 20 },
+  attachGridIcon: { width: 56, height: 56, borderRadius: 16, justifyContent: 'center', alignItems: 'center', marginBottom: 6 },
+  attachGridLabel: { fontSize: 12, color: '#333', fontWeight: '500', textAlign: 'center' },
+  // Attachment preview strip
+  attachPreviewStrip: {
+    flexDirection: 'row', alignItems: 'center', backgroundColor: '#F0FAF8',
+    paddingVertical: 8, paddingHorizontal: 14,
+    borderTopWidth: 1, borderTopColor: '#E0E0E0',
+  },
+  attachPreviewName: { flex: 1, fontSize: 13, color: '#333', fontWeight: '500', marginHorizontal: 10 },
+  // Attachment message cards
+  attachMsgCard: {
+    flexDirection: 'row', alignItems: 'center', backgroundColor: '#F5F5F5',
+    borderRadius: 10, padding: 10, marginTop: 4, minWidth: 180,
+  },
+  attachMsgName: { fontSize: 13, color: '#333', fontWeight: '500' },
+  attachMsgMeta: { fontSize: 11, color: '#999', marginTop: 2 },
 });
