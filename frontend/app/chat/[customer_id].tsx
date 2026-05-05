@@ -77,6 +77,8 @@ export default function CustomerChatScreen() {
   const [oldestTimestamp, setOldestTimestamp] = useState<string | null>(null);
   const loadingOlderRef = useRef(false);
   const hasTriggeredInitialEndReached = useRef(false);
+  const [showScrollDown, setShowScrollDown] = useState(false);
+  const scrollOffsetRef = useRef(0);
 
   // Attachment sheet
   const [attachSheetVisible, setAttachSheetVisible] = useState(false);
@@ -972,6 +974,12 @@ export default function CustomerChatScreen() {
             keyExtractor={item => item.id}
             contentContainerStyle={styles.chatContent}
             showsVerticalScrollIndicator={false}
+            onScroll={(e) => {
+              const offset = e.nativeEvent.contentOffset.y;
+              scrollOffsetRef.current = offset;
+              setShowScrollDown(offset > 150);
+            }}
+            scrollEventThrottle={16}
             refreshing={refreshing}
             onRefresh={loadChat}
             inverted={true}
@@ -985,6 +993,16 @@ export default function CustomerChatScreen() {
               <ActivityIndicator size="small" color="#075E54" style={{ marginVertical: 8 }} />
             ) : null}
           />
+        )}
+        {showScrollDown && (
+          <TouchableOpacity
+            onPress={() => {
+              flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
+            }}
+            style={styles.scrollDownFab}
+          >
+            <Ionicons name="chevron-down" size={20} color="#FFF" />
+          </TouchableOpacity>
         )}
       </View>
 
@@ -1588,6 +1606,20 @@ const styles = StyleSheet.create({
 
   // Chat area
   chatArea: { flex: 1, backgroundColor: '#ECE5DD' },
+  scrollDownFab: {
+    position: 'absolute',
+    bottom: 28,
+    alignSelf: 'center',
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#075E54',
+    justifyContent: 'center',
+    alignItems: 'center',
+    opacity: 0.75,
+    elevation: 4,
+    zIndex: 5,
+  },
   chatContent: { padding: 8, paddingBottom: 8 },
   emptyState: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   emptyText: { color: '#999', fontSize: 15 },
