@@ -11,6 +11,9 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import { useAuth } from '../../contexts/AuthContext';
 import { supabase } from '../../lib/supabase';
 import { authService } from '../../lib/auth';
+import * as ImagePicker from 'expo-image-picker';
+import * as DocumentPicker from 'expo-document-picker';
+import { Audio } from 'expo-av';
 
 // ── Types ────────────────────────────────────────────────────
 interface CustomerData {
@@ -85,10 +88,151 @@ export default function CustomerChatScreen() {
   const [attachmentPreview, setAttachmentPreview] = useState<{
     uri: string; name: string; mime_type: string; size?: number;
   } | null>(null);
+  const [recording, setRecording] = useState<Audio.Recording | null>(null);
+  const [isRecording, setIsRecording] = useState(false);
 
   const inputRef = useRef<any>(null);
   const channelRef = useRef<any>(null);
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
+
+  // ── Attachment handlers ────────────────────────────────────
+  // Gallery picker
+  const handlePickGallery = async () => {
+    setAttachSheetVisible(false);
+    try {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission Required', 'Please allow access to your photo library.');
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: false,
+        quality: 0.8,
+      });
+      if (result.canceled) return;
+      if (!result.assets || !result.assets[0]) {
+        Alert.alert('Error', 'Could not process selection.');
+        return;
+      }
+      const asset = result.assets[0];
+      setAttachmentPreview({
+        uri: asset.uri,
+        name: asset.fileName || 'image.jpg',
+        mime_type: asset.mimeType || 'image/jpeg',
+        size: asset.fileSize ?? undefined,
+      });
+    } catch (e) {
+      console.error('Gallery picker error:', e);
+      Alert.alert('Error', 'Could not open photo library.');
+    }
+  };
+
+  // Camera picker
+  const handleOpenCamera = async () => {
+    setAttachSheetVisible(false);
+    try {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission Required', 'Please allow camera access.');
+        return;
+      }
+      const result = await ImagePicker.launchCameraAsync({
+        allowsEditing: false,
+        quality: 0.8,
+      });
+      if (result.canceled) return;
+      if (!result.assets || !result.assets[0]) {
+        Alert.alert('Error', 'Could not process photo.');
+        return;
+      }
+      const asset = result.assets[0];
+      setAttachmentPreview({
+        uri: asset.uri,
+        name: asset.fileName || 'photo.jpg',
+        mime_type: asset.mimeType || 'image/jpeg',
+        size: asset.fileSize ?? undefined,
+      });
+    } catch (e) {
+      console.error('Camera error:', e);
+      Alert.alert('Error', 'Could not open camera.');
+    }
+  };
+
+  // Document picker
+  const handlePickDocument = async () => {
+    setAttachSheetVisible(false);
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: '*/*',
+        copyToCacheDirectory: true,
+      });
+      if (result.canceled) return;
+      if (!result.assets || !result.assets[0]) {
+        Alert.alert('Error', 'Could not process document.');
+        return;
+      }
+      const asset = result.assets[0];
+      setAttachmentPreview({
+        uri: asset.uri,
+        name: asset.name,
+        mime_type: asset.mimeType || 'application/octet-stream',
+        size: asset.size ?? undefined,
+      });
+    } catch (e) {
+      console.error('Document picker error:', e);
+      Alert.alert('Error', 'Could not open document picker.');
+    }
+  };
+
+  // Audio recording — tap to start, tap to stop
+  const handleAudioRecording = async () => {
+    if (isRecording) {
+      // Stop recording — close sheet
+      setAttachSheetVisible(false);
+      try {
+        const rec = recording;
+        setRecording(null);
+        setIsRecording(false);
+        await rec?.stopAndUnloadAsync();
+        const uri = rec?.getURI();
+        if (uri) {
+          setAttachmentPreview({
+            uri,
+            name: `audio_${Date.now()}.m4a`,
+            mime_type: 'audio/*',
+          });
+        }
+      } catch (e) {
+        console.error('Stop recording error:', e);
+        setIsRecording(false);
+        setRecording(null);
+      }
+    } else {
+      // Start recording — do NOT close sheet
+      try {
+        const { status } = await Audio.requestPermissionsAsync();
+        if (status !== 'granted') {
+          Alert.alert('Permission Required', 'Please allow microphone access.');
+          return;
+        }
+        await Audio.setAudioModeAsync({
+          allowsRecordingIOS: true,
+          playsInSilentModeIOS: true,
+          shouldDuckAndroid: true,
+          staysActiveInBackground: false,
+        });
+        const { recording: newRecording } = await Audio.Recording.createAsync(
+          Audio.RecordingOptionsPresets.HIGH_QUALITY
+        );
+        setRecording(newRecording);
+        setIsRecording(true);
+      } catch (e) {
+        console.error('Start recording error:', e);
+        Alert.alert('Error', 'Could not start recording.');
+      }
+    }
+  };
 
   const debouncedLoadChat = useCallback(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -1543,19 +1687,28 @@ export default function CustomerChatScreen() {
               <View style={styles.attachSheetHandle} />
               <View style={styles.attachGrid}>
                 {[
-                  { icon: 'images-outline', label: 'Gallery', color: '#1E88E5' },
-                  { icon: 'camera-outline', label: 'Camera', color: '#E53935' },
-                  { icon: 'document-outline', label: 'Document', color: '#FB8C00' },
-                  { icon: 'mic-outline', label: 'Audio', color: '#8E24AA' },
-                  { icon: 'qr-code-outline', label: 'Share QR', color: '#00897B' },
-                  { icon: 'grid-outline', label: 'Catalog', color: '#F57C00' },
+                  { icon: 'images-outline', label: 'Gallery', color: '#1E88E5', handler: handlePickGallery },
+                  { icon: 'camera-outline', label: 'Camera', color: '#E53935', handler: handleOpenCamera },
+                  { icon: 'document-outline', label: 'Document', color: '#FB8C00', handler: handlePickDocument },
+                  {
+                    icon: isRecording ? 'stop-circle-outline' : 'mic-outline',
+                    label: isRecording ? 'Stop' : 'Audio',
+                    color: isRecording ? '#E53935' : '#8E24AA',
+                    handler: handleAudioRecording,
+                  },
+                  { icon: 'qr-code-outline', label: 'Share QR', color: '#00897B', handler: null },
+                  { icon: 'grid-outline', label: 'Catalog', color: '#F57C00', handler: null },
                 ].map((item) => (
                   <TouchableOpacity
                     key={item.label}
                     style={styles.attachGridItem}
                     onPress={() => {
-                      setAttachSheetVisible(false);
-                      Alert.alert(item.label, 'Coming soon');
+                      if (item.handler) {
+                        item.handler();
+                      } else {
+                        setAttachSheetVisible(false);
+                        Alert.alert(item.label, 'Coming soon');
+                      }
                     }}
                   >
                     <View style={[styles.attachGridIcon, { backgroundColor: item.color + '20' }]}>
