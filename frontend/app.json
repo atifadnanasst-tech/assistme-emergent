@@ -11,7 +11,12 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.atifadnanasst.assistme"
+      "bundleIdentifier": "com.atifadnanasst.assistme",
+      "infoPlist": {
+        "NSCameraUsageDescription": "AssistMe needs camera access to capture and share photos.",
+        "NSPhotoLibraryUsageDescription": "AssistMe needs access to your photos to share with customers.",
+        "NSMicrophoneUsageDescription": "AssistMe needs microphone access for audio messages."
+      }
     },
     "android": {
       "package": "com.atifadnanasst.assistme",
@@ -20,7 +25,11 @@
         "backgroundColor": "#121218"
       },
       "permissions": [
-        "android.permission.READ_CONTACTS"
+        "android.permission.READ_CONTACTS",
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_MEDIA_VIDEO"
       ],
       "edgeToEdgeEnabled": true,
       "googleServicesFile": "./google-services.json"
@@ -52,7 +61,16 @@
           "sounds": [],
           "androidMode": "default"
         }
-      ]
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "AssistMe needs access to your photos to share with customers.",
+          "cameraPermission": "AssistMe needs camera access to capture and share photos.",
+          "microphonePermission": "AssistMe needs microphone access for audio messages."
+        }
+      ],
+      "expo-document-picker"
     ],
     "experiments": {
       "typedRoutes": true
