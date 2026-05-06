@@ -483,7 +483,7 @@ export default function CustomerChatScreen() {
   const handleSend = async () => {
     const text = inputText.trim();
     const attachment = attachmentPreview;
-    if ((!text && !attachmentPreview) || sending || !conversationId) return;
+    if ((!text && !attachment) || sending || !conversationId) return;
     inputRef.current?.focus();
     setInputText('');
 
@@ -495,14 +495,14 @@ export default function CustomerChatScreen() {
       card_data: {}, preview_text: text.substring(0, 50),
       delivery_status: 'sent',
       metadata: {
-        ...(attachmentPreview ? {
-          message_type: attachmentPreview.mime_type?.startsWith?.('image') ? 'image' :
-                        attachmentPreview.mime_type?.startsWith?.('audio') ? 'audio' : 'file',
+        ...(attachment ? {
+          message_type: attachment.mime_type?.startsWith?.('image') ? 'image' :
+                        attachment.mime_type?.startsWith?.('audio') ? 'audio' : 'file',
           attachment: {
-            uri: attachmentPreview.uri,
-            name: attachmentPreview.name,
-            mime_type: attachmentPreview.mime_type,
-            size: attachmentPreview.size,
+            uri: attachment.uri,
+            name: attachment.name,
+            mime_type: attachment.mime_type,
+            size: attachment.size,
           }
         } : {})
       },
