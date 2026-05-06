@@ -482,6 +482,7 @@ export default function CustomerChatScreen() {
   // ── Send message ───────────────────────────────────────────
   const handleSend = async () => {
     const text = inputText.trim();
+    const attachment = attachmentPreview;
     if ((!text && !attachmentPreview) || sending || !conversationId) return;
     inputRef.current?.focus();
     setInputText('');
@@ -508,7 +509,7 @@ export default function CustomerChatScreen() {
     };
     setMessages(prev => [optimistic, ...prev]);
     setSending(true);
-    setAttachmentPreview(null);
+    // moved: attachment cleared after send
 
     try {
       const token = await getToken();
@@ -520,7 +521,11 @@ export default function CustomerChatScreen() {
       const res = await fetch(`${backendUrl}/api/chat/${customer_id}/message`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: text || (attachmentPreview ? `[${attachmentPreview.name}]` : ''), conversation_id: conversationId, metadata: optimistic.metadata }),
+        body: JSON.stringify({
+          content: text || attachment?.name || 'Attachment',
+          conversation_id: conversationId,
+          metadata: optimistic.metadata || {}
+        }),
         signal: controller.signal,
       });
       clearTimeout(timeoutId);
@@ -530,8 +535,10 @@ export default function CustomerChatScreen() {
         setMessages(prev => prev.map(m =>
           m.id === tempId ? { ...m, id: data.message_id, created_at: data.created_at, delivery_status: 'delivered' } : m
         ));
+        setAttachmentPreview(null);
       } else {
         setMessages(prev => prev.filter(m => m.id !== tempId));
+      setAttachmentPreview(null);
         Alert.alert('Error', "Couldn't send. Tap to retry.");
       }
     } catch (err: any) {
