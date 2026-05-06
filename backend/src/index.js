@@ -951,6 +951,7 @@ app.get('/api/chat/:customer_id', async (c) => {
           card_type: m.metadata?.card_type || null,
           card_data: m.metadata?.card_data || {},
           preview_text: m.metadata?.preview_text || null,
+          metadata: m.metadata || {},
         })).reverse();
       }
 
