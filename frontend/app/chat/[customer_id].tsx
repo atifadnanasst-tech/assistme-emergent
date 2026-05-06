@@ -520,7 +520,7 @@ export default function CustomerChatScreen() {
       const res = await fetch(`${backendUrl}/api/chat/${customer_id}/message`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: text || (attachmentPreview ? `[${attachmentPreview.name}]` : ''), conversation_id: conversationId }),
+        body: JSON.stringify({ content: text || (attachmentPreview ? `[${attachmentPreview.name}]` : ''), conversation_id: conversationId, metadata: optimistic.metadata }),
         signal: controller.signal,
       });
       clearTimeout(timeoutId);

@@ -1016,6 +1016,7 @@ app.post('/api/chat/:customer_id/message', async (c) => {
     const body = await c.req.json();
     const content = body.content?.trim();
     const conversationId = body.conversation_id;
+    const frontendMetadata = body.metadata || {};
 
     if (!content || content.length === 0) return c.json({ error: 'empty_message' }, 400);
     if (content.length > 2000) return c.json({ error: 'message_too_long' }, 400);
@@ -1040,16 +1041,16 @@ app.post('/api/chat/:customer_id/message', async (c) => {
         role: 'assistant',
         content,
         metadata: {
+          ...frontendMetadata,
           sender_type: 'owner',
           visibility: 'both',
-          message_type: 'text',
           read_by_owner: true,
           preview_text: previewText,
         },
         tokens_input: 0,
         tokens_output: 0,
       })
-      .select('id, created_at')
+      .select('id, created_at, metadata')
       .single();
 
     if (saveErr) {
