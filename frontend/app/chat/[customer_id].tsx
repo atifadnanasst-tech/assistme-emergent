@@ -90,6 +90,8 @@ export default function CustomerChatScreen() {
   } | null>(null);
   const [recording, setRecording] = useState<Audio.Recording | null>(null);
   const [isRecording, setIsRecording] = useState(false);
+  const [imageViewerVisible, setImageViewerVisible] = useState(false);
+  const [imageViewerUri, setImageViewerUri] = useState<string | null>(null);
 
   const inputRef = useRef<any>(null);
   const channelRef = useRef<any>(null);
@@ -904,7 +906,9 @@ export default function CustomerChatScreen() {
           <View style={styles.outgoingContainer}>
             <View style={styles.outgoingBubble}>
               <View style={styles.attachMsgCard}>
+              <TouchableOpacity onPress={() => { setImageViewerUri(item.metadata.attachment?.uri || null); setImageViewerVisible(true); }}>
               <Image source={{ uri: item.metadata.attachment?.uri }} style={{ width: 200, height: 160, borderRadius: 8, marginBottom: 4 }} resizeMode="cover" />
+              </TouchableOpacity>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.attachMsgName} numberOfLines={1}>{item.metadata.attachment?.name}</Text>
                   <Text style={styles.attachMsgMeta}>Image</Text>
@@ -1723,6 +1727,17 @@ export default function CustomerChatScreen() {
             </View>
           </Pressable>
         </Pressable>
+      </Modal>
+      {/* Image Viewer */}
+      <Modal visible={imageViewerVisible} transparent animationType="fade" onRequestClose={() => setImageViewerVisible(false)}>
+        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.95)", justifyContent: "center", alignItems: "center" }}>
+          <TouchableOpacity onPress={() => setImageViewerVisible(false)} style={{ position: "absolute", top: 48, right: 20, zIndex: 10, padding: 8 }}>
+            <Ionicons name="close" size={28} color="#FFF" />
+          </TouchableOpacity>
+          {imageViewerUri && (
+            <Image source={{ uri: imageViewerUri }} style={{ width: "100%", height: "80%" }} resizeMode="contain" />
+          )}
+        </View>
       </Modal>
     </KeyboardAvoidingView>
   );
