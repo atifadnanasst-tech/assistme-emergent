@@ -92,6 +92,8 @@ export default function CustomerChatScreen() {
   const [isRecording, setIsRecording] = useState(false);
   const [imageViewerVisible, setImageViewerVisible] = useState(false);
   const [imageViewerUri, setImageViewerUri] = useState<string | null>(null);
+  const [playingUri, setPlayingUri] = useState<string | null>(null);
+  const [sound, setSound] = useState<Audio.Sound | null>(null);
 
   const inputRef = useRef<any>(null);
   const channelRef = useRef<any>(null);
@@ -99,6 +101,40 @@ export default function CustomerChatScreen() {
 
   // ── Attachment handlers ────────────────────────────────────
   // Gallery picker
+  // Audio playback
+  const handlePlayAudio = async (uri: string) => {
+    try {
+      if (playingUri === uri) {
+        await sound?.stopAsync();
+        await sound?.unloadAsync();
+        setSound(null);
+        setPlayingUri(null);
+        return;
+      }
+      if (sound) {
+        await sound.stopAsync();
+        await sound.unloadAsync();
+        setSound(null);
+        setPlayingUri(null);
+      }
+      await Audio.setAudioModeAsync({ allowsRecordingIOS: false, playsInSilentModeIOS: true });
+      const { sound: newSound } = await Audio.Sound.createAsync({ uri });
+      setSound(newSound);
+      setPlayingUri(uri);
+      await newSound.playAsync();
+      newSound.setOnPlaybackStatusUpdate((status) => {
+        if (status.isLoaded && status.didJustFinish) {
+          newSound.unloadAsync();
+          setSound(null);
+          setPlayingUri(null);
+        }
+      });
+    } catch (e) {
+      console.error("Audio playback error:", e);
+      Alert.alert("Error", "Could not play audio.");
+    }
+  };
+
   const handlePickGallery = async () => {
     setAttachSheetVisible(false);
     try {
@@ -361,6 +397,12 @@ export default function CustomerChatScreen() {
     const hideSub = Keyboard.addListener(hideEvent, () => setKeyboardVisible(false));
     return () => { showSub.remove(); hideSub.remove(); };
   }, []);
+  useEffect(() => {
+    return () => {
+      if (sound) { sound.unloadAsync(); }
+    };
+  }, [sound]);
+
 
   const loadChat = async (markRead: boolean = true) => {
     try {
@@ -938,16 +980,18 @@ export default function CustomerChatScreen() {
         return;
       }
       if (msgType === 'audio' && item.metadata?.attachment) {
+        const uri = item.metadata.attachment.uri;
+        const isPlaying = playingUri === uri;
         content = (
           <View style={styles.outgoingContainer}>
             <View style={styles.outgoingBubble}>
-              <View style={styles.attachMsgCard}>
-                <Ionicons name="musical-notes-outline" size={32} color="#075E54" />
+              <TouchableOpacity onPress={() => handlePlayAudio(uri)} style={styles.attachMsgCard}>
+                <Ionicons name={isPlaying ? 'pause-circle' : 'play-circle'} size={36} color='#075E54' />
                 <View style={{ flex: 1 }}>
                   <Text style={styles.attachMsgName} numberOfLines={1}>{item.metadata.attachment?.name}</Text>
-                  <Text style={styles.attachMsgMeta}>Audio</Text>
+                  <Text style={styles.attachMsgMeta}>{isPlaying ? 'Playing...' : 'Audio'}</Text>
                 </View>
-              </View>
+              </TouchableOpacity>
               <Text style={styles.outgoingTime}>{formatTime(item.created_at)}</Text>
             </View>
           </View>
