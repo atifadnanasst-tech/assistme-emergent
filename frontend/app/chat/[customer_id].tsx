@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, FlatList, TextInput,
+  View, Text, Image, StyleSheet, TouchableOpacity, FlatList, TextInput,
   ActivityIndicator, Alert, Linking, KeyboardAvoidingView, Platform,
   Keyboard, Modal, Pressable, ScrollView, InteractionManager,
 } from 'react-native';
@@ -138,6 +138,7 @@ export default function CustomerChatScreen() {
         return;
       }
       const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.All,
         allowsEditing: false,
         quality: 0.8,
       });
@@ -437,7 +438,7 @@ export default function CustomerChatScreen() {
   // ── Send message ───────────────────────────────────────────
   const handleSend = async () => {
     const text = inputText.trim();
-    if (!text || sending || !conversationId) return;
+    if ((!text && !attachmentPreview) || sending || !conversationId) return;
     inputRef.current?.focus();
     setInputText('');
 
@@ -903,7 +904,7 @@ export default function CustomerChatScreen() {
           <View style={styles.outgoingContainer}>
             <View style={styles.outgoingBubble}>
               <View style={styles.attachMsgCard}>
-                <Ionicons name="image-outline" size={32} color="#075E54" />
+              <Image source={{ uri: item.metadata.attachment?.uri }} style={{ width: 200, height: 160, borderRadius: 8, marginBottom: 4 }} resizeMode="cover" />
                 <View style={{ flex: 1 }}>
                   <Text style={styles.attachMsgName} numberOfLines={1}>{item.metadata.attachment?.name}</Text>
                   <Text style={styles.attachMsgMeta}>Image</Text>
@@ -951,6 +952,7 @@ export default function CustomerChatScreen() {
       }
     })()}
 
+    if (content) return <>{divider}{content}</>;
     if (item.message_type === 'invoice_card' || item.card_type === 'invoice_card') {
       content = renderInvoiceCard(item);
     } else if (item.message_type === 'ai_query') {
@@ -1247,7 +1249,7 @@ export default function CustomerChatScreen() {
                   <TouchableOpacity style={styles.inputIconBtn} onPress={() => setAttachSheetVisible(true)}>
                     <Ionicons name="attach" size={22} color="#667781" />
                   </TouchableOpacity>
-                  <TouchableOpacity style={styles.inputIconBtn}>
+                  <TouchableOpacity style={styles.inputIconBtn} onPress={handleOpenCamera}>
                     <Ionicons name="camera-outline" size={22} color="#667781" />
                   </TouchableOpacity>
                 </>
@@ -1257,7 +1259,7 @@ export default function CustomerChatScreen() {
               <TouchableOpacity style={[styles.sendBtn, styles.sparkSendBtn]} onPress={handleSpark} disabled={sparkProcessing || inputText.trim().length === 0}>
                 {sparkProcessing ? <ActivityIndicator size="small" color="#FFF" /> : <Ionicons name="send" size={20} color="#FFF" />}
               </TouchableOpacity>
-            ) : inputText.trim().length > 0 ? (
+            ) : (inputText.trim().length > 0 || !!attachmentPreview) ? (
               <TouchableOpacity style={styles.sendBtn} onPress={handleSend} disabled={sending}>
                 {sending ? <ActivityIndicator size="small" color="#FFF" /> : <Ionicons name="send" size={20} color="#FFF" />}
               </TouchableOpacity>
