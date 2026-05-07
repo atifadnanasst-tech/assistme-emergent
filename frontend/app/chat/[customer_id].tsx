@@ -489,7 +489,7 @@ export default function CustomerChatScreen() {
 
     const tempId = `temp-${Date.now()}`;
     const optimistic: ChatMessage = {
-      id: tempId, role: 'assistant', content: text,
+      id: tempId, role: 'assistant', content: text || attachment?.name || 'Attachment',
       created_at: new Date().toISOString(), sender_type: 'owner',
       visibility: 'both', message_type: 'text', card_type: null,
       card_data: {}, preview_text: text.substring(0, 50),
@@ -533,7 +533,7 @@ export default function CustomerChatScreen() {
       if (res.ok) {
         const data = await res.json();
         setMessages(prev => prev.map(m =>
-          m.id === tempId ? { ...m, id: data.message_id, created_at: data.created_at, delivery_status: 'delivered' } : m
+          m.id === tempId ? { ...m, id: data.message_id, created_at: data.created_at, delivery_status: 'delivered', content: data.content || m.content, metadata: data.metadata || m.metadata || {} } : m
         ));
         setAttachmentPreview(null);
       } else {
@@ -963,6 +963,9 @@ export default function CustomerChatScreen() {
                   <Text style={styles.attachMsgMeta}>Image</Text>
                 </View>
               </View>
+              {item.content && item.content !== item.metadata?.attachment?.name && item.content !== 'Attachment' && (
+                <Text style={styles.outgoingText}>{item.content}</Text>
+              )}
               <Text style={styles.outgoingTime}>{formatTime(item.created_at)}</Text>
             </View>
           </View>
@@ -980,6 +983,9 @@ export default function CustomerChatScreen() {
                   <Text style={styles.attachMsgMeta}>Document</Text>
                 </View>
               </View>
+              {item.content && item.content !== item.metadata?.attachment?.name && item.content !== 'Attachment' && (
+                <Text style={styles.outgoingText}>{item.content}</Text>
+              )}
               <Text style={styles.outgoingTime}>{formatTime(item.created_at)}</Text>
             </View>
           </View>
@@ -999,6 +1005,9 @@ export default function CustomerChatScreen() {
                   <Text style={styles.attachMsgMeta}>{isPlaying ? 'Playing...' : 'Audio'}</Text>
                 </View>
               </TouchableOpacity>
+              {item.content && item.content !== item.metadata?.attachment?.name && item.content !== 'Attachment' && (
+                <Text style={styles.outgoingText}>{item.content}</Text>
+              )}
               <Text style={styles.outgoingTime}>{formatTime(item.created_at)}</Text>
             </View>
           </View>
