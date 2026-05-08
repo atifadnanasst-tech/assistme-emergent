@@ -86,7 +86,14 @@ export default function CustomerChatScreen() {
   // Attachment sheet
   const [attachSheetVisible, setAttachSheetVisible] = useState(false);
   const [attachmentPreview, setAttachmentPreview] = useState<{
-    uri: string; name: string; mime_type: string; size?: number;
+    uri: string;
+    name: string;
+    mime_type: string;
+    size?: number;
+    url?: string;
+    storage_path?: string;
+    upload_status: 'uploading' | 'ready' | 'failed';
+    upload_id: string;
   } | null>(null);
   const [recording, setRecording] = useState<Audio.Recording | null>(null);
   const [isRecording, setIsRecording] = useState(false);
@@ -98,6 +105,53 @@ export default function CustomerChatScreen() {
   const inputRef = useRef<any>(null);
   const channelRef = useRef<any>(null);
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
+
+  // ── Attachment upload ──────────────────────────────────────
+  const uploadAttachment = async (localUri: string, name: string, mimeType: string, uploadId: string) => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
+    try {
+      const token = await getToken();
+      if (!token) throw new Error('No token');
+      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+
+      const formData = new FormData();
+      formData.append('file', {
+        uri: localUri,
+        name,
+        type: mimeType,
+      } as any);
+
+      const res = await fetch(`${backendUrl}/api/upload`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` },
+        body: formData,
+        signal: controller.signal,
+      });
+
+      if (!res.ok) throw new Error('Upload failed');
+      const data = await res.json();
+      return { url: data.url, storage_path: data.storage_path };
+    } catch (e) {
+      console.error('uploadAttachment error:', e);
+      return null;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  };
+
+  const handleRetryUpload = async () => {
+    const prev = attachmentPreview;
+    if (!prev) return;
+    const newUploadId = Date.now().toString();
+    setAttachmentPreview({ ...prev, upload_status: 'uploading', upload_id: newUploadId });
+    const uploaded = await uploadAttachment(prev.uri, prev.name, prev.mime_type, newUploadId);
+    if (uploaded) {
+      setAttachmentPreview(p => p?.upload_id === newUploadId ? { ...p, url: uploaded.url, storage_path: uploaded.storage_path, upload_status: 'ready' } : p);
+    } else {
+      setAttachmentPreview(p => p?.upload_id === newUploadId ? { ...p, upload_status: 'failed' } : p);
+    }
+  };
 
   // ── Attachment handlers ────────────────────────────────────
   // Gallery picker
@@ -154,12 +208,22 @@ export default function CustomerChatScreen() {
         return;
       }
       const asset = result.assets[0];
+      const uploadId = Date.now().toString();
       setAttachmentPreview({
         uri: asset.uri,
         name: asset.fileName || 'image.jpg',
         mime_type: asset.mimeType || 'image/jpeg',
         size: asset.fileSize ?? undefined,
+        upload_status: 'uploading',
+        upload_id: uploadId,
       });
+
+      const uploaded = await uploadAttachment(asset.uri, asset.fileName || 'image.jpg', asset.mimeType || 'image/jpeg', uploadId);
+      if (uploaded) {
+        setAttachmentPreview(prev => prev?.upload_id === uploadId ? { ...prev, url: uploaded.url, storage_path: uploaded.storage_path, upload_status: 'ready' } : prev);
+      } else {
+        setAttachmentPreview(prev => prev?.upload_id === uploadId ? { ...prev, upload_status: 'failed' } : prev);
+      }
     } catch (e) {
       console.error('Gallery picker error:', e);
       Alert.alert('Error', 'Could not open photo library.');
@@ -186,12 +250,22 @@ export default function CustomerChatScreen() {
         return;
       }
       const asset = result.assets[0];
+      const uploadId = Date.now().toString();
       setAttachmentPreview({
         uri: asset.uri,
         name: asset.fileName || 'photo.jpg',
         mime_type: asset.mimeType || 'image/jpeg',
         size: asset.fileSize ?? undefined,
+        upload_status: 'uploading',
+        upload_id: uploadId,
       });
+
+      const uploaded = await uploadAttachment(asset.uri, asset.fileName || 'photo.jpg', asset.mimeType || 'image/jpeg', uploadId);
+      if (uploaded) {
+        setAttachmentPreview(prev => prev?.upload_id === uploadId ? { ...prev, url: uploaded.url, storage_path: uploaded.storage_path, upload_status: 'ready' } : prev);
+      } else {
+        setAttachmentPreview(prev => prev?.upload_id === uploadId ? { ...prev, upload_status: 'failed' } : prev);
+      }
     } catch (e) {
       console.error('Camera error:', e);
       Alert.alert('Error', 'Could not open camera.');
@@ -212,12 +286,22 @@ export default function CustomerChatScreen() {
         return;
       }
       const asset = result.assets[0];
+      const uploadId = Date.now().toString();
       setAttachmentPreview({
         uri: asset.uri,
         name: asset.name,
         mime_type: asset.mimeType || 'application/octet-stream',
         size: asset.size ?? undefined,
+        upload_status: 'uploading',
+        upload_id: uploadId,
       });
+
+      const uploaded = await uploadAttachment(asset.uri, asset.name, asset.mimeType || 'application/octet-stream', uploadId);
+      if (uploaded) {
+        setAttachmentPreview(prev => prev?.upload_id === uploadId ? { ...prev, url: uploaded.url, storage_path: uploaded.storage_path, upload_status: 'ready' } : prev);
+      } else {
+        setAttachmentPreview(prev => prev?.upload_id === uploadId ? { ...prev, upload_status: 'failed' } : prev);
+      }
     } catch (e) {
       console.error('Document picker error:', e);
       Alert.alert('Error', 'Could not open document picker.');
@@ -236,11 +320,22 @@ export default function CustomerChatScreen() {
         await rec?.stopAndUnloadAsync();
         const uri = rec?.getURI();
         if (uri) {
+          const fileName = `audio_${Date.now()}.m4a`;
+          const uploadId = Date.now().toString();
           setAttachmentPreview({
             uri,
-            name: `audio_${Date.now()}.m4a`,
+            name: fileName,
             mime_type: 'audio/*',
+            upload_status: 'uploading',
+            upload_id: uploadId,
           });
+
+          const uploaded = await uploadAttachment(uri, fileName, 'audio/*', uploadId);
+          if (uploaded) {
+            setAttachmentPreview(prev => prev?.upload_id === uploadId ? { ...prev, url: uploaded.url, storage_path: uploaded.storage_path, upload_status: 'ready' } : prev);
+          } else {
+            setAttachmentPreview(prev => prev?.upload_id === uploadId ? { ...prev, upload_status: 'failed' } : prev);
+          }
         }
       } catch (e) {
         console.error('Stop recording error:', e);
@@ -500,9 +595,11 @@ export default function CustomerChatScreen() {
                         attachment.mime_type?.startsWith?.('audio') ? 'audio' : 'file',
           attachment: {
             uri: attachment.uri,
+            url: attachment.url,
             name: attachment.name,
             mime_type: attachment.mime_type,
             size: attachment.size,
+            storage_path: attachment.storage_path,
           }
         } : {})
       },
@@ -955,8 +1052,11 @@ export default function CustomerChatScreen() {
           <View style={styles.outgoingContainer}>
             <View style={styles.outgoingBubble}>
               <View style={styles.attachMsgCard}>
-              <TouchableOpacity onPress={() => { setImageViewerUri(item.metadata.attachment?.uri || null); setImageViewerVisible(true); }}>
-              <Image source={{ uri: item.metadata.attachment?.uri }} style={{ width: 200, height: 160, borderRadius: 8, marginBottom: 4 }} resizeMode="cover" />
+              <TouchableOpacity onPress={() => {
+                setImageViewerUri(item.metadata.attachment?.url || item.metadata.attachment?.uri || null);
+                setImageViewerVisible(true);
+              }}>
+              <Image source={{ uri: item.metadata.attachment?.url || item.metadata.attachment?.uri }} style={{ width: 200, height: 160, borderRadius: 8, marginBottom: 4 }} resizeMode="cover" />
               </TouchableOpacity>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.attachMsgName} numberOfLines={1}>{item.metadata.attachment?.name}</Text>
@@ -993,7 +1093,7 @@ export default function CustomerChatScreen() {
         return;
       }
       if (msgType === 'audio' && item.metadata?.attachment) {
-        const uri = item.metadata.attachment.uri;
+        const uri = item.metadata.attachment?.url || item.metadata.attachment?.uri;
         const isPlaying = playingUri === uri;
         content = (
           <View style={styles.outgoingContainer}>
@@ -1269,6 +1369,14 @@ export default function CustomerChatScreen() {
               <Text style={styles.attachPreviewName} numberOfLines={1}>
                 {attachmentPreview.name}
               </Text>
+              {attachmentPreview.upload_status === 'uploading' && (
+                <ActivityIndicator size="small" color="#075E54" style={{ marginRight: 4 }} />
+              )}
+              {attachmentPreview.upload_status === 'failed' && (
+                <TouchableOpacity onPress={handleRetryUpload}>
+                  <Ionicons name="refresh-circle" size={22} color="#D32F2F" style={{ marginRight: 4 }} />
+                </TouchableOpacity>
+              )}
               <TouchableOpacity
                 onPress={() => setAttachmentPreview(null)}
                 hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
@@ -1323,7 +1431,7 @@ export default function CustomerChatScreen() {
               <TouchableOpacity style={[styles.sendBtn, styles.sparkSendBtn]} onPress={handleSpark} disabled={sparkProcessing || inputText.trim().length === 0}>
                 {sparkProcessing ? <ActivityIndicator size="small" color="#FFF" /> : <Ionicons name="send" size={20} color="#FFF" />}
               </TouchableOpacity>
-            ) : (inputText.trim().length > 0 || !!attachmentPreview) ? (
+            ) : (inputText.trim().length > 0 || (!!attachmentPreview && attachmentPreview.upload_status === 'ready')) ? (
               <TouchableOpacity style={styles.sendBtn} onPress={handleSend} disabled={sending}>
                 {sending ? <ActivityIndicator size="small" color="#FFF" /> : <Ionicons name="send" size={20} color="#FFF" />}
               </TouchableOpacity>
