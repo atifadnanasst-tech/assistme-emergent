@@ -1048,9 +1048,10 @@ export default function CustomerChatScreen() {
     {(() => {
       const msgType = item.metadata?.message_type || item.message_type;
       if (msgType === 'image' && item.metadata?.attachment) {
+        const isIncoming = item.role === 'user';
         content = (
-          <View style={styles.outgoingContainer}>
-            <View style={styles.outgoingBubble}>
+          <View style={isIncoming ? styles.incomingContainer : styles.outgoingContainer}>
+            <View style={isIncoming ? styles.incomingBubble : styles.outgoingBubble}>
               <View style={styles.attachMsgCard}>
               <TouchableOpacity onPress={() => {
                 setImageViewerUri(item.metadata.attachment?.url || item.metadata.attachment?.uri || null);
@@ -1064,18 +1065,19 @@ export default function CustomerChatScreen() {
                 </View>
               </View>
               {item.content && item.content !== item.metadata?.attachment?.name && item.content !== 'Attachment' && (
-                <Text style={styles.outgoingText}>{item.content}</Text>
+                <Text style={isIncoming ? styles.incomingText : styles.outgoingText}>{item.content}</Text>
               )}
-              <Text style={styles.outgoingTime}>{formatTime(item.created_at)}</Text>
+              <Text style={isIncoming ? styles.incomingTime : styles.outgoingTime}>{formatTime(item.created_at)}</Text>
             </View>
           </View>
         );
         return;
       }
       if (msgType === 'file' && item.metadata?.attachment) {
+        const isIncoming = item.role === 'user';
         content = (
-          <View style={styles.outgoingContainer}>
-            <View style={styles.outgoingBubble}>
+          <View style={isIncoming ? styles.incomingContainer : styles.outgoingContainer}>
+            <View style={isIncoming ? styles.incomingBubble : styles.outgoingBubble}>
               <View style={styles.attachMsgCard}>
                 <Ionicons name="document-outline" size={32} color="#075E54" />
                 <View style={{ flex: 1 }}>
@@ -1084,9 +1086,9 @@ export default function CustomerChatScreen() {
                 </View>
               </View>
               {item.content && item.content !== item.metadata?.attachment?.name && item.content !== 'Attachment' && (
-                <Text style={styles.outgoingText}>{item.content}</Text>
+                <Text style={isIncoming ? styles.incomingText : styles.outgoingText}>{item.content}</Text>
               )}
-              <Text style={styles.outgoingTime}>{formatTime(item.created_at)}</Text>
+              <Text style={isIncoming ? styles.incomingTime : styles.outgoingTime}>{formatTime(item.created_at)}</Text>
             </View>
           </View>
         );
@@ -1095,9 +1097,10 @@ export default function CustomerChatScreen() {
       if (msgType === 'audio' && item.metadata?.attachment) {
         const uri = item.metadata.attachment?.url || item.metadata.attachment?.uri;
         const isPlaying = playingUri === uri;
+        const isIncoming = item.role === 'user';
         content = (
-          <View style={styles.outgoingContainer}>
-            <View style={styles.outgoingBubble}>
+          <View style={isIncoming ? styles.incomingContainer : styles.outgoingContainer}>
+            <View style={isIncoming ? styles.incomingBubble : styles.outgoingBubble}>
               <TouchableOpacity onPress={() => handlePlayAudio(uri)} style={styles.attachMsgCard}>
                 <Ionicons name={isPlaying ? 'pause-circle' : 'play-circle'} size={36} color='#075E54' />
                 <View style={{ flex: 1 }}>
@@ -1106,9 +1109,9 @@ export default function CustomerChatScreen() {
                 </View>
               </TouchableOpacity>
               {item.content && item.content !== item.metadata?.attachment?.name && item.content !== 'Attachment' && (
-                <Text style={styles.outgoingText}>{item.content}</Text>
+                <Text style={isIncoming ? styles.incomingText : styles.outgoingText}>{item.content}</Text>
               )}
-              <Text style={styles.outgoingTime}>{formatTime(item.created_at)}</Text>
+              <Text style={isIncoming ? styles.incomingTime : styles.outgoingTime}>{formatTime(item.created_at)}</Text>
             </View>
           </View>
         );

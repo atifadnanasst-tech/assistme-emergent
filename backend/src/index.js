@@ -1004,6 +1004,69 @@ app.get('/api/chat/:customer_id', async (c) => {
 });
 
 // ─── POST /api/chat/:customer_id/message ───────────────────
+app.post('/api/upload', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+
+    const formData = await c.req.formData();
+    const file = formData.get('file');
+
+    if (!file || typeof file === 'string') {
+      return c.json({ error: 'no_file', message: 'No file provided' }, 400);
+    }
+
+    const mimeType = file.type || 'application/octet-stream';
+    const originalName = file.name || 'upload';
+
+    const allowed = ['image/', 'audio/', 'application/pdf'];
+    if (!allowed.some(prefix => mimeType.startsWith(prefix))) {
+      return c.json({ error: 'invalid_mime', message: 'File type not allowed' }, 400);
+    }
+
+    const ext = originalName.split('.').pop() || 'bin';
+    const timestamp = Date.now();
+    const fileName = `${timestamp}-${crypto.randomUUID()}.${ext}`;
+    const storagePath = `${organisationId}/${fileName}`;
+
+    const arrayBuffer = await file.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+
+    if (buffer.length > 10 * 1024 * 1024) {
+      return c.json({ error: 'file_too_large', message: 'File exceeds 10MB limit' }, 400);
+    }
+
+    const { error: uploadErr } = await supabase.storage
+      .from('chat-attachments')
+      .upload(storagePath, buffer, {
+        contentType: mimeType,
+        upsert: false,
+      });
+
+    if (uploadErr) {
+      console.error('Storage upload error:', uploadErr);
+      return c.json({ error: 'upload_failed', message: uploadErr.message }, 500);
+    }
+
+    const { data: publicUrlData } = supabase.storage
+      .from('chat-attachments')
+      .getPublicUrl(storagePath);
+
+    return c.json({
+      url: publicUrlData.publicUrl,
+      mime_type: mimeType,
+      storage_path: storagePath,
+      size: buffer.length,
+      name: originalName,
+    });
+
+  } catch (err) {
+    console.error('POST /api/upload error:', err);
+    return c.json({ error: 'server_error' }, 500);
+  }
+});
+
 app.post('/api/chat/:customer_id/message', async (c) => {
   try {
     const auth = await authenticateChat(c);
@@ -1158,8 +1221,9 @@ app.post('/api/chat/:customer_id/message', async (c) => {
                   role: 'user',
                   content,
                   metadata: {
+                    ...frontendMetadata,
                     sender_type: 'customer',
-                    message_type: 'text',
+                    message_type: frontendMetadata.message_type || 'text',
                     visibility: 'both',
                     preview_text: previewText,
                     read_by_owner: false,
