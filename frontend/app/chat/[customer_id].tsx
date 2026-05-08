@@ -109,7 +109,7 @@ export default function CustomerChatScreen() {
   // ── Attachment upload ──────────────────────────────────────
   const uploadAttachment = async (localUri: string, name: string, mimeType: string, uploadId: string) => {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 15000);
+    const timeoutId = setTimeout(() => controller.abort(), 45000);
     try {
       const token = await getToken();
       if (!token) throw new Error('No token');
@@ -240,7 +240,7 @@ export default function CustomerChatScreen() {
         return;
       }
       const result = await ImagePicker.launchCameraAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.All,
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
         allowsEditing: false,
         quality: 0.8,
       });
@@ -325,12 +325,12 @@ export default function CustomerChatScreen() {
           setAttachmentPreview({
             uri,
             name: fileName,
-            mime_type: 'audio/*',
+            mime_type: 'audio/x-m4a',
             upload_status: 'uploading',
             upload_id: uploadId,
           });
 
-          const uploaded = await uploadAttachment(uri, fileName, 'audio/*', uploadId);
+          const uploaded = await uploadAttachment(uri, fileName, 'audio/x-m4a', uploadId);
           if (uploaded) {
             setAttachmentPreview(prev => prev?.upload_id === uploadId ? { ...prev, url: uploaded.url, storage_path: uploaded.storage_path, upload_status: 'ready' } : prev);
           } else {
@@ -472,9 +472,7 @@ export default function CustomerChatScreen() {
         .subscribe();
     };
 
-    setupRealtime();
-
-    return () => {
+  return () => {
       if (channelRef.current) {
         supabase.removeChannel(channelRef.current);
         channelRef.current = null;
@@ -1205,6 +1203,10 @@ export default function CustomerChatScreen() {
   });
 
   // ── Main render ────────────────────────────────────────────
+  const canSend = attachmentPreview
+    ? attachmentPreview.upload_status === 'ready'
+    : inputText.trim().length > 0;
+
   return (
     <KeyboardAvoidingView
       style={styles.flex1}
@@ -1434,7 +1436,7 @@ export default function CustomerChatScreen() {
               <TouchableOpacity style={[styles.sendBtn, styles.sparkSendBtn]} onPress={handleSpark} disabled={sparkProcessing || inputText.trim().length === 0}>
                 {sparkProcessing ? <ActivityIndicator size="small" color="#FFF" /> : <Ionicons name="send" size={20} color="#FFF" />}
               </TouchableOpacity>
-            ) : (inputText.trim().length > 0 || (!!attachmentPreview && attachmentPreview.upload_status === 'ready')) ? (
+            ) : canSend ? (
               <TouchableOpacity style={styles.sendBtn} onPress={handleSend} disabled={sending}>
                 {sending ? <ActivityIndicator size="small" color="#FFF" /> : <Ionicons name="send" size={20} color="#FFF" />}
               </TouchableOpacity>

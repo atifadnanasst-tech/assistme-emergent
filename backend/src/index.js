@@ -1095,7 +1095,10 @@ app.post('/api/chat/:customer_id/message', async (c) => {
       .maybeSingle();
     if (!conv) return c.json({ error: 'conversation_not_found' }, 404);
 
-    const previewText = content.length > 50 ? content.substring(0, 50) + '...' : content;
+    const previewText = frontendMetadata.message_type === 'image' ? '📷 Photo' :
+      frontendMetadata.message_type === 'audio' ? '🎵 Voice message' :
+      frontendMetadata.message_type === 'file' ? '📄 Document' :
+      content.length > 50 ? content.substring(0, 50) + '...' : content;
 
     const { data: savedMsg, error: saveErr } = await supabase
       .from('messages')
