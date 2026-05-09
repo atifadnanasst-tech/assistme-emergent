@@ -1539,32 +1539,33 @@ export default function CustomerChatScreen() {
               paddingHorizontal: 10, paddingVertical: 6,
               borderLeftWidth: 3, borderLeftColor: '#075E54',
             }}>
-              <Ionicons
-                name={
-                  forwardedAttachment.type === 'image' ? 'image-outline' :
-                  forwardedAttachment.type === 'audio' ? 'musical-notes-outline' :
-                  forwardedAttachment.type === 'file' ? 'document-outline' :
-                  'chatbubble-outline'
-                }
-                size={16} color="#075E54" style={{ marginRight: 8 }}
-              />
+              {forwardedAttachment.type === 'image' && forwardedAttachment.url ? (
+                <Image
+                  source={{ uri: forwardedAttachment.url }}
+                  style={{ width: 40, height: 40, borderRadius: 4, marginRight: 8 }}
+                  resizeMode="cover"
+                />
+              ) : (
+                <Ionicons
+                  name={
+                    forwardedAttachment.type === 'audio' ? 'musical-notes-outline' :
+                    forwardedAttachment.type === 'file' ? 'document-outline' :
+                    'chatbubble-outline'
+                  }
+                  size={20} color="#075E54" style={{ marginRight: 8 }}
+                />
+              )}
               <Text numberOfLines={1} style={{ flex: 1, fontSize: 13, color: '#075E54' }}>
                 {forwardedAttachment.type === 'text'
                   ? forwardedAttachment.text
                   : forwardedAttachment.name || forwardedAttachment.type}
               </Text>
-              <TouchableOpacity onPress={() => setForwardedAttachment(null)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <TouchableOpacity onPress={() => { setForwardedAttachment(null); setSparkMode(false); setSparkInput(''); }} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
                 <Ionicons name="close-circle" size={18} color="#075E54" />
               </TouchableOpacity>
             </View>
           )}
-            <View style={styles.sparkIndicator}>
-              <Ionicons name="sparkles" size={16} color="#075E54" />
-              <Text style={styles.sparkIndicatorText}>AI Spark Mode — type a natural language instruction</Text>
-              <TouchableOpacity onPress={() => { setSparkMode(false); setSparkInput(''); setForwardedAttachment(null); }} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                <Ionicons name="close-circle" size={20} color="#999" />
-              </TouchableOpacity>
-            </View>
+          </>
           )}
           <View style={styles.inputRow}>
             <View style={[styles.inputPill, sparkMode && styles.inputPillSpark]}>
@@ -1576,12 +1577,21 @@ export default function CustomerChatScreen() {
                 ref={inputRef}
                 blurOnSubmit={false}
                 placeholder={sparkMode ? sparkTips[currentTipIndex] : 'Message or voice...'}
-                placeholderTextColor={sparkMode ? '#075E54' : '#999'}
+                placeholderTextColor={sparkMode ? '#AAAAAA' : '#999'}
                 value={inputText}
                 onChangeText={setInputText}
                 multiline
                 maxLength={2000}
               />
+              {sparkMode && !forwardedAttachment && (
+                <TouchableOpacity
+                  onPress={() => { setSparkMode(false); setSparkInput(''); }}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  style={styles.inputIconBtn}
+                >
+                  <Ionicons name="close-circle" size={20} color="#999" />
+                </TouchableOpacity>
+              )}
               {!sparkMode && (
                 <>
                   <TouchableOpacity style={styles.inputIconBtn} onPress={() => setAttachSheetVisible(true)}>

@@ -1912,6 +1912,7 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
     const body = await c.req.json();
     const query = body.query?.trim();
     const conversationId = body.conversation_id;
+    const forwardedAttachment = body.forwarded_attachment || null;
     if (!query) return c.json({ error: 'empty_query' }, 400);
     if (!conversationId) return c.json({ error: 'missing_conversation_id' }, 400);
 
@@ -1954,7 +1955,18 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
       .map(m => `${m.role}: ${(m.content || '').substring(0, 200)}`).join('\n');
 
     // Build OpenAI messages
-    const userMessage = `Customer: ${customer.name}\nOwner instruction: ${query}\nRecent context: ${recentText}\nCustomer memory: ${customerMemory || 'none'}`;
+    let attachmentContext = '';
+    if (forwardedAttachment) {
+      if (forwardedAttachment.type === 'text') {
+        attachmentContext = `\nForwarded message: ${forwardedAttachment.text || ''}`;
+      } else {
+        attachmentContext = `\nForwarded ${forwardedAttachment.type}: ${forwardedAttachment.name || forwardedAttachment.type}`;
+        attachmentContext += `\nMIME type: ${forwardedAttachment.mime_type || 'unknown'}`;
+        if (forwardedAttachment.caption) attachmentContext += `\nCaption: ${forwardedAttachment.caption}`;
+        if (forwardedAttachment.url) attachmentContext += `\nAttachment URL available`;
+      }
+    }
+    const userMessage = `Customer: ${customer.name}\nOwner instruction: ${query}${attachmentContext}\nRecent context: ${recentText}\nCustomer memory: ${customerMemory || 'none'}`;
     const systemContent = SPARK_SYSTEM_PROMPT + (globalContext ? `\n\nBusiness context:\n${globalContext}` : '');
 
     const client = getOpenAI();
