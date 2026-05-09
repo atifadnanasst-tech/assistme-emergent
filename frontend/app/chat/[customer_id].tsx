@@ -85,6 +85,8 @@ export default function CustomerChatScreen() {
   const [unresolvedPrices, setUnresolvedPrices] = useState<Record<string, string>>({});
   const [unresolvedGst, setUnresolvedGst] = useState<Record<string, string>>({});
   const [removedItems, setRemovedItems] = useState<Set<string>>(new Set());
+  const [unresolvedNames, setUnresolvedNames] = useState<Record<string, string>>({});
+  const [editableQuantities, setEditableQuantities] = useState<Record<string, string>>({});
   // Date edit sheet
   const [dateEditVisible, setDateEditVisible] = useState(false);
   const [dateEditAction, setDateEditAction] = useState<any>(null);
@@ -854,26 +856,28 @@ export default function CustomerChatScreen() {
           const itemKey = `${action.action_id}-${idx}`;
           if (item.product_id !== null) continue;
           if (removedItems.has(itemKey)) continue;
-          const price = parseFloat(unresolvedPrices[itemKey] || '0') || 0;
+          const price = parseFloat(unresolvedPrices[itemKey] ?? (item.unit_price != null ? String(item.unit_price) : '0')) || 0;
           if (price <= 0) {
             Alert.alert('Missing Price', `Enter a selling price for "${item.product_name}" or remove it.`);
             setConfirming(false);
             return;
           }
           const gstPct = parseFloat(unresolvedGst[itemKey] || '0') || 0;
+          const editedName = unresolvedNames[itemKey] ?? item.product_name;
+          const editedQty = parseFloat(editableQuantities[itemKey] ?? String(item.quantity)) || item.quantity;
           const prodRes = await fetch(`${backendUrl}/api/products`, {
             method: 'POST',
             headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name: item.product_name, selling_price: price, tax_rate: gstPct }),
+            body: JSON.stringify({ name: editedName, selling_price: price, tax_rate: gstPct }),
           });
           if (!prodRes.ok) {
-            Alert.alert('Error', `Could not add "${item.product_name}" to catalog. Try again.`);
+            Alert.alert('Error', `Could not add "${editedName}" to catalog. Try again.`);
             setConfirming(false);
             return;
           }
           const newProduct = await prodRes.json();
           const updatedItems = [...items];
-          updatedItems[idx] = { ...item, product_id: newProduct.id, unit_price: price, tax_rate: gstPct, line_total: price * item.quantity };
+          updatedItems[idx] = { ...item, product_id: newProduct.id, product_name: editedName, quantity: editedQty, unit_price: price, tax_rate: gstPct, line_total: price * editedQty };
           await fetch(`${backendUrl}/api/chat/${customer_id}/spark/action/${action.action_id}`, {
             method: 'PATCH',
             headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
@@ -899,6 +903,8 @@ export default function CustomerChatScreen() {
       setUnresolvedPrices({});
       setUnresolvedGst({});
       setRemovedItems(new Set());
+      setUnresolvedNames({});
+      setEditableQuantities({});
 
       if (data.executed?.length > 0) {
         await loadChat();
@@ -1694,7 +1700,7 @@ export default function CustomerChatScreen() {
                         const itemKey = `${action.action_id}-${idx}`;
                         const isUnresolved = item.product_id === null;
                         const isRemoved = removedItems.has(itemKey);
-                        const unresolvedPrice = unresolvedPrices[itemKey] || '';
+                        const unresolvedPrice = unresolvedPrices[itemKey] ?? (item.unit_price != null ? String(item.unit_price) : '');
                         const unresolvedGstVal = unresolvedGst[itemKey] || '';
                         if (isRemoved) return null;
                         return (
@@ -1708,9 +1714,30 @@ export default function CustomerChatScreen() {
                           }]}>
                             <View style={{ flex: 1 }}>
                               <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                                <Text style={styles.invoiceItemName}>
-                                  {item.quantity} × {item.product_name}
-                                </Text>
+                                {isUnresolved ? (
+                                  <View style={styles.editableRow}>
+                                    <TextInput
+                                      style={styles.editableQtyInput}
+                                      placeholder="Qty"
+                                      placeholderTextColor="#999"
+                                      keyboardType="numeric"
+                                      value={editableQuantities[itemKey] ?? String(item.quantity || '')}
+                                      onChangeText={(text) => setEditableQuantities(prev => ({ ...prev, [itemKey]: text.replace(/[^0-9.]/g, '') }))}
+                                    />
+                                    <Text style={{ fontSize: 14, color: '#333' }}>×</Text>
+                                    <TextInput
+                                      style={styles.editableNameInput}
+                                      placeholder="Product name"
+                                      placeholderTextColor="#999"
+                                      value={unresolvedNames[itemKey] ?? item.product_name}
+                                      onChangeText={(text) => setUnresolvedNames(prev => ({ ...prev, [itemKey]: text }))}
+                                    />
+                                  </View>
+                                ) : (
+                                  <Text style={styles.invoiceItemName}>
+                                    {item.quantity} × {item.product_name}
+                                  </Text>
+                                )}
                                 {isUnresolved && (
                                   <TouchableOpacity onPress={() => setRemovedItems(prev => new Set([...prev, itemKey]))} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
                                     <Text style={{ fontSize: 18, color: '#F9A825', fontWeight: '700', paddingHorizontal: 6 }}>×</Text>
@@ -2384,6 +2411,19 @@ const styles = StyleSheet.create({
   invoiceItemRow: { marginBottom: 6 },
   invoiceItemName: { fontSize: 14, color: '#1A1A1A', fontWeight: '500' },
   invoiceItemPrice: { fontSize: 13, color: '#075E54', fontWeight: '600', marginTop: 1 },
+  editableQtyInput: {
+    borderWidth: 1, borderColor: '#F9A825', borderRadius: 6,
+    paddingHorizontal: 8, paddingVertical: 4,
+    width: 50, fontSize: 14, color: '#333', textAlign: 'center',
+  },
+  editableNameInput: {
+    borderWidth: 1, borderColor: '#F9A825', borderRadius: 6,
+    paddingHorizontal: 8, paddingVertical: 4,
+    flex: 1, fontSize: 14, color: '#333',
+  },
+  editableRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4,
+  },
   invoiceTotalText: { fontSize: 15, fontWeight: '700', color: '#075E54', marginTop: 8, borderTopWidth: 1, borderTopColor: '#E0E0E0', paddingTop: 6 },
   invoiceDueText: { fontSize: 12, color: '#999', marginTop: 2 },
   altRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 4, marginTop: 4 },
