@@ -1819,9 +1819,10 @@ Extract ALL actions from the owner's instruction. Output ONLY this JSON — no o
     {
       "action_type": "create_invoice | create_quote | convert_quote_to_invoice | schedule_delivery | update_delivery_status | set_reminder | record_payment | goods_returned | record_expense",
       "entities": {
-        "items": [{"product_name": "string", "quantity": number, "discount_pct": number}],
+        "items": [{"product_name": "string", "quantity": number, "unit_price": number or null, "discount_pct": number}],
         "amount": number or null,
         "freight": number or null,
+        "packing": number or null,
         "freight_taxable": true or false,
         "overall_discount": number or null,
         "invoice_type": "Tax Invoice | Bill of Supply | null",
@@ -1855,6 +1856,8 @@ Action rules:
 - invoice_type: set Bill of Supply if owner says bina GST, without GST, composition. Default is Tax Invoice.
 - freight_taxable: set true only if owner explicitly says freight has GST. Default false.
 - freight notation examples: "freight 50", "freight rupees 50", "freight Rs 50", "freight 50/-", "dhulai 50", "transport 50" — all mean freight=50. Always extract as number only into entities.freight.
+- packing notation examples: "bundle 150", "packing 150", "box 150", "packet 150" — all mean packing=150. Always extract as number only into entities.packing.
+- unit_price: if owner or image provides a per-unit price for a product, set it in the item's unit_price field. If not provided, set null — backend will fetch from catalog.
 - Resolve relative dates: tomorrow or kal = next day, 7 din baad = plus 7 days from today.
 - If intent is truly unclear return empty actions array with confidence_score below 0.50.
 - No markdown. No preamble. JSON only.`;
@@ -1985,7 +1988,7 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
               messages: [{
                 role: 'user',
                 content: [
-                  { type: 'text', text: 'Extract only clearly visible business information from this image. Do not guess unclear text or quantities. Return concise structured output.' },
+                  { type: 'text', text: 'You are reading a handwritten or printed business document from an Indian MSME trader.\n\nExtract clearly visible business information and return it in this exact readable structure:\n\nCustomer: [name and address if visible]\nDate: [date if visible]\n\nItems:\n- Product: [name as written] | Qty: [number] | Unit Price: [number] | Total: [number]\n\nFreight:\n- [name] | Amount: [number]\n\nPacking:\n- [name] | Amount: [number]\n\nGrand Total: [number]\n\nNotes: [any other relevant text]\n\nRules:\n- In Indian trader notes format is typically: ProductName = Qty x UnitPrice = LineTotal. Extract quantity and unit price separately. Never confuse price with quantity.\n- Bilti, Dhulai, Transport, Hamali, Bhada, Freight = freight charges, go under Freight section\n- Bundle, Packing, Box, Packet = packing charges, go under Packing section\n- All actual goods being sold go under Items section\n- Do not guess unclear text — omit if unreadable\n- Do not infer or add products not explicitly written\n- Return only the structured text above. No JSON. No explanation. No markdown.' },
                   { type: 'image_url', image_url: { url: `data:${mime};base64,${base64Image}`, detail: 'low' } }
                 ]
               }],
@@ -2131,7 +2134,7 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
           amount: ent.amount || totalAmount || null,
           due_date: ent.due_date || null,
           delivery_date: ent.delivery_date || null,
-          freight: ent.freight || 0,
+          freight: (ent.freight || 0) + (ent.packing || 0),
           freight_taxable: ent.freight_taxable || false,
           freight_tax_rate: ent.freight_tax_rate || 18,
         };
