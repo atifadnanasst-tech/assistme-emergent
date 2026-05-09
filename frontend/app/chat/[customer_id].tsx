@@ -14,6 +14,7 @@ import { authService } from '../../lib/auth';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import { Audio } from 'expo-av';
+import * as Clipboard from 'expo-clipboard';
 
 // ── Types ────────────────────────────────────────────────────
 interface CustomerData {
@@ -108,6 +109,11 @@ export default function CustomerChatScreen() {
   } | null>(null);
   const [recording, setRecording] = useState<Audio.Recording | null>(null);
   const [isRecording, setIsRecording] = useState(false);
+
+  // Context menu
+  const [selectedMessage, setSelectedMessage] = useState<ChatMessage | null>(null);
+  const [messageMenuVisible, setMessageMenuVisible] = useState(false);
+
   const [imageViewerVisible, setImageViewerVisible] = useState(false);
   const [imageViewerUri, setImageViewerUri] = useState<string | null>(null);
   const [playingUri, setPlayingUri] = useState<string | null>(null);
@@ -1080,7 +1086,6 @@ export default function CustomerChatScreen() {
             </View>
           </View>
         );
-        return;
       }
       if (msgType === 'file' && item.metadata?.attachment) {
         const isIncoming = item.role === 'user';
@@ -1101,7 +1106,6 @@ export default function CustomerChatScreen() {
             </View>
           </View>
         );
-        return;
       }
       if (msgType === 'audio' && item.metadata?.attachment) {
         const uri = item.metadata.attachment?.url || item.metadata.attachment?.uri;
@@ -1124,11 +1128,9 @@ export default function CustomerChatScreen() {
             </View>
           </View>
         );
-        return;
       }
     })()}
 
-    if (content) return <>{divider}{content}</>;
     if (item.message_type === 'invoice_card' || item.card_type === 'invoice_card') {
       content = renderInvoiceCard(item);
     } else if (item.message_type === 'ai_query') {
@@ -1165,7 +1167,33 @@ export default function CustomerChatScreen() {
       content = renderOutgoingMessage(item);
     }
 
-    return <>{divider}{content}</>;
+    const canLongPress =
+      item.role !== 'system' &&
+      item.message_type !== 'system_alert' &&
+      item.message_type !== 'spark_clarify' &&
+      item.message_type !== 'ai_response' &&
+      item.message_type !== 'ai_query';
+
+    const wrappedContent = canLongPress ? (
+      <Pressable
+        android_disableSound
+        onLongPress={() => {
+          setSelectedMessage(item);
+          setMessageMenuVisible(true);
+        }}
+        delayLongPress={300}
+        delayPressIn={0}
+      >
+        {content}
+      </Pressable>
+    ) : content;
+
+    return (
+      <>
+        {divider}
+        {wrappedContent}
+      </>
+    );
   };
 
   // ── 3-dot menu ─────────────────────────────────────────────
@@ -1930,6 +1958,119 @@ export default function CustomerChatScreen() {
             <Image source={{ uri: imageViewerUri }} style={{ width: "100%", height: "80%" }} resizeMode="contain" />
           )}
         </View>
+      </Modal>
+
+      {/* Context Menu Modal */}
+      <Modal
+        visible={messageMenuVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          setMessageMenuVisible(false);
+          setSelectedMessage(null);
+        }}
+      >
+        <Pressable
+          style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' }}
+          onPress={() => {
+            setMessageMenuVisible(false);
+            setSelectedMessage(null);
+          }}
+        >
+          <Pressable onPress={() => {}}>
+            <View style={{
+              backgroundColor: '#FFF',
+              borderTopLeftRadius: 20,
+              borderTopRightRadius: 20,
+              paddingHorizontal: 20,
+              paddingBottom: 36,
+              paddingTop: 12,
+            }}>
+
+              {/* Handle bar */}
+              <View style={{
+                width: 40, height: 4, backgroundColor: '#DDD',
+                borderRadius: 2, alignSelf: 'center', marginBottom: 20
+              }} />
+
+              {/* Forward to AI Spark — ACTIVE */}
+              <TouchableOpacity
+                style={{
+                  flexDirection: 'row', alignItems: 'center',
+                  paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#F0F0F0'
+                }}
+                onPress={() => {
+                  setMessageMenuVisible(false);
+                  // Forward to Spark — wired in next prompt
+                }}
+              >
+                <Ionicons name="sparkles" size={22} color="#075E54" style={{ marginRight: 16 }} />
+                <Text style={{ fontSize: 16, color: '#075E54', fontWeight: '600' }}>Forward to AI Spark</Text>
+              </TouchableOpacity>
+
+              {/* Copy — ACTIVE */}
+              <TouchableOpacity
+                style={{
+                  flexDirection: 'row', alignItems: 'center',
+                  paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#F0F0F0'
+                }}
+                onPress={async () => {
+                  if (selectedMessage?.content) {
+                    await Clipboard.setStringAsync(selectedMessage.content);
+                  }
+                  setMessageMenuVisible(false);
+                  setSelectedMessage(null);
+                }}
+              >
+                <Ionicons name="copy-outline" size={22} color="#333" style={{ marginRight: 16 }} />
+                <Text style={{ fontSize: 16, color: '#333' }}>Copy</Text>
+              </TouchableOpacity>
+
+              {/* Save Media — GREYED, only shown for image or audio messages */}
+              {((selectedMessage?.metadata?.message_type || selectedMessage?.message_type) === 'image' ||
+                (selectedMessage?.metadata?.message_type || selectedMessage?.message_type) === 'audio') && (
+                <TouchableOpacity
+                  style={{
+                    flexDirection: 'row', alignItems: 'center',
+                    paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#F0F0F0', opacity: 0.4
+                  }}
+                  disabled
+                >
+                  <Ionicons name="download-outline" size={22} color="#333" style={{ marginRight: 16 }} />
+                  <Text style={{ fontSize: 16, color: '#333' }}>Save Media</Text>
+                  <Text style={{ fontSize: 12, color: '#999', marginLeft: 8 }}>Coming soon</Text>
+                </TouchableOpacity>
+              )}
+
+              {/* Delete — GREYED, coming soon */}
+              <TouchableOpacity
+                style={{
+                  flexDirection: 'row', alignItems: 'center',
+                  paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#F0F0F0', opacity: 0.4
+                }}
+                disabled
+              >
+                <Ionicons name="trash-outline" size={22} color="#D32F2F" style={{ marginRight: 16 }} />
+                <Text style={{ fontSize: 16, color: '#D32F2F' }}>Delete</Text>
+                <Text style={{ fontSize: 12, color: '#999', marginLeft: 8 }}>Coming soon</Text>
+              </TouchableOpacity>
+
+              {/* Reply — GREYED, coming soon */}
+              <TouchableOpacity
+                style={{
+                  flexDirection: 'row', alignItems: 'center',
+                  paddingVertical: 14, opacity: 0.4
+                }}
+                disabled
+              >
+                <Ionicons name="return-down-back-outline" size={22} color="#333" style={{ marginRight: 16 }} />
+                <Text style={{ fontSize: 16, color: '#333' }}>Reply</Text>
+                <Text style={{ fontSize: 12, color: '#999', marginLeft: 8 }}>Coming soon</Text>
+              </TouchableOpacity>
+
+            </View>
+          </Pressable>
+        </Pressable>
       </Modal>
     </KeyboardAvoidingView>
   );
