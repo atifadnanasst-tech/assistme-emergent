@@ -48,6 +48,17 @@ export default function CustomerChatScreen() {
   const [sparkMode, setSparkMode] = useState(false);
   const [sparkProcessing, setSparkProcessing] = useState(false);
   const [sparkInput, setSparkInput] = useState('');
+  const [currentTipIndex, setCurrentTipIndex] = useState(0);
+  const sparkTips = [
+    'Try: Invoice banao, 10 bottle Rose Attar',
+    'Try: ₹5000 payment record karo',
+    'Try: Kal ki delivery schedule karo',
+    'Try: Is photo se invoice banao',
+    'Try: Overdue reminder bhejo',
+    'Try: Quote banao Rose Attar ke liye',
+    'Try: Aaj ki delivery mark karo complete',
+    'Try: Record payment received today',
+  ];
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   // Action Preview Sheet
   const [previewVisible, setPreviewVisible] = useState(false);
@@ -1203,6 +1214,14 @@ export default function CustomerChatScreen() {
   });
 
   // ── Main render ────────────────────────────────────────────
+  useEffect(() => {
+    if (!sparkMode) { setCurrentTipIndex(0); return; }
+    const interval = setInterval(() => {
+      setCurrentTipIndex(prev => (prev + 1) % sparkTips.length);
+    }, 2500);
+    return () => clearInterval(interval);
+  }, [sparkMode]);
+
   const canSend = attachmentPreview
     ? attachmentPreview.upload_status === 'ready'
     : inputText.trim().length > 0;
@@ -1414,7 +1433,7 @@ export default function CustomerChatScreen() {
                 style={styles.textInput}
                 ref={inputRef}
                 blurOnSubmit={false}
-                placeholder={sparkMode ? 'What would you like to do?' : 'Message or voice...'}
+                placeholder={sparkMode ? sparkTips[currentTipIndex] : 'Message or voice...'}
                 placeholderTextColor={sparkMode ? '#075E54' : '#999'}
                 value={inputText}
                 onChangeText={setInputText}
