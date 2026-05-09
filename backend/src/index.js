@@ -2014,6 +2014,60 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
           attachmentContext = `\nForwarded image: ${forwardedAttachment.name || 'image'}`;
           attachmentContext += `\nImage not clear. Tell me what it is instead (voice/text) or try again.`;
         }
+      } else if (forwardedAttachment.type === 'audio') {
+        const mime = forwardedAttachment.mime_type || '';
+        const url = forwardedAttachment.url || '';
+        const name = forwardedAttachment.name || 'audio';
+        const ext = name.split('.').pop()?.toLowerCase() || '';
+        const supabaseHost = process.env.SUPABASE_URL ? new URL(process.env.SUPABASE_URL).hostname : '';
+        const isValidMime = mime.startsWith('audio/');
+        const isValidExt = ['m4a', 'mp3', 'wav', 'ogg', 'webm'].includes(ext);
+        let isValidUrl = false;
+        try { const parsedUrl = new URL(url); isValidUrl = supabaseHost && parsedUrl.hostname === supabaseHost; } catch {}
+        if (isValidMime && isValidExt && isValidUrl) {
+          let fetchController2, fetchTimeout2;
+          try {
+            fetchController2 = new AbortController();
+            fetchTimeout2 = setTimeout(() => fetchController2.abort(), 10000);
+            const audioRes = await fetch(url, { signal: fetchController2.signal });
+            if (!audioRes.ok) throw new Error('Audio fetch failed');
+            const audioBuffer = await audioRes.arrayBuffer();
+            if (audioBuffer.byteLength > 8 * 1024 * 1024) throw new Error('Audio too large');
+            const { toFile } = await import('openai');
+            const audioFile = await toFile(Buffer.from(audioBuffer), name, { type: mime });
+            const whisperClient = getOpenAI();
+            if (!whisperClient) throw new Error('AI client not available');
+            let whisperTimeout2;
+            try {
+              const whisperController = new AbortController();
+              whisperTimeout2 = setTimeout(() => whisperController.abort(), 30000);
+              const transcription = await whisperClient.audio.transcriptions.create({
+                model: 'whisper-1',
+                file: audioFile,
+              }, { signal: whisperController.signal });
+              const transcript = transcription.text?.trim() || '';
+              if (transcript) {
+                attachmentContext = `\nForwarded audio: ${name}`;
+                if (forwardedAttachment.caption) attachmentContext += `\nCaption: ${forwardedAttachment.caption}`;
+                attachmentContext += `\nTranscript: ${transcript}`;
+              } else {
+                attachmentContext = `\nForwarded audio: ${name}`;
+                attachmentContext += `\nVoice not clear. Send again or type message.`;
+              }
+            } finally {
+              clearTimeout(whisperTimeout2);
+            }
+          } catch (whisperErr) {
+            console.error('Whisper transcription failed');
+            attachmentContext = `\nForwarded audio: ${name}`;
+            attachmentContext += `\nVoice not clear. Send again or type message.`;
+          } finally {
+            clearTimeout(fetchTimeout2);
+          }
+        } else {
+          attachmentContext = `\nForwarded audio: ${name}`;
+          attachmentContext += `\nVoice not clear. Send again or type message.`;
+        }
       } else {
         attachmentContext = `\nForwarded ${forwardedAttachment.type}: ${forwardedAttachment.name || forwardedAttachment.type}`;
         attachmentContext += `\nMIME type: ${forwardedAttachment.mime_type || 'unknown'}`;
