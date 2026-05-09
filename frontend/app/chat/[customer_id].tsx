@@ -48,6 +48,15 @@ export default function CustomerChatScreen() {
   const [sparkMode, setSparkMode] = useState(false);
   const [sparkProcessing, setSparkProcessing] = useState(false);
   const [sparkInput, setSparkInput] = useState('');
+  const [forwardedAttachment, setForwardedAttachment] = useState<{
+    type: 'text' | 'image' | 'audio' | 'file';
+    text?: string;
+    url?: string;
+    mime_type?: string;
+    name?: string;
+    caption?: string;
+    created_at?: string;
+  } | null>(null);
   const [currentTipIndex, setCurrentTipIndex] = useState(0);
   const sparkTips = [
     'Try: Invoice banao, 10 bottle Rose Attar',
@@ -690,6 +699,58 @@ export default function CustomerChatScreen() {
     } catch { Alert.alert('Error', 'Failed to send reminder.'); }
   };
 
+  const handleForwardToSpark = (message: ChatMessage) => {
+    const msgType = message.metadata?.message_type || message.message_type || 'text';
+    let payload: {
+      type: 'text' | 'image' | 'audio' | 'file';
+      text?: string;
+      url?: string;
+      mime_type?: string;
+      name?: string;
+      caption?: string;
+      created_at?: string;
+    };
+
+    if (msgType === 'image') {
+      payload = {
+        type: 'image',
+        url: message.metadata?.attachment?.url || message.metadata?.attachment?.uri,
+        mime_type: message.metadata?.attachment?.mime_type || 'image/jpeg',
+        name: message.metadata?.attachment?.name,
+        caption: message.content !== message.metadata?.attachment?.name ? message.content : undefined,
+        created_at: message.created_at,
+      };
+    } else if (msgType === 'audio') {
+      payload = {
+        type: 'audio',
+        url: message.metadata?.attachment?.url || message.metadata?.attachment?.uri,
+        mime_type: message.metadata?.attachment?.mime_type || 'audio/m4a',
+        name: message.metadata?.attachment?.name,
+        caption: message.content !== message.metadata?.attachment?.name ? message.content : undefined,
+        created_at: message.created_at,
+      };
+    } else if (msgType === 'file') {
+      payload = {
+        type: 'file',
+        url: message.metadata?.attachment?.url || message.metadata?.attachment?.uri,
+        mime_type: message.metadata?.attachment?.mime_type || 'application/octet-stream',
+        name: message.metadata?.attachment?.name,
+        caption: message.content !== message.metadata?.attachment?.name ? message.content : undefined,
+        created_at: message.created_at,
+      };
+    } else {
+      payload = {
+        type: 'text',
+        text: message.content,
+        created_at: message.created_at,
+      };
+    }
+
+    setForwardedAttachment(payload);
+    setSparkMode(true);
+    setMessageMenuVisible(false);
+  };
+
   // ── AI Spark handler ───────────────────────────────────────
   const handleSpark = async () => {
     const text = sparkInput.trim() || inputText.trim();
@@ -698,6 +759,7 @@ export default function CustomerChatScreen() {
     setSparkInput('');
     setInputText('');
     setSparkMode(false);
+    setForwardedAttachment(null);
     setSparkProcessing(true);
 
     // BUG FIX 1: Clear all previous spark state before making new API call
@@ -721,7 +783,11 @@ export default function CustomerChatScreen() {
       const res = await fetch(`${backendUrl}/api/chat/${customer_id}/spark`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: text, conversation_id: conversationId }),
+        body: JSON.stringify({
+          query: text,
+          conversation_id: conversationId,
+          forwarded_attachment: forwardedAttachment || null,
+        }),
         signal: controller.signal,
       });
       clearTimeout(timeoutId);
@@ -1464,13 +1530,42 @@ export default function CustomerChatScreen() {
             </View>
           )}
           {sparkMode && !sparkProcessing && (
+            <>
+          {sparkMode && forwardedAttachment && (
+            <View style={{
+              flexDirection: 'row', alignItems: 'center',
+              backgroundColor: '#E8F5E9', borderRadius: 8,
+              marginHorizontal: 8, marginBottom: 4,
+              paddingHorizontal: 10, paddingVertical: 6,
+              borderLeftWidth: 3, borderLeftColor: '#075E54',
+            }}>
+              <Ionicons
+                name={
+                  forwardedAttachment.type === 'image' ? 'image-outline' :
+                  forwardedAttachment.type === 'audio' ? 'musical-notes-outline' :
+                  forwardedAttachment.type === 'file' ? 'document-outline' :
+                  'chatbubble-outline'
+                }
+                size={16} color="#075E54" style={{ marginRight: 8 }}
+              />
+              <Text numberOfLines={1} style={{ flex: 1, fontSize: 13, color: '#075E54' }}>
+                {forwardedAttachment.type === 'text'
+                  ? forwardedAttachment.text
+                  : forwardedAttachment.name || forwardedAttachment.type}
+              </Text>
+              <TouchableOpacity onPress={() => setForwardedAttachment(null)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <Ionicons name="close-circle" size={18} color="#075E54" />
+              </TouchableOpacity>
+            </View>
+          )}
             <View style={styles.sparkIndicator}>
               <Ionicons name="sparkles" size={16} color="#075E54" />
               <Text style={styles.sparkIndicatorText}>AI Spark Mode — type a natural language instruction</Text>
-              <TouchableOpacity onPress={() => { setSparkMode(false); setSparkInput(''); }} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <TouchableOpacity onPress={() => { setSparkMode(false); setSparkInput(''); setForwardedAttachment(null); }} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
                 <Ionicons name="close-circle" size={20} color="#999" />
               </TouchableOpacity>
             </View>
+          )}
           )}
           <View style={styles.inputRow}>
             <View style={[styles.inputPill, sparkMode && styles.inputPillSpark]}>
@@ -2020,8 +2115,7 @@ export default function CustomerChatScreen() {
                   paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#F0F0F0'
                 }}
                 onPress={() => {
-                  setMessageMenuVisible(false);
-                  // Forward to Spark — wired in next prompt
+                  if (selectedMessage) handleForwardToSpark(selectedMessage);
                 }}
               >
                 <Ionicons name="sparkles" size={22} color="#075E54" style={{ marginRight: 16 }} />
