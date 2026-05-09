@@ -1074,11 +1074,21 @@ export default function CustomerChatScreen() {
         const isIncoming = item.role === 'user';
         content = (
           <View style={isIncoming ? styles.incomingContainer : styles.outgoingContainer}>
-            <View style={isIncoming ? styles.incomingBubble : styles.outgoingBubble}>
+            <Pressable
+              style={isIncoming ? styles.incomingBubble : styles.outgoingBubble}
+              onPress={() => {
+                setImageViewerUri(item.metadata.attachment?.url || item.metadata.attachment?.uri || null);
+                setImageViewerVisible(true);
+              }}
+              onLongPress={() => {
+                setSelectedMessage(item);
+                setMessageMenuVisible(true);
+              }}
+              delayLongPress={300}
+              android_disableSound
+            >
               <View style={styles.attachMsgCard}>
-              <Pressable onPress={() => { setImageViewerUri(item.metadata.attachment?.url || item.metadata.attachment?.uri || null); setImageViewerVisible(true); }}>
-              <Image source={{ uri: item.metadata.attachment?.url || item.metadata.attachment?.uri }} style={{ width: 200, height: 160, borderRadius: 8, marginBottom: 4 }} resizeMode="cover" />
-              </Pressable>
+                <Image source={{ uri: item.metadata.attachment?.url || item.metadata.attachment?.uri }} style={{ width: 200, height: 160, borderRadius: 8, marginBottom: 4 }} resizeMode="cover" />
                 <View style={{ flex: 1 }}>
                   <Text style={styles.attachMsgName} numberOfLines={1}>{item.metadata.attachment?.name}</Text>
                   <Text style={styles.attachMsgMeta}>Image</Text>
@@ -1088,7 +1098,7 @@ export default function CustomerChatScreen() {
                 <Text style={isIncoming ? styles.incomingText : styles.outgoingText}>{item.content}</Text>
               )}
               <Text style={isIncoming ? styles.incomingTime : styles.outgoingTime}>{formatTime(item.created_at)}</Text>
-            </View>
+            </Pressable>
           </View>
         );
       }
@@ -1118,19 +1128,28 @@ export default function CustomerChatScreen() {
         const isIncoming = item.role === 'user';
         content = (
           <View style={isIncoming ? styles.incomingContainer : styles.outgoingContainer}>
-            <View style={isIncoming ? styles.incomingBubble : styles.outgoingBubble}>
-              <Pressable onPress={() => handlePlayAudio(uri)} style={styles.attachMsgCard}>
+            <Pressable
+              style={isIncoming ? styles.incomingBubble : styles.outgoingBubble}
+              onPress={() => handlePlayAudio(uri)}
+              onLongPress={() => {
+                setSelectedMessage(item);
+                setMessageMenuVisible(true);
+              }}
+              delayLongPress={300}
+              android_disableSound
+            >
+              <View style={styles.attachMsgCard}>
                 <Ionicons name={isPlaying ? 'pause-circle' : 'play-circle'} size={36} color='#075E54' />
                 <View style={{ flex: 1 }}>
                   <Text style={styles.attachMsgName} numberOfLines={1}>{item.metadata.attachment?.name}</Text>
                   <Text style={styles.attachMsgMeta}>{isPlaying ? 'Playing...' : 'Audio'}</Text>
                 </View>
-              </Pressable>
+              </View>
               {item.content && item.content !== item.metadata?.attachment?.name && item.content !== 'Attachment' && (
                 <Text style={isIncoming ? styles.incomingText : styles.outgoingText}>{item.content}</Text>
               )}
               <Text style={isIncoming ? styles.incomingTime : styles.outgoingTime}>{formatTime(item.created_at)}</Text>
-            </View>
+            </Pressable>
           </View>
         );
       }
