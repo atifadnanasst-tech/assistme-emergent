@@ -1959,11 +1959,62 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
     if (forwardedAttachment) {
       if (forwardedAttachment.type === 'text') {
         attachmentContext = `\nForwarded message: ${forwardedAttachment.text || ''}`;
+      } else if (forwardedAttachment.type === 'image') {
+        const mime = forwardedAttachment.mime_type || '';
+        const url = forwardedAttachment.url || '';
+        const supabaseHost = process.env.SUPABASE_URL ? new URL(process.env.SUPABASE_URL).hostname : '';
+        const isValidMime = mime.startsWith('image/');
+        let isValidUrl = false;
+        try { const parsedUrl = new URL(url); isValidUrl = supabaseHost && parsedUrl.hostname === supabaseHost; } catch {}
+        if (isValidMime && isValidUrl) {
+          try {
+            const fetchController = new AbortController();
+            const fetchTimeout = setTimeout(() => fetchController.abort(), 10000);
+            const imgRes = await fetch(url, { signal: fetchController.signal });
+            clearTimeout(fetchTimeout);
+            if (!imgRes.ok) throw new Error(`Image fetch failed: ${imgRes.status}`);
+            const imgBuffer = await imgRes.arrayBuffer();
+            if (imgBuffer.byteLength > 8 * 1024 * 1024) throw new Error('Image too large');
+            const base64Image = Buffer.from(imgBuffer).toString('base64');
+            const visionClient = getOpenAI();
+            if (!visionClient) throw new Error('AI client not available');
+            const visionController = new AbortController();
+            const visionTimeout = setTimeout(() => visionController.abort(), 15000);
+            const visionRes = await visionClient.chat.completions.create({
+              model: 'gpt-4o-mini',
+              messages: [{
+                role: 'user',
+                content: [
+                  { type: 'text', text: 'Extract only clearly visible business information from this image. Do not guess unclear text or quantities. Return concise structured output.' },
+                  { type: 'image_url', image_url: { url: `data:${mime};base64,${base64Image}`, detail: 'low' } }
+                ]
+              }],
+              max_tokens: 500,
+            }, { signal: visionController.signal });
+            clearTimeout(visionTimeout);
+            const visionText = visionRes.choices?.[0]?.message?.content?.trim() || '';
+            console.log('Vision extraction success:', { bytes: imgBuffer.byteLength, filename: forwardedAttachment.name, extractedChars: visionText.length });
+            if (visionText) {
+              attachmentContext = `\nForwarded image: ${forwardedAttachment.name || 'image'}`;
+              if (forwardedAttachment.caption) attachmentContext += `\nCaption: ${forwardedAttachment.caption}`;
+              attachmentContext += `\nImage content extracted:\n${visionText}`;
+            } else {
+              attachmentContext = `\nForwarded image: ${forwardedAttachment.name || 'image'}`;
+              attachmentContext += `\nImage not clear. Tell me what it is instead (voice/text) or try again.`;
+            }
+          } catch (visionErr) {
+            console.error('Vision extraction failed:', visionErr.message);
+            attachmentContext = `\nForwarded image: ${forwardedAttachment.name || 'image'}`;
+            attachmentContext += `\nImage not clear. Tell me what it is instead (voice/text) or try again.`;
+          }
+        } else {
+          attachmentContext = `\nForwarded image: ${forwardedAttachment.name || 'image'}`;
+          attachmentContext += `\nImage not clear. Tell me what it is instead (voice/text) or try again.`;
+        }
       } else {
         attachmentContext = `\nForwarded ${forwardedAttachment.type}: ${forwardedAttachment.name || forwardedAttachment.type}`;
         attachmentContext += `\nMIME type: ${forwardedAttachment.mime_type || 'unknown'}`;
         if (forwardedAttachment.caption) attachmentContext += `\nCaption: ${forwardedAttachment.caption}`;
-        if (forwardedAttachment.url) attachmentContext += `\nAttachment URL available`;
       }
     }
     const userMessage = `Customer: ${customer.name}\nOwner instruction: ${query}${attachmentContext}\nRecent context: ${recentText}\nCustomer memory: ${customerMemory || 'none'}`;
