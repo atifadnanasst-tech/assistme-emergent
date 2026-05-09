@@ -14,7 +14,6 @@ import { authService } from '../../lib/auth';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import { Audio } from 'expo-av';
-import * as Clipboard from 'expo-clipboard';
 
 // ── Types ────────────────────────────────────────────────────
 interface CustomerData {
@@ -512,6 +511,15 @@ export default function CustomerChatScreen() {
       if (sound) { sound.unloadAsync(); }
     };
   }, [sound]);
+
+  // Spark tip rotation
+  useEffect(() => {
+    if (!sparkMode) { setCurrentTipIndex(0); return; }
+    const interval = setInterval(() => {
+      setCurrentTipIndex(prev => (prev + 1) % sparkTips.length);
+    }, 2500);
+    return () => clearInterval(interval);
+  }, [sparkMode]);
 
 
   const loadChat = async (markRead: boolean = true) => {
@@ -1068,12 +1076,9 @@ export default function CustomerChatScreen() {
           <View style={isIncoming ? styles.incomingContainer : styles.outgoingContainer}>
             <View style={isIncoming ? styles.incomingBubble : styles.outgoingBubble}>
               <View style={styles.attachMsgCard}>
-              <TouchableOpacity onPress={() => {
-                setImageViewerUri(item.metadata.attachment?.url || item.metadata.attachment?.uri || null);
-                setImageViewerVisible(true);
-              }}>
+              <Pressable onPress={() => { setImageViewerUri(item.metadata.attachment?.url || item.metadata.attachment?.uri || null); setImageViewerVisible(true); }}>
               <Image source={{ uri: item.metadata.attachment?.url || item.metadata.attachment?.uri }} style={{ width: 200, height: 160, borderRadius: 8, marginBottom: 4 }} resizeMode="cover" />
-              </TouchableOpacity>
+              </Pressable>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.attachMsgName} numberOfLines={1}>{item.metadata.attachment?.name}</Text>
                   <Text style={styles.attachMsgMeta}>Image</Text>
@@ -1114,13 +1119,13 @@ export default function CustomerChatScreen() {
         content = (
           <View style={isIncoming ? styles.incomingContainer : styles.outgoingContainer}>
             <View style={isIncoming ? styles.incomingBubble : styles.outgoingBubble}>
-              <TouchableOpacity onPress={() => handlePlayAudio(uri)} style={styles.attachMsgCard}>
+              <Pressable onPress={() => handlePlayAudio(uri)} style={styles.attachMsgCard}>
                 <Ionicons name={isPlaying ? 'pause-circle' : 'play-circle'} size={36} color='#075E54' />
                 <View style={{ flex: 1 }}>
                   <Text style={styles.attachMsgName} numberOfLines={1}>{item.metadata.attachment?.name}</Text>
                   <Text style={styles.attachMsgMeta}>{isPlaying ? 'Playing...' : 'Audio'}</Text>
                 </View>
-              </TouchableOpacity>
+              </Pressable>
               {item.content && item.content !== item.metadata?.attachment?.name && item.content !== 'Attachment' && (
                 <Text style={isIncoming ? styles.incomingText : styles.outgoingText}>{item.content}</Text>
               )}
@@ -1131,6 +1136,7 @@ export default function CustomerChatScreen() {
       }
     })()}
 
+    if (!content) {
     if (item.message_type === 'invoice_card' || item.card_type === 'invoice_card') {
       content = renderInvoiceCard(item);
     } else if (item.message_type === 'ai_query') {
@@ -1166,13 +1172,16 @@ export default function CustomerChatScreen() {
     } else {
       content = renderOutgoingMessage(item);
     }
+    }
 
     const canLongPress =
       item.role !== 'system' &&
       item.message_type !== 'system_alert' &&
       item.message_type !== 'spark_clarify' &&
       item.message_type !== 'ai_response' &&
-      item.message_type !== 'ai_query';
+      item.message_type !== 'ai_query' &&
+      (item.metadata?.message_type || item.message_type) !== 'image' &&
+      (item.metadata?.message_type || item.message_type) !== 'audio';
 
     const wrappedContent = canLongPress ? (
       <Pressable
@@ -1242,14 +1251,6 @@ export default function CustomerChatScreen() {
   });
 
   // ── Main render ────────────────────────────────────────────
-  useEffect(() => {
-    if (!sparkMode) { setCurrentTipIndex(0); return; }
-    const interval = setInterval(() => {
-      setCurrentTipIndex(prev => (prev + 1) % sparkTips.length);
-    }, 2500);
-    return () => clearInterval(interval);
-  }, [sparkMode]);
-
   const canSend = attachmentPreview
     ? attachmentPreview.upload_status === 'ready'
     : inputText.trim().length > 0;
@@ -2007,23 +2008,17 @@ export default function CustomerChatScreen() {
                 <Ionicons name="sparkles" size={22} color="#075E54" style={{ marginRight: 16 }} />
                 <Text style={{ fontSize: 16, color: '#075E54', fontWeight: '600' }}>Forward to AI Spark</Text>
               </TouchableOpacity>
-
-              {/* Copy — ACTIVE */}
+              {/* Copy — GREYED, requires native build */}
               <TouchableOpacity
                 style={{
                   flexDirection: 'row', alignItems: 'center',
-                  paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#F0F0F0'
+                  paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#F0F0F0', opacity: 0.4
                 }}
-                onPress={async () => {
-                  if (selectedMessage?.content) {
-                    await Clipboard.setStringAsync(selectedMessage.content);
-                  }
-                  setMessageMenuVisible(false);
-                  setSelectedMessage(null);
-                }}
+                disabled
               >
                 <Ionicons name="copy-outline" size={22} color="#333" style={{ marginRight: 16 }} />
                 <Text style={{ fontSize: 16, color: '#333' }}>Copy</Text>
+                <Text style={{ fontSize: 12, color: '#999', marginLeft: 8 }}>Coming soon</Text>
               </TouchableOpacity>
 
               {/* Save Media — GREYED, only shown for image or audio messages */}
