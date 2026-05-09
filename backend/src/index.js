@@ -1964,7 +1964,7 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
     let parsed = { intent: 'ambiguous', confidence_score: 0.0, entities: {}, reasoning: '' };
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 8000);
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
 
     try {
       const completion = await client.chat.completions.create({
