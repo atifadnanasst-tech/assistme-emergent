@@ -756,7 +756,7 @@ export default function CustomerChatScreen() {
   // ── AI Spark handler ───────────────────────────────────────
   const handleSpark = async () => {
     const text = sparkInput.trim() || inputText.trim();
-    if (!text || sparkProcessing || !conversationId) return;
+    if ((!text && !forwardedAttachment) || sparkProcessing || !conversationId) return;
     Keyboard.dismiss();
     setSparkInput('');
     setInputText('');
@@ -810,6 +810,18 @@ export default function CustomerChatScreen() {
         setPreviewActions(data.actions || []);
         setPreviewInsight(data.ai_insight);
         setCheckedActions(new Set((data.actions || []).map((a: any) => a.action_id)));
+        // Pre-populate unresolvedPrices from OCR unit_price for unresolved items
+        const prefillPrices: Record<string, string> = {};
+        for (const action of (data.actions || [])) {
+          if (action.action_type !== 'create_invoice' && action.action_type !== 'create_quote') continue;
+          const items = action.items || [];
+          items.forEach((item: any, idx: number) => {
+            if (item.product_id === null && item.unit_price != null) {
+              prefillPrices[`${action.action_id}-${idx}`] = String(item.unit_price);
+            }
+          });
+        }
+        if (Object.keys(prefillPrices).length > 0) setUnresolvedPrices(prefillPrices);
         setPreviewVisible(true);
       } else if (data.routing === 'auto_confirm') {
         // Auto-confirm: execute immediately, show banner
@@ -1610,7 +1622,7 @@ export default function CustomerChatScreen() {
               )}
             </View>
             {sparkMode ? (
-              <TouchableOpacity style={[styles.sendBtn, styles.sparkSendBtn]} onPress={handleSpark} disabled={sparkProcessing || inputText.trim().length === 0}>
+              <TouchableOpacity style={[styles.sendBtn, styles.sparkSendBtn]} onPress={handleSpark} disabled={sparkProcessing || (inputText.trim().length === 0 && !forwardedAttachment)}>
                 {sparkProcessing ? <ActivityIndicator size="small" color="#FFF" /> : <Ionicons name="send" size={20} color="#FFF" />}
               </TouchableOpacity>
             ) : canSend ? (

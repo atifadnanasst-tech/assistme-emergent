@@ -2111,7 +2111,7 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
 
         for (const item of items) {
           const { resolved, alternatives } = await resolveProduct(item.product_name);
-          const unitPrice = resolved?.selling_price || null;
+          const unitPrice = resolved?.selling_price || item.unit_price || null;
           const qty = item.quantity || 1;
           const lineTotal = unitPrice ? unitPrice * qty : null;
           if (lineTotal) totalAmount += lineTotal;
