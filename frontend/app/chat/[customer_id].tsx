@@ -248,6 +248,9 @@ export default function CustomerChatScreen() {
       const uploaded = await uploadAttachment(asset.uri, asset.fileName || 'image.jpg', asset.mimeType || 'image/jpeg', uploadId);
       if (uploaded) {
         setAttachmentPreview(prev => prev?.upload_id === uploadId ? { ...prev, url: uploaded.url, storage_path: uploaded.storage_path, upload_status: 'ready' } : prev);
+        if (sparkMode) {
+          attachUploadToSpark(uploaded, asset.fileName || 'image.jpg', asset.mimeType || 'image/jpeg');
+        }
       } else {
         setAttachmentPreview(prev => prev?.upload_id === uploadId ? { ...prev, upload_status: 'failed' } : prev);
       }
@@ -290,6 +293,9 @@ export default function CustomerChatScreen() {
       const uploaded = await uploadAttachment(asset.uri, asset.fileName || 'photo.jpg', asset.mimeType || 'image/jpeg', uploadId);
       if (uploaded) {
         setAttachmentPreview(prev => prev?.upload_id === uploadId ? { ...prev, url: uploaded.url, storage_path: uploaded.storage_path, upload_status: 'ready' } : prev);
+        if (sparkMode) {
+          attachUploadToSpark(uploaded, asset.fileName || 'photo.jpg', asset.mimeType || 'image/jpeg');
+        }
       } else {
         setAttachmentPreview(prev => prev?.upload_id === uploadId ? { ...prev, upload_status: 'failed' } : prev);
       }
@@ -326,6 +332,9 @@ export default function CustomerChatScreen() {
       const uploaded = await uploadAttachment(asset.uri, asset.name, asset.mimeType || 'application/octet-stream', uploadId);
       if (uploaded) {
         setAttachmentPreview(prev => prev?.upload_id === uploadId ? { ...prev, url: uploaded.url, storage_path: uploaded.storage_path, upload_status: 'ready' } : prev);
+        if (sparkMode) {
+          attachUploadToSpark(uploaded, asset.name, asset.mimeType || 'application/octet-stream');
+        }
       } else {
         setAttachmentPreview(prev => prev?.upload_id === uploadId ? { ...prev, upload_status: 'failed' } : prev);
       }
@@ -360,6 +369,9 @@ export default function CustomerChatScreen() {
           const uploaded = await uploadAttachment(uri, fileName, 'audio/x-m4a', uploadId);
           if (uploaded) {
             setAttachmentPreview(prev => prev?.upload_id === uploadId ? { ...prev, url: uploaded.url, storage_path: uploaded.storage_path, upload_status: 'ready' } : prev);
+            if (sparkMode) {
+              attachUploadToSpark(uploaded, fileName, 'audio/x-m4a');
+            }
           } else {
             setAttachmentPreview(prev => prev?.upload_id === uploadId ? { ...prev, upload_status: 'failed' } : prev);
           }
@@ -751,6 +763,16 @@ export default function CustomerChatScreen() {
     setForwardedAttachment(payload);
     setSparkMode(true);
     setMessageMenuVisible(false);
+  };
+
+  const attachUploadToSpark = (uploadResult: { url: string; storage_path: string }, name: string, mimeType: string) => {
+    const type = mimeType.startsWith('image/') ? 'image' : mimeType.startsWith('audio/') ? 'audio' : 'file';
+    setForwardedAttachment({
+      type,
+      url: uploadResult.url,
+      mime_type: mimeType,
+      name,
+    });
   };
 
   // ── AI Spark handler ───────────────────────────────────────
@@ -1601,24 +1623,18 @@ export default function CustomerChatScreen() {
                 multiline
                 maxLength={2000}
               />
-              {sparkMode && !forwardedAttachment && (
-                <TouchableOpacity
-                  onPress={() => { setSparkMode(false); setSparkInput(''); }}
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                  style={styles.inputIconBtn}
-                >
-                  <Ionicons name="close-circle" size={20} color="#999" />
+              <>
+                <TouchableOpacity style={styles.inputIconBtn} onPress={() => setAttachSheetVisible(true)}>
+                  <Ionicons name="attach" size={22} color={sparkMode ? '#E91E63' : '#667781'} />
                 </TouchableOpacity>
-              )}
-              {!sparkMode && (
-                <>
-                  <TouchableOpacity style={styles.inputIconBtn} onPress={() => setAttachSheetVisible(true)}>
-                    <Ionicons name="attach" size={22} color="#667781" />
-                  </TouchableOpacity>
-                  <TouchableOpacity style={styles.inputIconBtn} onPress={handleOpenCamera}>
-                    <Ionicons name="camera-outline" size={22} color="#667781" />
-                  </TouchableOpacity>
-                </>
+                <TouchableOpacity style={styles.inputIconBtn} onPress={handleOpenCamera}>
+                  <Ionicons name="camera-outline" size={22} color={sparkMode ? '#E91E63' : '#667781'} />
+                </TouchableOpacity>
+              </>
+              {sparkMode && (
+                <TouchableOpacity style={styles.inputIconBtn} onPress={handleAudioRecording}>
+                  <Ionicons name={isRecording ? 'stop-circle' : 'mic-outline'} size={22} color="#E91E63" />
+                </TouchableOpacity>
               )}
             </View>
             {sparkMode ? (
