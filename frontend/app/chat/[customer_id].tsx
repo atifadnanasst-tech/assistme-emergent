@@ -1566,7 +1566,6 @@ export default function CustomerChatScreen() {
               </TouchableOpacity>
             </View>
           )}
-          )}
           <View style={styles.inputRow}>
             <View style={[styles.inputPill, sparkMode && styles.inputPillSpark]}>
               <TouchableOpacity style={styles.inputIconBtn}>
