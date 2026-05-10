@@ -1913,7 +1913,7 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
     if (!customer) return c.json({ error: 'customer_not_found' }, 404);
 
     const body = await c.req.json();
-    const query = body.query?.trim();
+    const query = body.query?.trim() || (body.forwarded_attachment ? 'Analyze this attachment and suggest relevant actions.' : '');
     const conversationId = body.conversation_id;
     const forwardedAttachment = body.forwarded_attachment || null;
     if (!query) return c.json({ error: 'empty_query' }, 400);
@@ -3115,7 +3115,7 @@ app.post('/api/chat/:customer_id/ai-query', async (c) => {
     if (!customer) return c.json({ error: 'customer_not_found' }, 404);
 
     const body = await c.req.json();
-    const query = body.query?.trim();
+    const query = body.query?.trim() || (body.forwarded_attachment ? 'Analyze this attachment and suggest relevant actions.' : '');
     const conversationId = body.conversation_id;
     if (!query) return c.json({ error: 'empty_query' }, 400);
     if (!conversationId) return c.json({ error: 'missing_conversation_id' }, 400);

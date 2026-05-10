@@ -59,14 +59,14 @@ export default function CustomerChatScreen() {
   } | null>(null);
   const [currentTipIndex, setCurrentTipIndex] = useState(0);
   const sparkTips = [
-    'Try: Invoice banao, 10 bottle Rose Attar',
-    'Try: ₹5000 payment record karo',
-    'Try: Kal ki delivery schedule karo',
-    'Try: Is photo se invoice banao',
-    'Try: Overdue reminder bhejo',
-    'Try: Quote banao Rose Attar ke liye',
-    'Try: Aaj ki delivery mark karo complete',
-    'Try: Record payment received today',
+    'Invoice banao...',
+    'Payment record karo...',
+    'Delivery schedule karo...',
+    'Photo se invoice banao...',
+    'Reminder bhejo...',
+    'Quote banao...',
+    'Delivery complete karo...',
+    'Payment received...',
   ];
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   // Action Preview Sheet
@@ -1376,9 +1376,9 @@ export default function CustomerChatScreen() {
   });
 
   // ── Main render ────────────────────────────────────────────
-  const canSend = attachmentPreview
+  const canSend = !sparkMode && (attachmentPreview
     ? attachmentPreview.upload_status === 'ready'
-    : inputText.trim().length > 0;
+    : inputText.trim().length > 0);
 
   return (
     <KeyboardAvoidingView
@@ -1534,7 +1534,7 @@ export default function CustomerChatScreen() {
         /* Direct Messages input */
         <>
           <View style={[styles.inputBarWrapper, { paddingBottom: insets.bottom }]}>
-          {attachmentPreview && (
+          {attachmentPreview && !sparkMode && (
             <View style={styles.attachPreviewStrip}>
               <Ionicons
                 name={
@@ -1631,16 +1631,22 @@ export default function CustomerChatScreen() {
                   <Ionicons name="camera-outline" size={22} color={sparkMode ? '#E91E63' : '#667781'} />
                 </TouchableOpacity>
               </>
-              {sparkMode && (
-                <TouchableOpacity style={styles.inputIconBtn} onPress={handleAudioRecording}>
-                  <Ionicons name={isRecording ? 'stop-circle' : 'mic-outline'} size={22} color="#E91E63" />
+              {sparkMode && (forwardedAttachment === null || forwardedAttachment === undefined) && (
+                <TouchableOpacity onPress={() => { setSparkMode(false); setSparkInput(''); }} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }} style={styles.inputIconBtn}>
+                  <Ionicons name="close-circle" size={20} color="#999" />
                 </TouchableOpacity>
               )}
             </View>
             {sparkMode ? (
-              <TouchableOpacity style={[styles.sendBtn, styles.sparkSendBtn]} onPress={handleSpark} disabled={sparkProcessing || (inputText.trim().length === 0 && !forwardedAttachment)}>
-                {sparkProcessing ? <ActivityIndicator size="small" color="#FFF" /> : <Ionicons name="send" size={20} color="#FFF" />}
-              </TouchableOpacity>
+              (inputText.trim().length === 0 && (forwardedAttachment === null || forwardedAttachment === undefined) && (sparkProcessing === false)) ? (
+                <TouchableOpacity style={[styles.micBtn, { backgroundColor: '#E91E63' }]} onPress={handleAudioRecording}>
+                  <Ionicons name={isRecording ? 'stop' : 'mic'} size={22} color="#FFF" />
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity style={[styles.sendBtn, styles.sparkSendBtn]} onPress={handleSpark} disabled={sparkProcessing || (inputText.trim().length === 0 && !forwardedAttachment)}>
+                  {sparkProcessing ? <ActivityIndicator size="small" color="#FFF" /> : <Ionicons name="send" size={20} color="#FFF" />}
+                </TouchableOpacity>
+              )
             ) : canSend ? (
               <TouchableOpacity style={styles.sendBtn} onPress={handleSend} disabled={sending}>
                 {sending ? <ActivityIndicator size="small" color="#FFF" /> : <Ionicons name="send" size={20} color="#FFF" />}
@@ -2370,7 +2376,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center', alignItems: 'center',
   },
   sparkSendBtn: {
-    backgroundColor: '#00796B',
+    backgroundColor: '#E91E63',
   },
   sparkFabRow: {
     alignItems: 'flex-end',
