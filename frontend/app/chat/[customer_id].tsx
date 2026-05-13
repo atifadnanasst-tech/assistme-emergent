@@ -183,8 +183,8 @@ export default function CustomerChatScreen() {
     const prev = attachmentPreview;
     if (!prev) return;
     const newUploadId = Date.now().toString();
-    setAttachmentPreview({ ...prev, upload_status: 'uploading', upload_id: newUploadId });
     if (sparkMode) setSparkWorkflowState('uploading');
+    setAttachmentPreview({ ...prev, upload_status: 'uploading', upload_id: newUploadId });
     const uploaded = await uploadAttachment(prev.uri, prev.name, prev.mime_type, newUploadId);
     if (uploaded) {
       setAttachmentPreview(p => p?.upload_id === newUploadId ? { ...p, url: uploaded.url, storage_path: uploaded.storage_path, upload_status: 'ready' } : p);
@@ -257,6 +257,7 @@ export default function CustomerChatScreen() {
       }
       const asset = result.assets[0];
       const uploadId = Date.now().toString();
+      if (sparkMode) setSparkWorkflowState('uploading');
       setAttachmentPreview({
         uri: asset.uri,
         name: asset.fileName || 'image.jpg',
@@ -265,8 +266,6 @@ export default function CustomerChatScreen() {
         upload_status: 'uploading',
         upload_id: uploadId,
       });
-      if (sparkMode) setSparkWorkflowState('uploading');
-
       const uploaded = await uploadAttachment(asset.uri, asset.fileName || 'image.jpg', asset.mimeType || 'image/jpeg', uploadId);
       if (uploaded) {
         setAttachmentPreview(prev => prev?.upload_id === uploadId ? { ...prev, url: uploaded.url, storage_path: uploaded.storage_path, upload_status: 'ready' } : prev);
@@ -312,6 +311,7 @@ export default function CustomerChatScreen() {
       }
       const asset = result.assets[0];
       const uploadId = Date.now().toString();
+      if (sparkMode) setSparkWorkflowState('uploading');
       setAttachmentPreview({
         uri: asset.uri,
         name: asset.fileName || 'photo.jpg',
@@ -320,7 +320,6 @@ export default function CustomerChatScreen() {
         upload_status: 'uploading',
         upload_id: uploadId,
       });
-      if (sparkMode) setSparkWorkflowState('uploading');
 
       const uploaded = await uploadAttachment(asset.uri, asset.fileName || 'photo.jpg', asset.mimeType || 'image/jpeg', uploadId);
       if (uploaded) {
@@ -360,6 +359,7 @@ export default function CustomerChatScreen() {
       }
       const asset = result.assets[0];
       const uploadId = Date.now().toString();
+      if (sparkMode) setSparkWorkflowState('uploading');
       setAttachmentPreview({
         uri: asset.uri,
         name: asset.name,
@@ -368,7 +368,6 @@ export default function CustomerChatScreen() {
         upload_status: 'uploading',
         upload_id: uploadId,
       });
-      if (sparkMode) setSparkWorkflowState('uploading');
 
       const uploaded = await uploadAttachment(asset.uri, asset.name, asset.mimeType || 'application/octet-stream', uploadId);
       if (uploaded) {
@@ -1618,14 +1617,17 @@ export default function CustomerChatScreen() {
           <View style={[styles.inputBarWrapper, { paddingBottom: insets.bottom }]}>
           {attachmentPreview && !sparkMode && (
             <View style={styles.attachPreviewStrip}>
-              <Ionicons
-                name={
-                  attachmentPreview.mime_type?.startsWith?.('image') ? 'image-outline' :
-                  attachmentPreview.mime_type?.startsWith?.('audio') ? 'musical-notes-outline' :
-                  'document-outline'
-                }
-                size={28} color="#075E54"
-              />
+              {attachmentPreview.mime_type?.startsWith?.('image') && attachmentPreview.uri ? (
+                <Image source={{ uri: attachmentPreview.uri }} style={{ width: 40, height: 40, borderRadius: 4, marginRight: 4 }} />
+              ) : (
+                <Ionicons
+                  name={
+                    attachmentPreview.mime_type?.startsWith?.('audio') ? 'musical-notes-outline' :
+                    'document-outline'
+                  }
+                  size={28} color="#075E54"
+                />
+              )}
               <Text style={styles.attachPreviewName} numberOfLines={1}>
                 {attachmentPreview.mime_type?.startsWith('image') ? 'Image' :
                  attachmentPreview.mime_type?.startsWith('audio') ? 'Audio' : 'Document'}
