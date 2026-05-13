@@ -45,6 +45,18 @@ export default function CustomerChatScreen() {
   const [activeTab, setActiveTab] = useState('direct');
   const [sentReminders, setSentReminders] = useState<Set<string>>(new Set());
   const [refreshing, setRefreshing] = useState(false);
+  type SparkWorkflowState =
+    | 'idle'
+    | 'attaching_file'
+    | 'recording_audio'
+    | 'uploading'
+    | 'upload_failed'
+    | 'attachment_ready'
+    | 'processing'
+    | 'previewing'
+    | 'error';
+
+  const [sparkWorkflowState, setSparkWorkflowState] = useState<SparkWorkflowState>('idle');
   const [sparkMode, setSparkMode] = useState(false);
   const [sparkProcessing, setSparkProcessing] = useState(false);
   const [sparkInput, setSparkInput] = useState('');
@@ -172,11 +184,14 @@ export default function CustomerChatScreen() {
     if (!prev) return;
     const newUploadId = Date.now().toString();
     setAttachmentPreview({ ...prev, upload_status: 'uploading', upload_id: newUploadId });
+    if (sparkMode) setSparkWorkflowState('uploading');
     const uploaded = await uploadAttachment(prev.uri, prev.name, prev.mime_type, newUploadId);
     if (uploaded) {
       setAttachmentPreview(p => p?.upload_id === newUploadId ? { ...p, url: uploaded.url, storage_path: uploaded.storage_path, upload_status: 'ready' } : p);
+      if (sparkMode) setSparkWorkflowState('attachment_ready');
     } else {
       setAttachmentPreview(p => p?.upload_id === newUploadId ? { ...p, upload_status: 'failed' } : p);
+      if (sparkMode) setSparkWorkflowState('upload_failed');
     }
   };
 
@@ -218,10 +233,12 @@ export default function CustomerChatScreen() {
 
   const handlePickGallery = async () => {
     setAttachSheetVisible(false);
+    if (sparkMode) setSparkWorkflowState('attaching_file');
     try {
       const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (status !== 'granted') {
         Alert.alert('Permission Required', 'Please allow access to your photo library.');
+        if (sparkMode) setSparkWorkflowState('idle');
         return;
       }
       const result = await ImagePicker.launchImageLibraryAsync({
@@ -229,9 +246,13 @@ export default function CustomerChatScreen() {
         allowsEditing: false,
         quality: 0.8,
       });
-      if (result.canceled) return;
+      if (result.canceled) {
+        if (sparkMode) setSparkWorkflowState('idle');
+        return;
+      }
       if (!result.assets || !result.assets[0]) {
         Alert.alert('Error', 'Could not process selection.');
+        if (sparkMode) setSparkWorkflowState('idle');
         return;
       }
       const asset = result.assets[0];
@@ -244,29 +265,35 @@ export default function CustomerChatScreen() {
         upload_status: 'uploading',
         upload_id: uploadId,
       });
+      if (sparkMode) setSparkWorkflowState('uploading');
 
       const uploaded = await uploadAttachment(asset.uri, asset.fileName || 'image.jpg', asset.mimeType || 'image/jpeg', uploadId);
       if (uploaded) {
         setAttachmentPreview(prev => prev?.upload_id === uploadId ? { ...prev, url: uploaded.url, storage_path: uploaded.storage_path, upload_status: 'ready' } : prev);
         if (sparkMode) {
           attachUploadToSpark(uploaded, asset.fileName || 'image.jpg', asset.mimeType || 'image/jpeg');
+          setSparkWorkflowState('attachment_ready');
         }
       } else {
         setAttachmentPreview(prev => prev?.upload_id === uploadId ? { ...prev, upload_status: 'failed' } : prev);
+        if (sparkMode) setSparkWorkflowState('upload_failed');
       }
     } catch (e) {
       console.error('Gallery picker error:', e);
       Alert.alert('Error', 'Could not open photo library.');
+      if (sparkMode) setSparkWorkflowState('error');
     }
   };
 
   // Camera picker
   const handleOpenCamera = async () => {
     setAttachSheetVisible(false);
+    if (sparkMode) setSparkWorkflowState('attaching_file');
     try {
       const { status } = await ImagePicker.requestCameraPermissionsAsync();
       if (status !== 'granted') {
         Alert.alert('Permission Required', 'Please allow camera access.');
+        if (sparkMode) setSparkWorkflowState('idle');
         return;
       }
       const result = await ImagePicker.launchCameraAsync({
@@ -274,9 +301,13 @@ export default function CustomerChatScreen() {
         allowsEditing: false,
         quality: 0.8,
       });
-      if (result.canceled) return;
+      if (result.canceled) {
+        if (sparkMode) setSparkWorkflowState('idle');
+        return;
+      }
       if (!result.assets || !result.assets[0]) {
         Alert.alert('Error', 'Could not process photo.');
+        if (sparkMode) setSparkWorkflowState('idle');
         return;
       }
       const asset = result.assets[0];
@@ -289,33 +320,42 @@ export default function CustomerChatScreen() {
         upload_status: 'uploading',
         upload_id: uploadId,
       });
+      if (sparkMode) setSparkWorkflowState('uploading');
 
       const uploaded = await uploadAttachment(asset.uri, asset.fileName || 'photo.jpg', asset.mimeType || 'image/jpeg', uploadId);
       if (uploaded) {
         setAttachmentPreview(prev => prev?.upload_id === uploadId ? { ...prev, url: uploaded.url, storage_path: uploaded.storage_path, upload_status: 'ready' } : prev);
         if (sparkMode) {
           attachUploadToSpark(uploaded, asset.fileName || 'photo.jpg', asset.mimeType || 'image/jpeg');
+          setSparkWorkflowState('attachment_ready');
         }
       } else {
         setAttachmentPreview(prev => prev?.upload_id === uploadId ? { ...prev, upload_status: 'failed' } : prev);
+        if (sparkMode) setSparkWorkflowState('upload_failed');
       }
     } catch (e) {
       console.error('Camera error:', e);
       Alert.alert('Error', 'Could not open camera.');
+      if (sparkMode) setSparkWorkflowState('error');
     }
   };
 
   // Document picker
   const handlePickDocument = async () => {
     setAttachSheetVisible(false);
+    if (sparkMode) setSparkWorkflowState('attaching_file');
     try {
       const result = await DocumentPicker.getDocumentAsync({
         type: '*/*',
         copyToCacheDirectory: true,
       });
-      if (result.canceled) return;
+      if (result.canceled) {
+        if (sparkMode) setSparkWorkflowState('idle');
+        return;
+      }
       if (!result.assets || !result.assets[0]) {
         Alert.alert('Error', 'Could not process document.');
+        if (sparkMode) setSparkWorkflowState('idle');
         return;
       }
       const asset = result.assets[0];
@@ -328,19 +368,23 @@ export default function CustomerChatScreen() {
         upload_status: 'uploading',
         upload_id: uploadId,
       });
+      if (sparkMode) setSparkWorkflowState('uploading');
 
       const uploaded = await uploadAttachment(asset.uri, asset.name, asset.mimeType || 'application/octet-stream', uploadId);
       if (uploaded) {
         setAttachmentPreview(prev => prev?.upload_id === uploadId ? { ...prev, url: uploaded.url, storage_path: uploaded.storage_path, upload_status: 'ready' } : prev);
         if (sparkMode) {
           attachUploadToSpark(uploaded, asset.name, asset.mimeType || 'application/octet-stream');
+          setSparkWorkflowState('attachment_ready');
         }
       } else {
         setAttachmentPreview(prev => prev?.upload_id === uploadId ? { ...prev, upload_status: 'failed' } : prev);
+        if (sparkMode) setSparkWorkflowState('upload_failed');
       }
     } catch (e) {
       console.error('Document picker error:', e);
       Alert.alert('Error', 'Could not open document picker.');
+      if (sparkMode) setSparkWorkflowState('error');
     }
   };
 
@@ -349,6 +393,7 @@ export default function CustomerChatScreen() {
     if (isRecording) {
       // Stop recording — close sheet
       setAttachSheetVisible(false);
+      if (sparkMode) setSparkWorkflowState('uploading');
       try {
         const rec = recording;
         setRecording(null);
@@ -371,22 +416,27 @@ export default function CustomerChatScreen() {
             setAttachmentPreview(prev => prev?.upload_id === uploadId ? { ...prev, url: uploaded.url, storage_path: uploaded.storage_path, upload_status: 'ready' } : prev);
             if (sparkMode) {
               attachUploadToSpark(uploaded, fileName, 'audio/x-m4a');
+              setSparkWorkflowState('attachment_ready');
             }
           } else {
             setAttachmentPreview(prev => prev?.upload_id === uploadId ? { ...prev, upload_status: 'failed' } : prev);
+            if (sparkMode) setSparkWorkflowState('upload_failed');
           }
         }
       } catch (e) {
         console.error('Stop recording error:', e);
         setIsRecording(false);
         setRecording(null);
+        if (sparkMode) setSparkWorkflowState('error');
       }
     } else {
       // Start recording — do NOT close sheet
+      if (sparkMode) setSparkWorkflowState('recording_audio');
       try {
         const { status } = await Audio.requestPermissionsAsync();
         if (status !== 'granted') {
           Alert.alert('Permission Required', 'Please allow microphone access.');
+          if (sparkMode) setSparkWorkflowState('idle');
           return;
         }
         await Audio.setAudioModeAsync({
@@ -765,6 +815,19 @@ export default function CustomerChatScreen() {
     setMessageMenuVisible(false);
   };
 
+  const resetSparkState = useCallback(() => {
+    setSparkMode(false);
+    setSparkInput('');
+    setForwardedAttachment(null);
+    setAttachmentPreview(null);
+    setSparkProcessing(false);
+    setSparkWorkflowState('idle');
+    setPreviewVisible(false);
+    setPreviewDraftId(null);
+    setPreviewActions([]);
+    setCheckedActions(new Set());
+  }, []);
+
   const attachUploadToSpark = (uploadResult: { url: string; storage_path: string }, name: string, mimeType: string) => {
     const type = mimeType.startsWith('image/') ? 'image' : mimeType.startsWith('audio/') ? 'audio' : 'file';
     setForwardedAttachment({
@@ -778,13 +841,16 @@ export default function CustomerChatScreen() {
   // ── AI Spark handler ───────────────────────────────────────
   const handleSpark = async () => {
     const text = sparkInput.trim() || inputText.trim();
-    if ((!text && !forwardedAttachment) || sparkProcessing || !conversationId) return;
+    if (sparkWorkflowState !== 'attachment_ready' && !(sparkWorkflowState === 'idle' && text)) return;
+    if (!conversationId) return;
     Keyboard.dismiss();
     setSparkInput('');
     setInputText('');
     setSparkMode(false);
+    const capturedAttachment = forwardedAttachment;
     setForwardedAttachment(null);
     setSparkProcessing(true);
+    setSparkWorkflowState('processing');
 
     // BUG FIX 1: Clear all previous spark state before making new API call
     setPreviewDraftId(null);
@@ -802,7 +868,6 @@ export default function CustomerChatScreen() {
       const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 15000);
-      console.log('[SPARK] sending', { text, forwardedAttachment, conversationId });
 
       // ALWAYS make fresh POST to /api/chat/:customer_id/spark
       const res = await fetch(`${backendUrl}/api/chat/${customer_id}/spark`, {
@@ -811,7 +876,7 @@ export default function CustomerChatScreen() {
         body: JSON.stringify({
           query: text,
           conversation_id: conversationId,
-          forwarded_attachment: forwardedAttachment || null,
+          forwarded_attachment: capturedAttachment || null,
         }),
         signal: controller.signal,
       });
@@ -826,6 +891,7 @@ export default function CustomerChatScreen() {
 
       if (data.routing === 'clarify') {
         // AI asks clarifying question — reload to show it
+        setSparkWorkflowState('idle');
         await loadChat();
       } else if (data.routing === 'preview') {
         // Show Action Preview Sheet
@@ -833,6 +899,7 @@ export default function CustomerChatScreen() {
         setPreviewActions(data.actions || []);
         setPreviewInsight(data.ai_insight);
         setCheckedActions(new Set((data.actions || []).map((a: any) => a.action_id)));
+        setSparkWorkflowState('previewing');
         // Pre-populate unresolvedPrices from OCR unit_price for unresolved items
         const prefillPrices: Record<string, string> = {};
         for (const action of (data.actions || [])) {
@@ -862,12 +929,14 @@ export default function CustomerChatScreen() {
           // 5 second auto-dismiss
           setTimeout(() => setBannerVisible(false), 5000);
         }
+        setSparkWorkflowState('idle');
         await loadChat();
       }
     } catch (err: any) {
       if (err.name !== 'AbortError') {
         Alert.alert('Spark Error', 'Could not process your request. Try again.');
       }
+      setSparkWorkflowState('error');
     } finally {
       setSparkProcessing(false);
     }
@@ -951,11 +1020,7 @@ export default function CustomerChatScreen() {
       });
       const data = await res.json();
 
-      setPreviewVisible(false);
-      setPreviewDraftId(null);
-      setPreviewActions([]);
-      setPreviewInsight(null);
-      setCheckedActions(new Set());
+      resetSparkState();
       setUnresolvedPrices({});
       setUnresolvedGst({});
       setRemovedItems(new Set());
@@ -987,14 +1052,7 @@ export default function CustomerChatScreen() {
         method: 'DELETE', headers: { 'Authorization': `Bearer ${token}` },
       });
     } catch {}
-    // BUG FIX 2: Clear draft state immediately on Cancel
-    setPreviewVisible(false);
-    setPreviewDraftId(null);
-    setPreviewActions([]);
-    setPreviewInsight(null);
-    setCheckedActions(new Set());
-    setAttachmentPreview(null);
-    setForwardedAttachment(null);
+    resetSparkState();
   };
 
   // ── Banner Undo handler ────────────────────────────────────
@@ -1625,7 +1683,7 @@ export default function CustomerChatScreen() {
                   ? forwardedAttachment.text
                   : forwardedAttachment.name || forwardedAttachment.type}
               </Text>
-              <TouchableOpacity onPress={() => { setForwardedAttachment(null); setSparkMode(false); setSparkInput(''); }} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <TouchableOpacity onPress={() => resetSparkState()} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
                 <Ionicons name="close-circle" size={18} color="#075E54" />
               </TouchableOpacity>
             </View>
@@ -1656,20 +1714,36 @@ export default function CustomerChatScreen() {
                   <Ionicons name="camera-outline" size={22} color={sparkMode ? '#E91E63' : '#667781'} />
                 </TouchableOpacity>
               </>
-              {sparkMode && (forwardedAttachment === null || forwardedAttachment === undefined) && (
-                <TouchableOpacity onPress={() => { setSparkMode(false); setSparkInput(''); setAttachmentPreview(null); setForwardedAttachment(null); }} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }} style={styles.inputIconBtn}>
+              {sparkMode && !forwardedAttachment && (
+                <TouchableOpacity onPress={() => resetSparkState()} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }} style={styles.inputIconBtn}>
                   <Ionicons name="close-circle" size={20} color="#999" />
                 </TouchableOpacity>
               )}
             </View>
             {sparkMode ? (
-              (inputText.trim().length === 0 && (forwardedAttachment === null || forwardedAttachment === undefined) && (sparkProcessing === false)) ? (
+              sparkWorkflowState === 'uploading' ? (
+                <View style={[styles.micBtn, { backgroundColor: '#E91E63', justifyContent: 'center', alignItems: 'center' }]}>
+                  <ActivityIndicator size="small" color="#FFF" />
+                </View>
+              ) : sparkWorkflowState === 'upload_failed' ? (
+                <TouchableOpacity style={[styles.micBtn, { backgroundColor: '#B00020' }]} onPress={handleRetryUpload}>
+                  <Ionicons name="refresh" size={22} color="#FFF" />
+                </TouchableOpacity>
+              ) : sparkWorkflowState === 'processing' ? (
+                <View style={[styles.sendBtn, styles.sparkSendBtn, { justifyContent: 'center', alignItems: 'center' }]}>
+                  <ActivityIndicator size="small" color="#FFF" />
+                </View>
+              ) : sparkWorkflowState === 'attachment_ready' || (sparkWorkflowState === 'idle' && inputText.trim().length > 0) ? (
+                <TouchableOpacity style={[styles.sendBtn, styles.sparkSendBtn]} onPress={handleSpark}>
+                  <Ionicons name="send" size={20} color="#FFF" />
+                </TouchableOpacity>
+              ) : sparkWorkflowState === 'recording_audio' ? (
                 <TouchableOpacity style={[styles.micBtn, { backgroundColor: '#E91E63' }]} onPress={handleAudioRecording}>
-                  <Ionicons name={isRecording ? 'stop' : 'mic'} size={22} color="#FFF" />
+                  <Ionicons name="stop" size={22} color="#FFF" />
                 </TouchableOpacity>
               ) : (
-                <TouchableOpacity style={[styles.sendBtn, styles.sparkSendBtn]} onPress={handleSpark} disabled={sparkProcessing || (inputText.trim().length === 0 && !forwardedAttachment)}>
-                  {sparkProcessing ? <ActivityIndicator size="small" color="#FFF" /> : <Ionicons name="send" size={20} color="#FFF" />}
+                <TouchableOpacity style={[styles.micBtn, { backgroundColor: '#E91E63' }]} onPress={handleAudioRecording}>
+                  <Ionicons name="mic" size={22} color="#FFF" />
                 </TouchableOpacity>
               )
             ) : canSend ? (
@@ -1678,7 +1752,7 @@ export default function CustomerChatScreen() {
               </TouchableOpacity>
             ) : (
               <View style={{ position: 'relative' }}>
-                <TouchableOpacity style={styles.sparkFab} onPress={() => setSparkMode(true)}>
+                <TouchableOpacity style={styles.sparkFab} onPress={() => { setSparkMode(true); setSparkWorkflowState('idle'); }}>
                   <Ionicons name="sparkles" size={22} color="#FFF" />
                 </TouchableOpacity>
                 <TouchableOpacity style={styles.micBtn}>
