@@ -802,6 +802,7 @@ export default function CustomerChatScreen() {
       const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 15000);
+      console.log('[SPARK] sending', { text, forwardedAttachment, conversationId });
 
       // ALWAYS make fresh POST to /api/chat/:customer_id/spark
       const res = await fetch(`${backendUrl}/api/chat/${customer_id}/spark`, {
@@ -899,19 +900,40 @@ export default function CustomerChatScreen() {
           const gstPct = parseFloat(unresolvedGst[itemKey] || '0') || 0;
           const editedName = unresolvedNames[itemKey] ?? item.product_name;
           const editedQty = parseFloat(editableQuantities[itemKey] ?? String(item.quantity)) || item.quantity;
-          const prodRes = await fetch(`${backendUrl}/api/products`, {
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name: editedName, selling_price: price, tax_rate: gstPct }),
-          });
-          if (!prodRes.ok) {
-            Alert.alert('Error', `Could not add "${editedName}" to catalog. Try again.`);
-            setConfirming(false);
-            return;
+          // Check if owner typed an existing product name before creating new
+          // Backend handles alias learning at confirm time using raw_product_name
+          const findRes = await fetch(
+            `${backendUrl}/api/products/find?name=${encodeURIComponent(editedName)}`,
+            { headers: { 'Authorization': `Bearer ${token}` } }
+          );
+          const existingProduct = findRes.ok ? await findRes.json() : null;
+          let resolvedProductId: string;
+          let resolvedPrice: number;
+          let resolvedTaxRate: number;
+          if (existingProduct?.id) {
+            // Owner typed name of existing product — reuse it, no duplicate created
+            resolvedProductId = existingProduct.id;
+            resolvedPrice = existingProduct.selling_price ?? price;
+            resolvedTaxRate = existingProduct.tax_rate ?? gstPct;
+          } else {
+            // Genuinely new product — create it
+            const prodRes = await fetch(`${backendUrl}/api/products`, {
+              method: 'POST',
+              headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ name: editedName, selling_price: price, tax_rate: gstPct }),
+            });
+            if (!prodRes.ok) {
+              Alert.alert('Error', `Could not add "${editedName}" to catalog. Try again.`);
+              setConfirming(false);
+              return;
+            }
+            const newProduct = await prodRes.json();
+            resolvedProductId = newProduct.id;
+            resolvedPrice = price;
+            resolvedTaxRate = gstPct;
           }
-          const newProduct = await prodRes.json();
           const updatedItems = [...items];
-          updatedItems[idx] = { ...item, product_id: newProduct.id, product_name: editedName, quantity: editedQty, unit_price: price, tax_rate: gstPct, line_total: price * editedQty };
+          updatedItems[idx] = { ...item, product_id: resolvedProductId, product_name: editedName, quantity: editedQty, unit_price: resolvedPrice, tax_rate: resolvedTaxRate, line_total: resolvedPrice * editedQty };
           await fetch(`${backendUrl}/api/chat/${customer_id}/spark/action/${action.action_id}`, {
             method: 'PATCH',
             headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
@@ -971,6 +993,8 @@ export default function CustomerChatScreen() {
     setPreviewActions([]);
     setPreviewInsight(null);
     setCheckedActions(new Set());
+    setAttachmentPreview(null);
+    setForwardedAttachment(null);
   };
 
   // ── Banner Undo handler ────────────────────────────────────
@@ -1545,7 +1569,8 @@ export default function CustomerChatScreen() {
                 size={28} color="#075E54"
               />
               <Text style={styles.attachPreviewName} numberOfLines={1}>
-                {attachmentPreview.name}
+                {attachmentPreview.mime_type?.startsWith('image') ? 'Image' :
+                 attachmentPreview.mime_type?.startsWith('audio') ? 'Audio' : 'Document'}
               </Text>
               {attachmentPreview.upload_status === 'uploading' && (
                 <ActivityIndicator size="small" color="#075E54" style={{ marginRight: 4 }} />
@@ -1632,7 +1657,7 @@ export default function CustomerChatScreen() {
                 </TouchableOpacity>
               </>
               {sparkMode && (forwardedAttachment === null || forwardedAttachment === undefined) && (
-                <TouchableOpacity onPress={() => { setSparkMode(false); setSparkInput(''); }} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }} style={styles.inputIconBtn}>
+                <TouchableOpacity onPress={() => { setSparkMode(false); setSparkInput(''); setAttachmentPreview(null); setForwardedAttachment(null); }} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }} style={styles.inputIconBtn}>
                   <Ionicons name="close-circle" size={20} color="#999" />
                 </TouchableOpacity>
               )}
@@ -1765,6 +1790,25 @@ export default function CustomerChatScreen() {
                                       placeholderTextColor="#999"
                                       value={unresolvedNames[itemKey] ?? item.product_name}
                                       onChangeText={(text) => setUnresolvedNames(prev => ({ ...prev, [itemKey]: text }))}
+                                      onEndEditing={async (e) => {
+                                        const typedName = (e.nativeEvent.text || '').trim();
+                                        const currentName = (item.product_name || '').trim().toLowerCase();
+                                        const lookupName = typedName.toLowerCase();
+                                        if (!lookupName || lookupName === currentName) return;
+                                        try {
+                                          const token = await getToken();
+                                          const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+                                          const findRes = await fetch(
+                                            `${backendUrl}/api/products/find?name=${encodeURIComponent(typedName)}`,
+                                            { headers: { 'Authorization': `Bearer ${token}` } }
+                                          );
+                                          const existing = findRes.ok ? await findRes.json() : null;
+                                          if (existing?.id) {
+                                            setUnresolvedPrices(prev => ({ ...prev, [itemKey]: String(existing.selling_price ?? '') }));
+                                            setUnresolvedGst(prev => ({ ...prev, [itemKey]: String(existing.tax_rate ?? '0') }));
+                                          }
+                                        } catch {}
+                                      }}
                                     />
                                   </View>
                                 ) : (
@@ -1810,7 +1854,7 @@ export default function CustomerChatScreen() {
                                 </View>
                               )}
                             </View>
-                            {!isUnresolved && item.alternatives?.length > 1 && (
+                            {!isUnresolved && item.alternatives?.length > 0 && (
                               <View style={styles.altRow}>
                                 <Text style={styles.altLabel}>Also found:</Text>
                                 {item.alternatives.filter((a: any) => a.id !== item.product_id).slice(0, 3).map((alt: any) => (
@@ -1819,13 +1863,27 @@ export default function CustomerChatScreen() {
                                       const token = await getToken();
                                       if (!token) return;
                                       const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+                                      // Rebuild alternatives reciprocally — previous main product becomes chip
+                                      const prevProduct = {
+                                        id: item.product_id,
+                                        name: item.product_name,
+                                        selling_price: item.unit_price,
+                                        tax_rate: item.tax_rate,
+                                      };
+                                      const newAlternatives = [
+                                        prevProduct,
+                                        ...item.alternatives.filter((a: any) => a.id !== alt.id && a.id !== item.product_id)
+                                      ].slice(0, 2);
                                       const replacementItem = {
+                                        raw_product_name: item.raw_product_name || item.product_name,
                                         product_id: alt.id,
                                         product_name: alt.name,
                                         unit_price: alt.selling_price,
+                                        tax_rate: alt.tax_rate ?? item.tax_rate,
                                         quantity: item.quantity,
                                         line_total: alt.selling_price * item.quantity,
-                                        alternatives: item.alternatives,
+                                        alternatives: newAlternatives,
+                                        source_type: 'chip_override',
                                       };
                                       await fetch(`${backendUrl}/api/chat/${customer_id}/spark/action/${action.action_id}`, {
                                         method: 'PATCH',

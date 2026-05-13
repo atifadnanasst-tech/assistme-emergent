@@ -1900,6 +1900,13 @@ function parseSparkResponse(text) {
   }
 }
 
+// ─── Vocabulary normalisation helper (module level) ─────────
+// Single source of truth for all read/write paths
+// Must match exactly how values are stored in product_vocabularies.normalised
+function normaliseVocabulary(v) {
+  return (v || '').toLowerCase().trim().replace(/\s+/g, ' ');
+}
+
 // ─── POST /api/chat/:customer_id/spark ─────────────────────
 app.post('/api/chat/:customer_id/spark', async (c) => {
   const startTime = Date.now();
@@ -1913,7 +1920,7 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
     if (!customer) return c.json({ error: 'customer_not_found' }, 404);
 
     const body = await c.req.json();
-    const query = body.query?.trim() || (body.forwarded_attachment ? 'Analyze this attachment and suggest relevant actions.' : '');
+    const query = body.query?.trim() || (body.forwarded_attachment ? 'Extract product names, quantities and prices from this attachment and create an invoice.' : '');
     const conversationId = body.conversation_id;
     const forwardedAttachment = body.forwarded_attachment || null;
     if (!query) return c.json({ error: 'empty_query' }, 400);
@@ -2099,6 +2106,8 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
       tokensInput = completion.usage?.prompt_tokens || 0;
       tokensOutput = completion.usage?.completion_tokens || 0;
       parsed = parseSparkResponse(completion.choices[0].message.content || '');
+      console.log('[SPARK DEBUG] raw AI response:', completion.choices[0].message.content?.substring(0, 500));
+      console.log('[SPARK DEBUG] parsed actions:', parsed.actions.length, 'routing will be:', parsed.actions.length > 0 ? 'preview' : 'clarify');
     } catch (aiErr) {
       clearTimeout(timeoutId);
       console.error('Spark OpenAI call failed:', aiErr.message);
@@ -2126,14 +2135,76 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
 
     // Product resolution: resolve each product name from the DB
     // Build a map of product_name → { resolved, alternatives }
-    async function resolveProduct(productName) {
+    async function resolveProduct(productName, customerId) {
       if (!productName) return { resolved: null, alternatives: [] };
-      const { data: products } = await supabase
+      const nameLower = normaliseVocabulary(productName);
+
+      // Step 1: exact match
+      const { data: exact } = await supabase
         .from('products').select('id, name, selling_price, tax_rate, sku')
         .eq('organisation_id', organisationId).eq('is_active', true)
-        .ilike('name', `%${productName}%`).limit(5);
-      if (!products || products.length === 0) return { resolved: null, alternatives: [] };
-      return { resolved: products[0], alternatives: products.length > 1 ? products : [] };
+        .ilike('name', productName).limit(1);
+      if (exact?.length > 0) return { resolved: exact[0], alternatives: [] };
+
+      // Step 2: vocabulary table lookup
+      const { data: vocabRows } = await supabase
+        .from('product_vocabularies')
+        .select(`product_id, match_strength, confirmed_count, products:product_id (id, name, selling_price, tax_rate, sku)`)
+        .eq('organisation_id', organisationId)
+        .eq('normalised', nameLower)
+        .eq('is_active', true)
+        .order('confirmed_count', { ascending: false })
+        .order('match_strength', { ascending: false })
+        .limit(1);
+      if (vocabRows?.length > 0 && vocabRows[0].products) {
+        return { resolved: vocabRows[0].products, alternatives: [] };
+      }
+
+      // Step 3: fuzzy/partial match with ranking
+      const { data: fuzzy } = await supabase
+        .from('products').select('id, name, selling_price, tax_rate, sku')
+        .eq('organisation_id', organisationId).eq('is_active', true)
+        .ilike('name', `%${productName}%`).limit(10);
+      if (!fuzzy || fuzzy.length === 0) return { resolved: null, alternatives: [] };
+
+      const productIds = fuzzy.map(p => p.id);
+
+      // Customer purchase history via invoices (capped at 50 for v1)
+      const { data: custInvoices } = await supabase
+        .from('invoices')
+        .select('id, invoice_items(product_id, quantity)')
+        .eq('organisation_id', organisationId)
+        .eq('customer_id', customerId)
+        .limit(50);
+
+      // Org-wide sales volume
+      const { data: orgItems } = await supabase
+        .from('invoice_items').select('product_id, quantity')
+        .eq('organisation_id', organisationId)
+        .in('product_id', productIds);
+
+      // Score: customer history 3x, org volume 1x
+      const custCounts = {};
+      (custInvoices || []).forEach(inv => {
+        (inv.invoice_items || []).forEach(item => {
+          if (productIds.includes(item.product_id))
+            custCounts[item.product_id] = (custCounts[item.product_id] || 0) + item.quantity;
+        });
+      });
+      const orgCounts = {};
+      (orgItems || []).forEach(r => {
+        orgCounts[r.product_id] = (orgCounts[r.product_id] || 0) + r.quantity;
+      });
+
+      const scored = fuzzy.map(p => ({
+        ...p,
+        score: (custCounts[p.id] || 0) * 3 + (orgCounts[p.id] || 0) * 1
+      })).sort((a, b) => b.score - a.score);
+
+      return {
+        resolved: scored[0],
+        alternatives: scored.slice(1, 3)
+      };
     }
 
     // Routing: if we have ANY valid actions → always preview. Only clarify when zero actions.
@@ -2164,20 +2235,21 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
         let totalAmount = 0;
 
         for (const item of items) {
-          const { resolved, alternatives } = await resolveProduct(item.product_name);
+          const { resolved, alternatives } = await resolveProduct(item.product_name, customerId);
           const unitPrice = resolved?.selling_price || item.unit_price || null;
           const qty = item.quantity || 1;
           const lineTotal = unitPrice ? unitPrice * qty : null;
           if (lineTotal) totalAmount += lineTotal;
 
           resolvedItems.push({
+            raw_product_name: item.product_name,
             product_name: resolved?.name || item.product_name,
             product_id: resolved?.id || null,
             quantity: qty,
             unit_price: unitPrice,
             tax_rate: resolved?.tax_rate || 0,
             line_total: lineTotal,
-            alternatives: alternatives.map(a => ({ id: a.id, name: a.name, selling_price: a.selling_price })),
+            alternatives: alternatives.map(a => ({ id: a.id, name: a.name, selling_price: a.selling_price, tax_rate: a.tax_rate ?? 0 })),
           });
         }
 
@@ -2458,6 +2530,48 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
                 sort_order: idx + 1,
               });
             }
+            // Alias learning — silent, behavioral, backend-owned
+            // Uses raw_product_name (original OCR/input) vs product_name (resolved catalog name)
+            // No extra DB fetch needed — raw signal preserved from Spark pipeline
+            for (const item of itemsArr) {
+              try {
+                if (!item.product_id || !item.raw_product_name || !item.product_name) continue;
+                const rawNormalised = normaliseVocabulary(item.raw_product_name);
+                const catalogNormalised = normaliseVocabulary(item.product_name);
+                if (rawNormalised === catalogNormalised) continue; // identical — no alias needed
+                // Upsert into product_vocabularies
+                const { data: existing } = await supabase
+                  .from('product_vocabularies')
+                  .select('id, usage_count, confirmed_count')
+                  .eq('organisation_id', organisationId)
+                  .eq('product_id', item.product_id)
+                  .eq('normalised', rawNormalised)
+                  .maybeSingle();
+                if (existing) {
+                  await supabase.from('product_vocabularies').update({
+                    usage_count: existing.usage_count + 1,
+                    confirmed_count: existing.confirmed_count + 1,
+                    last_confirmed_at: new Date().toISOString(),
+                  }).eq('id', existing.id);
+                } else {
+                  await supabase.from('product_vocabularies').insert({
+                    organisation_id: organisationId,
+                    product_id: item.product_id,
+                    vocabulary: item.raw_product_name.trim(),
+                    normalised: rawNormalised,
+                    source_type: 'owner_correction',
+                    match_strength: 0.5,
+                    usage_count: 1,
+                    confirmed_count: 1,
+                    first_seen_at: new Date().toISOString(),
+                    last_confirmed_at: new Date().toISOString(),
+                  });
+                }
+              } catch (aliasErr) {
+                console.warn('[VOCAB] vocabulary write failed silently:', aliasErr.message);
+              }
+            }
+
             // Build items summary for card
             const itemsSummary = itemsArr.length > 0
               ? itemsArr.map(i => `${i.product_name} × ${i.quantity || 1}`).join(', ')
@@ -3014,15 +3128,53 @@ app.delete('/api/chat/:customer_id/spark/:draft_id', async (c) => {
   try {
     const auth = await authenticateChat(c);
     if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+    const customerId = c.req.param('customer_id');
     const draftId = c.req.param('draft_id');
+
+    // Fetch action before rejecting — need type for cancellation message
+    const { data: action } = await supabase
+      .from('ai_actions').select('id, action_type, action_name')
+      .eq('id', draftId).eq('organisation_id', organisationId).maybeSingle();
 
     const { error: updateErr } = await supabase
       .from('ai_actions').update({ status: 'rejected' })
-      .eq('id', draftId).eq('organisation_id', auth.organisationId);
+      .eq('id', draftId).eq('organisation_id', organisationId);
     if (updateErr) return c.json({ error: 'server_error' }, 500);
 
-    return c.json({ cancelled: true });
+    // Write intent-reversal message to conversation
+    // Phrasing avoids reinforcing product names — signals closed intent to AI
+    // AI reads this in recentText and does not treat previous draft as active
+    try {
+      const { data: conv } = await supabase
+        .from('conversations').select('id')
+        .eq('organisation_id', organisationId).eq('entity_type', 'customer')
+        .eq('entity_id', customerId).eq('status', 'active').maybeSingle();
 
+      if (conv) {
+        const actionLabel = action?.action_type === 'create_invoice' ? 'invoice'
+          : action?.action_type === 'create_quote' ? 'quote' : 'action';
+        await supabase.from('messages').insert({
+          organisation_id: organisationId,
+          conversation_id: conv.id,
+          role: 'tool',
+          content: `Owner reviewed the ${actionLabel} preview and chose not to proceed. This draft is closed. Treat the next owner message as a fresh instruction.`,
+          metadata: {
+            sender_type: 'system',
+            visibility: 'owner',
+            message_type: 'action_cancelled',
+            read_by_owner: true,
+            preview_text: `${actionLabel} draft cancelled`,
+          },
+          tokens_input: 0,
+          tokens_output: 0,
+        });
+      }
+    } catch (msgErr) {
+      console.warn('[CANCEL] cancellation message write failed silently:', msgErr.message);
+    }
+
+    return c.json({ cancelled: true });
   } catch (error) {
     console.error('DELETE /api/chat/spark error:', error);
     return c.json({ error: 'server_error' }, 500);
@@ -3115,7 +3267,7 @@ app.post('/api/chat/:customer_id/ai-query', async (c) => {
     if (!customer) return c.json({ error: 'customer_not_found' }, 404);
 
     const body = await c.req.json();
-    const query = body.query?.trim() || (body.forwarded_attachment ? 'Analyze this attachment and suggest relevant actions.' : '');
+    const query = body.query?.trim() || (body.forwarded_attachment ? 'Extract product names, quantities and prices from this attachment and create an invoice.' : '');
     const conversationId = body.conversation_id;
     if (!query) return c.json({ error: 'empty_query' }, 400);
     if (!conversationId) return c.json({ error: 'missing_conversation_id' }, 400);
@@ -3553,6 +3705,27 @@ app.get('/api/invoice/new', async (c) => {
   } catch (error) {
     console.error('GET /api/invoice/new error:', error);
     return c.json({ error: 'server_error' }, 500);
+  }
+});
+
+// ─── GET /api/products/find ─────────────────────────────────
+// Exact name lookup — used by frontend before creating new product
+// Prevents duplicate product creation when owner types existing product name
+app.get('/api/products/find', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json(null, 401);
+    const { organisationId } = auth;
+    const name = c.req.query('name')?.trim();
+    if (!name) return c.json(null);
+    const { data } = await supabase
+      .from('products').select('id, name, selling_price, tax_rate')
+      .eq('organisation_id', organisationId).eq('is_active', true)
+      .ilike('name', name).limit(1).maybeSingle();
+    return c.json(data || null);
+  } catch (err) {
+    console.error('[PRODUCTS/FIND] Error:', err);
+    return c.json(null, 500);
   }
 });
 
