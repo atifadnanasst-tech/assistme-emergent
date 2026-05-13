@@ -1681,6 +1681,9 @@ export default function CustomerChatScreen() {
               <Text numberOfLines={1} style={{ flex: 1, fontSize: 13, color: '#075E54' }}>
                 {forwardedAttachment.type === 'text'
                   ? forwardedAttachment.text
+                  : forwardedAttachment.type === 'audio' ? 'Audio'
+                  : forwardedAttachment.type === 'image' ? 'Image'
+                  : forwardedAttachment.type === 'file' ? 'Document'
                   : forwardedAttachment.name || forwardedAttachment.type}
               </Text>
               <TouchableOpacity onPress={() => resetSparkState()} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
