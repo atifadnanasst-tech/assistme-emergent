@@ -651,7 +651,7 @@ app.get('/api/home', async (c) => {
       filter_tabs: filterTabs,
       conversations: limitedConversations,
       subscription_plan: subscriptionPlan,
-      language: language,
+      language: auth.primaryLanguage || 'en',
     });
 
   } catch (error) {
@@ -683,6 +683,56 @@ app.post('/api/auth/sign-out', async (c) => {
     return c.json({ success: true }); // Return success even on error
   }
 });
+// ─── PATCH /api/organisations ───────────────────────────────
+// Update organisation settings — language preferences and future config
+// Allowed fields: primary_language, customer_language_auto
+// All other org fields are immutable via this endpoint
+app.patch('/api/organisations', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+    const body = await c.req.json();
+
+    // Whitelist — only these fields may be updated via this endpoint
+    const allowed = ['primary_language', 'customer_language_auto'];
+    const updates = {};
+    for (const key of allowed) {
+      if (body[key] !== undefined) updates[key] = body[key];
+    }
+    if (Object.keys(updates).length === 0) {
+      return c.json({ error: 'no_valid_fields' }, 400);
+    }
+
+    // Validate primary_language — must be canonical ISO code
+    const allowedLanguages = ['en', 'hi', 'bn', 'ta', 'te', 'ur', 'ml', 'kn'];
+    if (updates.primary_language && !allowedLanguages.includes(updates.primary_language)) {
+      return c.json({ error: 'invalid_language' }, 400);
+    }
+
+    // Validate customer_language_auto — must be boolean
+    if (updates.customer_language_auto !== undefined && typeof updates.customer_language_auto !== 'boolean') {
+      return c.json({ error: 'invalid_customer_language_auto' }, 400);
+    }
+
+    const { data, error } = await supabase
+      .from('organisations')
+      .update(updates)
+      .eq('id', organisationId)
+      .select('id, primary_language, customer_language_auto')
+      .single();
+
+    if (error) {
+      console.error('[PATCH /api/organisations] Error:', error);
+      return c.json({ error: 'update_failed' }, 500);
+    }
+    return c.json({ success: true, organisation: data });
+  } catch (err) {
+    console.error('[PATCH /api/organisations] Error:', err);
+    return c.json({ error: 'internal_error' }, 500);
+  }
+});
+
 
 // ─── POST /api/customers ────────────────────────────────────
 app.post('/api/customers', async (c) => {
@@ -851,9 +901,14 @@ async function authenticateChat(c) {
   const { data: userData, error } = await supabase.auth.getUser(token);
   if (error || !userData.user) return null;
   const { data: userRecord } = await supabase
-    .from('users').select('id, organisation_id').eq('auth_id', userData.user.id).single();
+    .from('users').select('id, organisation_id, organisations(primary_language, customer_language_auto)').eq('auth_id', userData.user.id).single();
   if (!userRecord) return null;
-  return { userId: userRecord.id, organisationId: userRecord.organisation_id };
+  return {
+    userId: userRecord.id,
+    organisationId: userRecord.organisation_id,
+    primaryLanguage: userRecord.organisations?.primary_language || 'en',
+    customerLanguageAuto: userRecord.organisations?.customer_language_auto || false,
+  };
 }
 
 // Validate customer belongs to org
@@ -2188,7 +2243,10 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
       }
     }
     const userMessage = `Customer: ${customer.name}\nOwner instruction: ${query}${attachmentContext}\nRecent context: ${recentText}\nCustomer memory: ${customerMemory || 'none'}`;
-    const systemContent = SPARK_SYSTEM_PROMPT + (globalContext ? `\n\nBusiness context:\n${globalContext}` : '');
+    const primaryLanguage = auth.primaryLanguage || 'en';
+    const systemContent = SPARK_SYSTEM_PROMPT
+      + (globalContext ? `\n\nBusiness context:\n${globalContext}` : '')
+      + `\n\nLanguage instructions: The owner may communicate in any language. Understand multilingual and mixed-language business input correctly. Always return all JSON fields and product names in English. If clarification is absolutely required, respond using language code: ${primaryLanguage}.`;
 
     const client = getOpenAI();
     if (!client) return c.json({ error: 'ai_error', message: 'AI not configured' }, 500);
@@ -3305,8 +3363,7 @@ app.post('/api/chat/:customer_id/ai-query', async (c) => {
     if (!conversationId) return c.json({ error: 'missing_conversation_id' }, 400);
 
     // Get owner's preferred language
-    const { data: orgData } = await supabase.from('organisations').select('custom_fields').eq('id', organisationId).single();
-    const language = orgData?.custom_fields?.language || 'English';
+    const language = auth.primaryLanguage || 'en';
 
     // Save owner's query as owner-only message
     await supabase.from('messages').insert({
