@@ -348,14 +348,16 @@ app.get('/api/home', async (c) => {
 
     // Fetch organisation-level fields (subscription_plan)
     let subscriptionPlan = 'free';
+    let primaryLanguage = 'en';
     try {
       const { data: orgRecord } = await supabase
         .from('organisations')
-        .select('subscription_plan')
+        .select('subscription_plan, primary_language')
         .eq('id', organisationId)
         .single();
       if (orgRecord) {
         subscriptionPlan = orgRecord.subscription_plan || 'free';
+        primaryLanguage = orgRecord.primary_language || 'en';
       }
     } catch (err) {
       console.warn('Failed to fetch organisation:', err);
@@ -651,7 +653,7 @@ app.get('/api/home', async (c) => {
       filter_tabs: filterTabs,
       conversations: limitedConversations,
       subscription_plan: subscriptionPlan,
-      language: auth.primaryLanguage || 'en',
+      language: primaryLanguage,
     });
 
   } catch (error) {
@@ -704,10 +706,15 @@ app.patch('/api/organisations', async (c) => {
       return c.json({ error: 'no_valid_fields' }, 400);
     }
 
-    // Validate primary_language — must be canonical ISO code
-    const allowedLanguages = ['en', 'hi', 'bn', 'ta', 'te', 'ur', 'ml', 'kn'];
-    if (updates.primary_language && !allowedLanguages.includes(updates.primary_language)) {
-      return c.json({ error: 'invalid_language' }, 400);
+    // Validate primary_language — ISO 639-1 format (e.g. 'en', 'hi', 'pt-br')
+    // Regex allows 2-5 letter codes with optional region subtag — no hardcoded whitelist
+    if (updates.primary_language) {
+      const lang = updates.primary_language.trim().toLowerCase();
+      if (!/^[a-z]{2,5}(-[a-z]{2,5})?$/.test(lang)) {
+        return c.json({ error: 'invalid_language' }, 400);
+      }
+      updates.primary_language = lang;
+    }
     }
 
     // Validate customer_language_auto — must be boolean
