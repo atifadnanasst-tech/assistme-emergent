@@ -1195,7 +1195,7 @@ export default function CustomerChatScreen() {
       <View style={styles.invoiceCardContainer}>
         <View style={styles.invoiceCard}>
           <View style={styles.invoiceHeader}>
-            <Text style={styles.invoiceNumber}>Invoice #{cd.invoice_number || '---'}</Text>
+            <Text style={styles.invoiceNumber}>{cd.is_quote ? 'Quote' : 'Invoice'} #{cd.invoice_number || '---'}</Text>
             <Text style={[styles.invoiceStatus, { color: statusColor }]}>{statusText}</Text>
           </View>
           {cd.items_summary && <Text style={styles.invoiceItems}>{cd.items_summary}</Text>}
