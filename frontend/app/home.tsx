@@ -16,6 +16,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import { authService } from '../lib/auth';
+import { getLanguageLabel, DEFAULT_LANGUAGE } from '../constants/languages';
 let Contacts: any = null;
 try { Contacts = require('expo-contacts'); } catch { Contacts = null; }
 
@@ -720,13 +721,12 @@ export default function HomeScreen() {
                 <Ionicons name="chevron-forward" size={20} color="#CCCCCC" />
               </TouchableOpacity>
 
-              <View style={styles.sheetItem}>
-                <Ionicons name="language-outline" size={24} color="#BBBBBB" />
-                <Text style={styles.sheetItemTextDisabled}>Language</Text>
-                {homeData?.language && (
-                  <Text style={styles.sheetItemValueDisabled}>{homeData.language}</Text>
-                )}
-              </View>
+              <TouchableOpacity style={styles.sheetItem} onPress={() => { setShowToolsSheet(false); router.push('/settings/language'); }}>
+                <Ionicons name="language-outline" size={24} color="#667781" />
+                <Text style={styles.sheetItemText}>Language</Text>
+                <Text style={styles.sheetItemValue}>{getLanguageLabel(homeData?.language || DEFAULT_LANGUAGE)}</Text>
+                <Ionicons name="chevron-forward" size={20} color="#CCCCCC" />
+              </TouchableOpacity>
 
               <TouchableOpacity style={styles.sheetItem} onPress={() => { setShowToolsSheet(false); router.push('/settings/disclaimer'); }}>
                 <Ionicons name="document-text-outline" size={24} color="#667781" />
