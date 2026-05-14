@@ -739,7 +739,6 @@ app.patch('/api/organisations', async (c) => {
       }
       updates.primary_language = lang;
     }
-    }
 
     // Validate customer_language_auto — must be boolean
     if (updates.customer_language_auto !== undefined && typeof updates.customer_language_auto !== 'boolean') {
