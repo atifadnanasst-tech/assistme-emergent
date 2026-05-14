@@ -685,6 +685,30 @@ app.post('/api/auth/sign-out', async (c) => {
     return c.json({ success: true }); // Return success even on error
   }
 });
+// ─── GET /api/organisations ────────────────────────────────
+// Returns current org settings needed by settings screens
+// Used by: language settings screen, future settings screens
+app.get('/api/organisations', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+    const { data, error } = await supabase
+      .from('organisations')
+      .select('id, primary_language, customer_language_auto, timezone, currency')
+      .eq('id', organisationId)
+      .single();
+    if (error) {
+      console.error('[GET /api/organisations] Error:', error);
+      return c.json({ error: 'fetch_failed' }, 500);
+    }
+    return c.json(data);
+  } catch (err) {
+    console.error('[GET /api/organisations] Error:', err);
+    return c.json({ error: 'internal_error' }, 500);
+  }
+});
+
 // ─── PATCH /api/organisations ───────────────────────────────
 // Update organisation settings — language preferences and future config
 // Allowed fields: primary_language, customer_language_auto
