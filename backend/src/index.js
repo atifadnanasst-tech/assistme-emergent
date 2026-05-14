@@ -2106,8 +2106,6 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
       tokensInput = completion.usage?.prompt_tokens || 0;
       tokensOutput = completion.usage?.completion_tokens || 0;
       parsed = parseSparkResponse(completion.choices[0].message.content || '');
-      console.log('[SPARK DEBUG] raw AI response:', completion.choices[0].message.content?.substring(0, 500));
-      console.log('[SPARK DEBUG] parsed actions:', parsed.actions.length, 'routing will be:', parsed.actions.length > 0 ? 'preview' : 'clarify');
     } catch (aiErr) {
       clearTimeout(timeoutId);
       console.error('Spark OpenAI call failed:', aiErr.message);
