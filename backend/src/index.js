@@ -1945,12 +1945,17 @@ async function resolveProduct({ productName, customerId, organisationId }) {
   }
 
   // Step 3: fuzzy/partial match with stable ordering + behavioral ranking
-  const { data: fuzzy } = await supabase
-    .from('products').select('id, name, selling_price, tax_rate, sku')
-    .eq('organisation_id', organisationId).eq('is_active', true)
-    .ilike('name', `%${cleanName}%`)
-    .order('name', { ascending: true })
-    .limit(10);
+  const { data: fuzzy, error: fuzzyErr } = await supabase
+    .rpc('search_products_fuzzy', {
+      p_organisation_id: organisationId,
+      p_search_term: cleanName,
+      p_limit: 10,
+      p_threshold: 0.15,
+    });
+  if (fuzzyErr) {
+    console.error('[RESOLVE_PRODUCT] fuzzy rpc error:', fuzzyErr.message);
+    return { resolved: null, alternatives: [], confidence: 0, resolution_type: 'unresolved' };
+  }
   if (!fuzzy || fuzzy.length === 0) {
     return { resolved: null, alternatives: [], confidence: 0, resolution_type: 'unresolved' };
   }
