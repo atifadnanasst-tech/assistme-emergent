@@ -1904,8 +1904,109 @@ function parseSparkResponse(text) {
 // Single source of truth for all read/write paths
 // Must match exactly how values are stored in product_vocabularies.normalised
 function normaliseVocabulary(v) {
-  return (v || '').toLowerCase().trim().replace(/\s+/g, ' ');
+  return (v || '').toLowerCase().trim().replace(/\s+/g, ' ').replace(/[^\p{L}\p{N}\s]/gu, '');
 }
+
+// ─────────────────────────────────────────────────────────────
+// Product Intelligence Engine
+// Pure deterministic resolver — single source of truth for all
+// product matching. Screens and routes call this only via API.
+// Never implement custom matching elsewhere. (INV-9)
+// ─────────────────────────────────────────────────────────────
+
+async function resolveProduct({ productName, customerId, organisationId }) {
+  if (!productName) return { resolved: null, alternatives: [], confidence: 0, resolution_type: 'unresolved' };
+
+  // Clamp input length to prevent pathological fuzzy scans
+  const cleanName = productName.trim().slice(0, 120);
+  const nameLower = normaliseVocabulary(cleanName);
+
+  // Step 1: exact match
+  const { data: exact } = await supabase
+    .from('products').select('id, name, selling_price, tax_rate, sku')
+    .eq('organisation_id', organisationId).eq('is_active', true)
+    .ilike('name', cleanName).limit(1);
+  if (exact?.length > 0) {
+    return { resolved: exact[0], alternatives: [], confidence: 1.0, resolution_type: 'exact' };
+  }
+
+  // Step 2: vocabulary table lookup (owner-confirmed aliases)
+  const { data: vocabRows } = await supabase
+    .from('product_vocabularies')
+    .select('product_id, match_strength, confirmed_count, products:product_id (id, name, selling_price, tax_rate, sku)')
+    .eq('organisation_id', organisationId)
+    .eq('normalised', nameLower)
+    .eq('is_active', true)
+    .order('confirmed_count', { ascending: false })
+    .order('match_strength', { ascending: false })
+    .limit(1);
+  if (vocabRows?.length > 0 && vocabRows[0].products) {
+    return { resolved: vocabRows[0].products, alternatives: [], confidence: 0.9, resolution_type: 'vocabulary' };
+  }
+
+  // Step 3: fuzzy/partial match with stable ordering + behavioral ranking
+  const { data: fuzzy } = await supabase
+    .from('products').select('id, name, selling_price, tax_rate, sku')
+    .eq('organisation_id', organisationId).eq('is_active', true)
+    .ilike('name', `%${cleanName}%`)
+    .order('name', { ascending: true })
+    .limit(10);
+  if (!fuzzy || fuzzy.length === 0) {
+    return { resolved: null, alternatives: [], confidence: 0, resolution_type: 'unresolved' };
+  }
+
+  const productIds = fuzzy.map(p => p.id);
+
+  // Guard: skip .in() query if productIds is empty (prevents Supabase error)
+  if (productIds.length === 0) {
+    return { resolved: null, alternatives: [], confidence: 0, resolution_type: 'unresolved' };
+  }
+
+  // TODO Phase 5: Replace live invoice aggregation below with precomputed
+  // customer_product_stats and organisation_product_stats tables
+  // to keep resolver latency deterministic at scale.
+
+  // Customer purchase history via invoices (capped at 50 for v1)
+  const { data: custInvoices } = await supabase
+    .from('invoices')
+    .select('id, invoice_items(product_id, quantity)')
+    .eq('organisation_id', organisationId)
+    .eq('customer_id', customerId)
+    .limit(50);
+
+  // Org-wide sales volume
+  const { data: orgItems } = await supabase
+    .from('invoice_items').select('product_id, quantity')
+    .eq('organisation_id', organisationId)
+    .in('product_id', productIds);
+
+  // Score: customer history 3x, org volume 1x
+  const custCounts = {};
+  (custInvoices || []).forEach(inv => {
+    (inv.invoice_items || []).forEach(item => {
+      if (productIds.includes(item.product_id))
+        custCounts[item.product_id] = (custCounts[item.product_id] || 0) + item.quantity;
+    });
+  });
+  const orgCounts = {};
+  (orgItems || []).forEach(r => {
+    orgCounts[r.product_id] = (orgCounts[r.product_id] || 0) + r.quantity;
+  });
+
+  const scored = fuzzy.map(p => ({
+    ...p,
+    score: (custCounts[p.id] || 0) * 3 + (orgCounts[p.id] || 0) * 1
+  })).sort((a, b) => b.score - a.score);
+
+  const confidence = scored.length === 1 ? 0.6 : 0.4;
+  return {
+    resolved: scored[0],
+    alternatives: scored.slice(1, 3),
+    confidence,
+    resolution_type: 'fuzzy'
+  };
+}
+
 
 // ─── POST /api/chat/:customer_id/spark ─────────────────────
 app.post('/api/chat/:customer_id/spark', async (c) => {
@@ -2131,79 +2232,7 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
       });
     } catch {}
 
-    // Product resolution: resolve each product name from the DB
-    // Build a map of product_name → { resolved, alternatives }
-    async function resolveProduct(productName, customerId) {
-      if (!productName) return { resolved: null, alternatives: [] };
-      const nameLower = normaliseVocabulary(productName);
-
-      // Step 1: exact match
-      const { data: exact } = await supabase
-        .from('products').select('id, name, selling_price, tax_rate, sku')
-        .eq('organisation_id', organisationId).eq('is_active', true)
-        .ilike('name', productName).limit(1);
-      if (exact?.length > 0) return { resolved: exact[0], alternatives: [] };
-
-      // Step 2: vocabulary table lookup
-      const { data: vocabRows } = await supabase
-        .from('product_vocabularies')
-        .select(`product_id, match_strength, confirmed_count, products:product_id (id, name, selling_price, tax_rate, sku)`)
-        .eq('organisation_id', organisationId)
-        .eq('normalised', nameLower)
-        .eq('is_active', true)
-        .order('confirmed_count', { ascending: false })
-        .order('match_strength', { ascending: false })
-        .limit(1);
-      if (vocabRows?.length > 0 && vocabRows[0].products) {
-        return { resolved: vocabRows[0].products, alternatives: [] };
-      }
-
-      // Step 3: fuzzy/partial match with ranking
-      const { data: fuzzy } = await supabase
-        .from('products').select('id, name, selling_price, tax_rate, sku')
-        .eq('organisation_id', organisationId).eq('is_active', true)
-        .ilike('name', `%${productName}%`).limit(10);
-      if (!fuzzy || fuzzy.length === 0) return { resolved: null, alternatives: [] };
-
-      const productIds = fuzzy.map(p => p.id);
-
-      // Customer purchase history via invoices (capped at 50 for v1)
-      const { data: custInvoices } = await supabase
-        .from('invoices')
-        .select('id, invoice_items(product_id, quantity)')
-        .eq('organisation_id', organisationId)
-        .eq('customer_id', customerId)
-        .limit(50);
-
-      // Org-wide sales volume
-      const { data: orgItems } = await supabase
-        .from('invoice_items').select('product_id, quantity')
-        .eq('organisation_id', organisationId)
-        .in('product_id', productIds);
-
-      // Score: customer history 3x, org volume 1x
-      const custCounts = {};
-      (custInvoices || []).forEach(inv => {
-        (inv.invoice_items || []).forEach(item => {
-          if (productIds.includes(item.product_id))
-            custCounts[item.product_id] = (custCounts[item.product_id] || 0) + item.quantity;
-        });
-      });
-      const orgCounts = {};
-      (orgItems || []).forEach(r => {
-        orgCounts[r.product_id] = (orgCounts[r.product_id] || 0) + r.quantity;
-      });
-
-      const scored = fuzzy.map(p => ({
-        ...p,
-        score: (custCounts[p.id] || 0) * 3 + (orgCounts[p.id] || 0) * 1
-      })).sort((a, b) => b.score - a.score);
-
-      return {
-        resolved: scored[0],
-        alternatives: scored.slice(1, 3)
-      };
-    }
+    // resolveProduct() is module-level — see Product Intelligence Engine section above
 
     // Routing: if we have ANY valid actions → always preview. Only clarify when zero actions.
     const hasActions = parsed.actions.length > 0;
@@ -2233,7 +2262,7 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
         let totalAmount = 0;
 
         for (const item of items) {
-          const { resolved, alternatives } = await resolveProduct(item.product_name, customerId);
+          const { resolved, alternatives } = await resolveProduct({ productName: item.product_name, customerId, organisationId });
           const unitPrice = resolved?.selling_price || item.unit_price || null;
           const qty = item.quantity || 1;
           const lineTotal = unitPrice ? unitPrice * qty : null;
@@ -3707,8 +3736,8 @@ app.get('/api/invoice/new', async (c) => {
 });
 
 // ─── GET /api/products/find ─────────────────────────────────
-// Exact name lookup — used by frontend before creating new product
-// Prevents duplicate product creation when owner types existing product name
+// DEPRECATED — use POST /api/products/resolve for full resolution
+// Kept for backward compatibility with existing callers
 app.get('/api/products/find', async (c) => {
   try {
     const auth = await authenticateChat(c);
@@ -3716,14 +3745,32 @@ app.get('/api/products/find', async (c) => {
     const { organisationId } = auth;
     const name = c.req.query('name')?.trim();
     if (!name) return c.json(null);
-    const { data } = await supabase
-      .from('products').select('id, name, selling_price, tax_rate')
-      .eq('organisation_id', organisationId).eq('is_active', true)
-      .ilike('name', name).limit(1).maybeSingle();
-    return c.json(data || null);
+    const result = await resolveProduct({ productName: name, customerId: null, organisationId });
+    return c.json(result.resolved || null);
   } catch (err) {
     console.error('[PRODUCTS/FIND] Error:', err);
     return c.json(null, 500);
+  }
+});
+
+// ─── POST /api/products/resolve ──────────────────────────────
+// Full Product Intelligence Engine endpoint
+// exact → vocabulary → fuzzy → behaviorally ranked
+// Returns: { resolved, alternatives, confidence, resolution_type }
+app.post('/api/products/resolve', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+    const body = await c.req.json();
+    const name = (body.name || '').trim();
+    const customerId = body.customer_id || null;
+    if (!name) return c.json({ error: 'name is required' }, 400);
+    const result = await resolveProduct({ productName: name, customerId, organisationId });
+    return c.json(result);
+  } catch (err) {
+    console.error('[PRODUCTS/RESOLVE] Error:', err);
+    return c.json({ error: 'internal_error' }, 500);
   }
 });
 
