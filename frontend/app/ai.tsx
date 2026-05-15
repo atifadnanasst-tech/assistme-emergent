@@ -17,6 +17,7 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { Audio } from 'expo-av';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import { authService } from '../lib/auth';
@@ -46,6 +47,7 @@ export default function AIScreen() {
   const [executingActions, setExecutingActions] = useState<Set<string>>(new Set());
   const [sentReminders, setSentReminders] = useState<Set<string>>(new Set());
   const [keyboardVisible, setKeyboardVisible] = useState(false);
+  const [aiRecording, setAiRecording] = useState<Audio.Recording | null>(null);
 
   const QUICK_PILLS = [
     { id: 'outstanding', icon: '💰', label: 'Outstanding', query: 'Show my total outstanding summary — total pending amount, top 5 defaulters, and overdue vs not-yet-due breakdown.' },
@@ -457,6 +459,43 @@ setSendingState('idle');
     }
   };
 
+  const handleAiMicPress = async () => {
+    try {
+      if (aiRecording) {
+        await aiRecording.stopAndUnloadAsync();
+        const uri = aiRecording.getURI();
+        setAiRecording(null);
+        if (uri) {
+          const fileName = `ai_audio_${Date.now()}.m4a`;
+          const token = await getToken();
+          const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+          const formData = new FormData();
+          formData.append('file', { uri, name: fileName, type: 'audio/x-m4a' } as any);
+          const res = await fetch(`${backendUrl}/api/upload`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${token}` },
+            body: formData,
+          });
+          if (res.ok) {
+            const data = await res.json();
+            handleSendDirect(`[Voice note: ${data.url}]`);
+          }
+        }
+      } else {
+        const { status } = await Audio.requestPermissionsAsync();
+        if (status !== 'granted') return;
+        await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
+        const { recording } = await Audio.Recording.createAsync(
+          Audio.RecordingOptionsPresets.HIGH_QUALITY
+        );
+        setAiRecording(recording);
+      }
+    } catch (e) {
+      console.error('AI mic error:', e);
+      setAiRecording(null);
+    }
+  };
+
   // ── Loading state ──────────────────────────────────────
   if (loading) {
     return (
@@ -552,6 +591,16 @@ onLayout={() => flatListRef.current?.scrollToEnd({ animated: false })}
           maxLength={2000}
           multiline
         />
+        <TouchableOpacity
+          onPress={handleAiMicPress}
+          style={[styles.sendButton, { marginRight: 6, backgroundColor: aiRecording ? '#e53935' : undefined }]}
+        >
+          <Ionicons
+            name={aiRecording ? 'stop' : 'mic'}
+            size={20}
+            color="#fff"
+          />
+        </TouchableOpacity>
         {inputText.trim().length > 0 ? (
           <TouchableOpacity
             style={styles.sendButton}
