@@ -89,3 +89,6 @@ frontend/assets/images/favicon.png
 frontend/package-lock.json
 frontend/.metro-cache/
 frontend/.metro-cache/
+.env.example
+yarn.lock
+test_output.log
