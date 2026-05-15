@@ -1126,11 +1126,24 @@ export default function CustomerChatScreen() {
 
   // ── AI Query handler ───────────────────────────────────────
   const handleAiQuery = async () => {
-    const text = aiQueryText.trim();
-    if (!text || aiQuerying || !conversationId) return;
+    const rawText = aiQueryText.trim();
+    if ((!rawText && !aiAttachment) || aiQuerying || !conversationId) return;
     Keyboard.dismiss();
     setAiQueryText('');
     setAiQuerying(true);
+
+    // Build query text — preserve both text and attachment context
+    let text = rawText;
+    if (!text && aiAttachment) {
+      text = aiAttachment.type === 'audio'
+        ? 'Analyze this voice note in the context of this customer.'
+        : aiAttachment.type === 'image'
+        ? 'Analyze this image in the context of this customer.'
+        : 'Analyze this document in the context of this customer.';
+    }
+    if (rawText && aiAttachment) {
+      text = rawText + '\n\n[Customer attachment: ' + aiAttachment.name + ']';
+    }
 
     // Optimistic: add owner's query locally
     const tempQId = `aiq-${Date.now()}`;
@@ -1164,8 +1177,9 @@ export default function CustomerChatScreen() {
         const respMsg: ChatMessage = {
           id: data.message_id || `air-${Date.now()}`, role: 'assistant', content: data.response,
           created_at: new Date().toISOString(), sender_type: 'ai',
-          visibility: 'owner_only', message_type: 'ai_response', card_type: null,
-          card_data: {}, preview_text: data.response?.substring(0, 50),
+          visibility: 'owner_only', message_type: data.message_type || 'ai_response',
+          card_type: data.card_type || null,
+          card_data: { shareable: data.shareable || false }, preview_text: data.response?.substring(0, 50),
         };
         setMessages(prev => [respMsg, ...prev]);
       } else {
@@ -1461,18 +1475,47 @@ export default function CustomerChatScreen() {
           </View>
         </View>
       );
-    } else if (item.message_type === 'ai_response') {
+    } else if (item.message_type === 'ai_response' || item.message_type === 'action_card') {
       // AI response — left-aligned with AI icon
+      const isActionCard = item.message_type === 'action_card' || item.card_data?.shareable === true || item.metadata?.shareable === true;
       content = (
         <View style={styles.incomingContainer}>
-          <View style={[styles.incomingBubble, { backgroundColor: '#F0FAF8', borderLeftWidth: 3, borderLeftColor: '#075E54' }]}>
+          <View style={[styles.incomingBubble, { backgroundColor: isActionCard ? '#FFF8F0' : '#F0FAF8', borderLeftWidth: 3, borderLeftColor: isActionCard ? '#E91E63' : '#075E54' }]}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-              <Ionicons name="sparkles" size={14} color="#075E54" />
-              <Text style={{ fontSize: 11, fontWeight: '700', color: '#075E54' }}>AI</Text>
+              <Ionicons name="sparkles" size={14} color={isActionCard ? '#E91E63' : '#075E54'} />
+              <Text style={{ fontSize: 11, fontWeight: '700', color: isActionCard ? '#E91E63' : '#075E54' }}>{isActionCard ? 'AI Draft' : 'AI'}</Text>
             </View>
             <Text style={styles.incomingText}>{item.content}</Text>
             <Text style={styles.incomingTime}>{formatTime(item.created_at)}</Text>
           </View>
+          {isActionCard && (
+            <View style={{ flexDirection: 'row', gap: 8, marginTop: 6, marginLeft: 4, marginBottom: 4 }}>
+              <TouchableOpacity
+                style={{ flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: '#075E54', borderRadius: 12, paddingHorizontal: 10, paddingVertical: 4 }}
+                onPress={() => {
+                  setInputText(item.content);
+                  setActiveTab('direct');
+                }}
+              >
+                <Ionicons name="chatbubble-outline" size={12} color="#075E54" />
+                <Text style={{ fontSize: 11, color: '#075E54', marginLeft: 4 }}>Use in Chat</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={{ flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: '#25D366', borderRadius: 12, paddingHorizontal: 10, paddingVertical: 4 }}
+                onPress={() => {
+                  const rawPhone = customer?.phone?.replace(/[^0-9]/g, '') || '';
+                  const phone = rawPhone.startsWith('91') ? rawPhone : '91' + rawPhone;
+                  const waUrl = phone
+                    ? 'https://wa.me/' + phone + '?text=' + encodeURIComponent(item.content)
+                    : 'https://wa.me/?text=' + encodeURIComponent(item.content);
+                  Linking.openURL(waUrl).catch(() => {});
+                }}
+              >
+                <Ionicons name="logo-whatsapp" size={12} color="#25D366" />
+                <Text style={{ fontSize: 11, color: '#25D366', marginLeft: 4 }}>WhatsApp</Text>
+              </TouchableOpacity>
+            </View>
+          )}
         </View>
       );
     } else if (item.role === 'system' || item.message_type === 'system_alert' || item.message_type === 'spark_clarify') {
@@ -1491,6 +1534,7 @@ export default function CustomerChatScreen() {
       item.message_type !== 'system_alert' &&
       item.message_type !== 'spark_clarify' &&
       item.message_type !== 'ai_response' &&
+      item.message_type !== 'action_card' &&
       item.message_type !== 'ai_query' &&
       (item.metadata?.message_type || item.message_type) !== 'image' &&
       (item.metadata?.message_type || item.message_type) !== 'audio';
@@ -1558,7 +1602,7 @@ export default function CustomerChatScreen() {
       return m.visibility === 'both' || m.message_type === 'invoice_card' || m.message_type === 'system_alert' || m.message_type === 'spark_clarify';
     } else {
       // AI: owner-only messages (pink strips, AI queries, AI responses)
-      return m.visibility === 'owner_only' || m.message_type === 'ai_query' || m.message_type === 'ai_response' || m.message_type === 'system_alert' || m.message_type === 'spark_clarify';
+      return m.visibility === 'owner_only' || m.message_type === 'ai_query' || m.message_type === 'ai_response' || m.message_type === 'action_card' || m.message_type === 'system_alert' || m.message_type === 'spark_clarify';
     }
   });
 
@@ -1684,99 +1728,81 @@ export default function CustomerChatScreen() {
       {/* Input bar — different for each tab */}
       {activeTab === 'broadcast' ? null : activeTab === 'ai' ? (
         /* AI Messages input */
-        <View style={[styles.inputBarWrapper, { paddingBottom: insets.bottom }]}>
-          {/* Intelligence Capsules */}
-          <View style={{ backgroundColor: '#FFF', paddingHorizontal: 12, paddingTop: 8 }}>
-            {/* Row 1 */}
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={{ paddingVertical: 4 }}
-            >
+        <View style={{ flex: 0 }}>
+          {/* PILLS — above input bar, outside inputBarWrapper */}
+          <View style={{ backgroundColor: '#FFF', borderTopWidth: 1, borderTopColor: '#E5E5E5', paddingHorizontal: 12, paddingTop: 6, paddingBottom: 2 }}>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingVertical: 3, gap: 6 }}>
               {CUSTOMER_AI_PILLS_ROW1.map(pill => (
-                <TouchableOpacity
-                  key={pill.id}
-                  onPress={() => sendCapsuleQuery(pill.query)}
-                  style={styles.capsulePill}
-                  activeOpacity={0.7}
-                >
-                  <Text style={{ fontSize: 13 }}>
-                    {pill.icon} {pill.label}
-                  </Text>
+                <TouchableOpacity key={pill.id} onPress={() => sendCapsuleQuery(pill.query)} style={styles.capsulePill} activeOpacity={0.7}>
+                  <Text style={{ fontSize: 11 }}>{pill.icon} {pill.label}</Text>
                 </TouchableOpacity>
               ))}
               <TouchableOpacity onPress={toggleCapsuleExpand} style={[styles.capsulePill, { paddingHorizontal: 10 }]}>
-                <Ionicons name={capsuleExpanded ? 'chevron-up' : 'chevron-down'} size={16} color="#075E54" />
+                <Ionicons name={capsuleExpanded ? 'chevron-up' : 'chevron-down'} size={14} color="#075E54" />
               </TouchableOpacity>
             </ScrollView>
-            
-            {/* Row 2 (conditional) */}
             {capsuleExpanded && (
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={{ paddingVertical: 4 }}
-              >
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingVertical: 3, gap: 6 }}>
                 {CUSTOMER_AI_PILLS_ROW2.map(pill => (
-                  <TouchableOpacity
-                    key={pill.id}
-                    onPress={() => sendCapsuleQuery(pill.query)}
-                    style={styles.capsulePill}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={{ fontSize: 13 }}>
-                      {pill.icon} {pill.label}
-                    </Text>
+                  <TouchableOpacity key={pill.id} onPress={() => sendCapsuleQuery(pill.query)} style={styles.capsulePill} activeOpacity={0.7}>
+                    <Text style={{ fontSize: 11 }}>{pill.icon} {pill.label}</Text>
                   </TouchableOpacity>
                 ))}
               </ScrollView>
             )}
           </View>
-
-          {aiQuerying && (
-            <View style={styles.sparkProcessingBar}>
-              <ActivityIndicator size="small" color="#075E54" />
-              <Text style={styles.sparkProcessingText}>AI is thinking...</Text>
+          {/* INPUT BAR — same shell as Direct Messages */}
+          <View style={[styles.inputBarWrapper, { paddingBottom: insets.bottom }]}>
+            {aiQuerying && (
+              <View style={styles.sparkProcessingBar}>
+                <ActivityIndicator size="small" color="#075E54" />
+                <Text style={styles.sparkProcessingText}>AI is thinking...</Text>
+              </View>
+            )}
+            {aiAttachment && (
+              <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 4, backgroundColor: '#F0F0F0' }}>
+                <Ionicons name={aiAttachment.type === 'audio' ? 'mic' : aiAttachment.type === 'image' ? 'image' : 'document'} size={16} color="#075E54" />
+                <Text style={{ fontSize: 12, color: '#333', marginLeft: 6, flex: 1 }} numberOfLines={1}>{aiAttachment.name}</Text>
+                <TouchableOpacity onPress={() => setAiAttachment(null)}>
+                  <Ionicons name="close-circle" size={18} color="#999" />
+                </TouchableOpacity>
+              </View>
+            )}
+            <View style={styles.inputRow}>
+              <View style={[styles.inputPill, styles.aiInputPill]}>
+                <TouchableOpacity style={styles.inputIconBtn}>
+                  <Ionicons name="sparkles" size={22} color="#075E54" />
+                </TouchableOpacity>
+                <TextInput
+                  style={styles.textInput}
+                  placeholder={`Ask about ${customer?.name || 'this customer'}...`}
+                  placeholderTextColor="#AAA"
+                  value={aiQueryText}
+                  onChangeText={setAiQueryText}
+                  multiline
+                  maxLength={2000}
+                />
+                <TouchableOpacity style={styles.inputIconBtn} onPress={handleAudioRecording}>
+                  <Ionicons name={isRecording ? 'stop-circle' : 'mic-outline'} size={22} color="#E91E63" />
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.inputIconBtn} onPress={handleOpenCamera}>
+                  <Ionicons name="camera-outline" size={22} color="#E91E63" />
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.inputIconBtn} onPress={handlePickGallery}>
+                  <Ionicons name="image-outline" size={22} color="#E91E63" />
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.inputIconBtn} onPress={handlePickDocument}>
+                  <Ionicons name="document-attach-outline" size={22} color="#E91E63" />
+                </TouchableOpacity>
+              </View>
+              <TouchableOpacity
+                style={[styles.sendBtn, { backgroundColor: '#E91E63' }]}
+                onPress={handleAiQuery}
+                disabled={aiQuerying || (aiQueryText.trim().length === 0 && !aiAttachment)}
+              >
+                {aiQuerying ? <ActivityIndicator size="small" color="#FFF" /> : <Ionicons name="send" size={20} color="#FFF" />}
+              </TouchableOpacity>
             </View>
-          )}
-          <View style={styles.inputRow}>
-            {/* Media Input Buttons */}
-            <TouchableOpacity style={styles.inputIconBtn} onPress={handleAudioRecording}>
-              <Ionicons name={isRecording ? 'stop-circle' : 'mic-outline'} size={22} color="#075E54" />
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.inputIconBtn} onPress={handleOpenCamera}>
-              <Ionicons name="camera-outline" size={22} color="#075E54" />
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.inputIconBtn} onPress={handlePickGallery}>
-              <Ionicons name="image-outline" size={22} color="#075E54" />
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.inputIconBtn} onPress={handlePickDocument}>
-              <Ionicons name="document-attach-outline" size={22} color="#075E54" />
-            </TouchableOpacity>
-
-            <View style={[styles.inputPill, styles.aiInputPill]}>
-              <Ionicons name="sparkles" size={20} color="#075E54" style={{ marginLeft: 6 }} />
-              <TextInput
-                style={styles.textInput}
-                placeholder={`Ask about ${customer?.name || 'this customer'}...`}
-                placeholderTextColor="#075E54"
-                value={aiQueryText}
-                onChangeText={setAiQueryText}
-                multiline
-                maxLength={2000}
-              />
-            </View>
-            <TouchableOpacity
-              style={[styles.sendBtn, styles.sparkSendBtn]}
-              onPress={handleAiQuery}
-              disabled={aiQuerying || aiQueryText.trim().length === 0}
-            >
-              {aiQuerying ? (
-                <ActivityIndicator size="small" color="#FFF" />
-              ) : (
-                <Ionicons name="send" size={20} color="#FFF" />
-              )}
-            </TouchableOpacity>
           </View>
         </View>
       ) : (

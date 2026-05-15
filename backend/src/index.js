@@ -3415,7 +3415,9 @@ RULES:
 - Amounts in INR (₹), Indian format: ₹1,20,000.
 - Never invent numbers. If data is empty, say "No records found."
 - Respond in ${language}. Be concise and actionable.
-- Today's date: ${new Date().toISOString().split('T')[0]}`;
+- Today's date: ${new Date().toISOString().split('T')[0]}
+- If your response contains a message intended to be sent TO the customer (a payment reminder, follow-up message, reorder request, apology, delivery update, or any customer-facing communication), append this exact marker on a new line at the very end: [ACTION_CARD:draft_message]
+- Do NOT include this marker for analytical responses, summaries, internal insights, data breakdowns, or explanations.`;
 
     let messages = [
       { role: 'system', content: systemPrompt },
@@ -3464,15 +3466,32 @@ RULES:
       responseText = choice.message.content || 'No response';
     }
 
+    // Detect and strip ACTION_CARD marker — backend is semantic authority
+    const isActionCard = responseText.includes('[ACTION_CARD:draft_message]');
+    const cleanResponse = responseText.replace(/\[ACTION_CARD:[^\]]+\]/g, '').trim();
+
     // Save AI response as owner-only message
     const { data: savedMsg } = await supabase.from('messages').insert({
       organisation_id: organisationId, conversation_id: conversationId,
-      role: 'assistant', content: responseText,
-      metadata: { sender_type: 'ai', visibility: 'owner_only', message_type: 'ai_response', read_by_owner: true, preview_text: responseText.substring(0, 50) },
+      role: 'assistant', content: cleanResponse,
+      metadata: {
+        sender_type: 'ai', visibility: 'owner_only',
+        message_type: isActionCard ? 'action_card' : 'ai_response',
+        card_type: isActionCard ? 'draft_message' : null,
+        shareable: isActionCard,
+        read_by_owner: true,
+        preview_text: cleanResponse.substring(0, 50),
+      },
       tokens_input: 0, tokens_output: 0,
     }).select('id').single();
 
-    return c.json({ message_id: savedMsg?.id, response: responseText });
+    return c.json({
+      message_id: savedMsg?.id,
+      response: cleanResponse,
+      message_type: isActionCard ? 'action_card' : 'ai_response',
+      card_type: isActionCard ? 'draft_message' : null,
+      shareable: isActionCard,
+    });
 
   } catch (error) {
     console.error('POST /api/chat/ai-query error:', error);
