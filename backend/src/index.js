@@ -3325,8 +3325,10 @@ async function executeAiQueryTool(toolName, args, supabase, organisationId, cust
       return { name: cust?.name, phone: cust?.phone, outstanding_balance: cust?.outstanding_balance || 0, health_score: cust?.custom_fields?.health_score, tags: tagNames };
     }
     case 'get_customer_invoices': {
+      const includeHistorical = args.include_historical === true;
       let q = supabase.from('invoices').select('invoice_number, status, total_amount, amount_paid, amount_due, issue_date, due_date')
         .eq('organisation_id', organisationId).eq('customer_id', customerId).order('issue_date', { ascending: false }).limit(20);
+      if (!includeHistorical) q = q.eq('is_historical', false);
       if (args.status === 'paid') q = q.eq('status', 'paid');
       else if (args.status === 'unpaid') q = q.neq('status', 'paid');
       else if (args.status === 'overdue') q = q.neq('status', 'paid').lt('due_date', new Date().toISOString().split('T')[0]);
@@ -3360,7 +3362,7 @@ async function executeAiQueryTool(toolName, args, supabase, organisationId, cust
       const months = args.months || 6;
       const since = new Date(); since.setMonth(since.getMonth() - months);
       const { data: invs } = await supabase.from('invoices').select('total_amount, amount_paid, status, issue_date')
-        .eq('organisation_id', organisationId).eq('customer_id', customerId).gte('issue_date', since.toISOString().split('T')[0]);
+        .eq('organisation_id', organisationId).eq('customer_id', customerId).eq('is_historical', false).gte('issue_date', since.toISOString().split('T')[0]);
       const totalPurchases = (invs || []).reduce((s, i) => s + (i.total_amount || 0), 0);
       const totalPaid = (invs || []).reduce((s, i) => s + (i.amount_paid || 0), 0);
       const { data: cust } = await supabase.from('customers').select('outstanding_balance').eq('id', customerId).single();
@@ -4850,7 +4852,7 @@ async function jobOverdueEscalation(orgId, userId) {
   const today = new Date().toISOString().split('T')[0];
   let fired = 0;
   const { data: invoices } = await supabase.from('invoices').select('id, invoice_number, total_amount, due_date, customer_id')
-    .eq('organisation_id', orgId).not('status', 'in', '("paid","cancelled")').lt('due_date', today).is('deleted_at', null);
+    .eq('organisation_id', orgId).eq('is_historical', false).not('status', 'in', '("paid","cancelled")').lt('due_date', today).is('deleted_at', null);
   for (const inv of (invoices || [])) {
     const { data: cust } = await supabase.from('customers').select('name').eq('id', inv.customer_id).maybeSingle();
     const convId = await getConvForCustomer(orgId, userId, inv.customer_id);
