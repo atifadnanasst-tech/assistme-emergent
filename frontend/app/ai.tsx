@@ -48,18 +48,20 @@ export default function AIScreen() {
   const [keyboardVisible, setKeyboardVisible] = useState(false);
 
   const QUICK_PILLS = [
-    { id: 'outstanding', icon: '💰', label: 'Outstanding', query: 'Show my outstanding summary — total pending, top defaulters, and overdue vs not due breakdown' },
-    { id: 'collections', icon: '📥', label: 'Collections Today', query: 'How much did I collect today? Compare with yesterday.' },
-    { id: 'deliveries', icon: '📦', label: 'Deliveries Due', query: 'What deliveries are due today? Any late deliveries?' },
-    { id: 'quotes', icon: '📄', label: 'Expiring Quotes', query: 'Which quotes are about to expire? Who needs follow-up?' },
-    { id: 'bank', icon: '🏦', label: 'Bank Balance', query: 'Show my bank balance snapshot — all accounts and total cash position' },
-    { id: 'sales', icon: '📊', label: 'Sales Today', query: 'What are my sales today? Revenue and order count.' },
-    { id: 'repeat', icon: '🔁', label: 'Follow Up', query: 'Which repeat customers have not ordered recently? Any high-value inactive customers to follow up with?' },
-    { id: 'risk', icon: '⚠️', label: 'Risk Alerts', query: 'Any payment risk alerts? Customers delaying payments or dropping order frequency?' },
-    { id: 'stock', icon: '📦', label: 'Low Stock', query: 'Which products are below reorder level?' },
-    { id: 'insight', icon: '🧠', label: 'AI Insight', query: 'Give me your top business insight based on my data — any patterns, suggestions, or opportunities?' },
-    { id: 'tasks', icon: '📅', label: "Today's Tasks", query: 'What are my tasks for today? Deliveries, follow-ups, reminders.' },
-    { id: 'trends', icon: '📈', label: 'Weekly Trend', query: 'Show me weekly sales trend and collection trend for the past month.' },
+    { id: 'outstanding', icon: '💰', label: 'Outstanding', query: 'Show my total outstanding summary — total pending amount, top 5 defaulters, and overdue vs not-yet-due breakdown.' },
+    { id: 'collections', icon: '📥', label: 'Collections Today', query: 'How much did I collect today? List each payment received and compare with yesterday.' },
+    { id: 'sales', icon: '📊', label: 'Sales Today', query: 'What are my sales today? Total revenue, number of orders, and top products sold.' },
+    { id: 'deliveries', icon: '📦', label: 'Deliveries Due', query: 'What deliveries are due today? Are any deliveries late or pending confirmation?' },
+    { id: 'risk', icon: '⚠️', label: 'Risk Alerts', query: 'Any payment risk alerts today? Customers delaying payments, dropping order frequency, or showing unusual silence?' },
+    { id: 'followup', icon: '🔁', label: 'Follow Up', query: 'Which high-value customers have not ordered recently? Who should I reach out to today?' },
+    { id: 'quotes', icon: '📄', label: 'Expiring Quotes', query: 'Which quotes are about to expire or already expired? Who needs urgent follow-up?' },
+    { id: 'insight', icon: '🧠', label: 'AI Insight', query: 'Give me your single best business insight based on my data right now — a pattern, opportunity, or risk I should act on.' },
+    { id: 'trend', icon: '📈', label: 'Weekly Trend', query: 'Show me weekly sales trend and collection trend for the past 4 weeks. Any direction I should know about?' },
+    { id: 'bank', icon: '🏦', label: 'Bank Position', query: 'Show my current bank position — all accounts and total available cash.' },
+    { id: 'tasks', icon: '📅', label: "Today's Tasks", query: 'What are all my tasks for today? Deliveries, follow-ups, reminders, and pending actions.' },
+    { id: 'stock', icon: '📦', label: 'Low Stock', query: 'Which products are running low or below reorder level? What should I restock urgently?' },
+    { id: 'payables', icon: '🏭', label: 'Supplier Payables', query: 'How much do I owe my suppliers? Show total payable, overdue payables, and who I need to pay most urgently.' },
+    { id: 'festival', icon: '🎉', label: 'Festival Demand', query: 'Any upcoming festivals or seasonal events I should prepare stock for? What products historically sell more during this period?' },
   ];
 
   const sendQuickQuery = (query: string) => {

@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View, Text, Image, StyleSheet, TouchableOpacity, FlatList, TextInput,
   ActivityIndicator, Alert, Linking, KeyboardAvoidingView, Platform,
-  Keyboard, Modal, Pressable, ScrollView, InteractionManager,
+  Keyboard, Modal, Pressable, ScrollView, InteractionManager, LayoutAnimation,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
@@ -14,6 +14,24 @@ import { authService } from '../../lib/auth';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import { Audio } from 'expo-av';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+// ── Customer AI Pills ────────────────────────────────────────
+const CUSTOMER_AI_PILLS_ROW1 = [
+  { id: 'summary', icon: '🧠', label: 'Summary', query: 'Give me a complete summary of this customer — purchases, payments, behavior, relationship health, and current outstanding.' },
+  { id: 'outstanding', icon: '💰', label: 'Outstanding', query: 'What is the current outstanding balance? Show all unpaid and partially paid invoices with amounts and how many days overdue.' },
+  { id: 'payments', icon: '💳', label: 'Payment Pattern', query: 'How does this customer pay? On time, delayed, or irregular? Show average days to pay and any pattern I should know.' },
+  { id: 'reminder', icon: '💬', label: 'Send Reminder', query: 'Draft a payment reminder message for this customer in their preferred language and tone. Make it polite, firm, and natural.' },
+  { id: 'beforecall', icon: '📞', label: 'Before I Call', query: 'I am about to call this customer. Give me a 5-point brief — outstanding amount, last order, payment reliability, last discussion topic, and one thing I should bring up.' },
+];
+
+const CUSTOMER_AI_PILLS_ROW2 = [
+  { id: 'reorder', icon: '🔁', label: 'Reorder Due?', query: 'Is this customer due for a reorder based on their purchase rhythm? What do they usually buy, how often, and when did they last order?' },
+  { id: 'risk', icon: '⚠️', label: 'Risk Check', query: 'Any payment risk or relationship risk with this customer? Any silence anomalies, declining orders, or warning signs I should act on?' },
+  { id: 'purchases', icon: '🛍️', label: 'Purchase History', query: 'What has this customer bought over time? Show full product breakdown, quantities, totals, and any purchase trends.' },
+  { id: 'tone', icon: '🗣️', label: 'Tone Profile', query: 'How does this customer communicate? What tone, language, and style do they prefer? What approach works best with them?' },
+  { id: 'lastchat', icon: '📖', label: 'Last Chat', query: 'Summarize the last meaningful interaction with this customer. What was discussed, what was decided, and what is still pending?' },
+];
 
 // ── Types ────────────────────────────────────────────────────
 interface CustomerData {
@@ -108,6 +126,13 @@ export default function CustomerChatScreen() {
   // AI query
   const [aiQueryText, setAiQueryText] = useState('');
   const [aiQuerying, setAiQuerying] = useState(false);
+  const [aiAttachment, setAiAttachment] = useState<{
+    type: 'audio' | 'image' | 'file';
+    url: string;
+    mime_type: string;
+    name: string;
+  } | null>(null);
+  const [capsuleExpanded, setCapsuleExpanded] = useState(false);
   // Pagination
   const [hasMore, setHasMore] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
@@ -269,7 +294,14 @@ export default function CustomerChatScreen() {
       const uploaded = await uploadAttachment(asset.uri, asset.fileName || 'image.jpg', asset.mimeType || 'image/jpeg', uploadId);
       if (uploaded) {
         setAttachmentPreview(prev => prev?.upload_id === uploadId ? { ...prev, url: uploaded.url, storage_path: uploaded.storage_path, upload_status: 'ready' } : prev);
-        if (sparkMode) {
+        if (activeTab === 'ai') {
+          setAiAttachment({
+            type: 'image',
+            url: uploaded.url,
+            mime_type: asset.mimeType || 'image/jpeg',
+            name: asset.fileName || 'image.jpg',
+          });
+        } else if (sparkMode) {
           attachUploadToSpark(uploaded, asset.fileName || 'image.jpg', asset.mimeType || 'image/jpeg');
           setSparkWorkflowState('attachment_ready');
         }
@@ -324,7 +356,14 @@ export default function CustomerChatScreen() {
       const uploaded = await uploadAttachment(asset.uri, asset.fileName || 'photo.jpg', asset.mimeType || 'image/jpeg', uploadId);
       if (uploaded) {
         setAttachmentPreview(prev => prev?.upload_id === uploadId ? { ...prev, url: uploaded.url, storage_path: uploaded.storage_path, upload_status: 'ready' } : prev);
-        if (sparkMode) {
+        if (activeTab === 'ai') {
+          setAiAttachment({
+            type: 'image',
+            url: uploaded.url,
+            mime_type: asset.mimeType || 'image/jpeg',
+            name: asset.fileName || 'photo.jpg',
+          });
+        } else if (sparkMode) {
           attachUploadToSpark(uploaded, asset.fileName || 'photo.jpg', asset.mimeType || 'image/jpeg');
           setSparkWorkflowState('attachment_ready');
         }
@@ -372,7 +411,14 @@ export default function CustomerChatScreen() {
       const uploaded = await uploadAttachment(asset.uri, asset.name, asset.mimeType || 'application/octet-stream', uploadId);
       if (uploaded) {
         setAttachmentPreview(prev => prev?.upload_id === uploadId ? { ...prev, url: uploaded.url, storage_path: uploaded.storage_path, upload_status: 'ready' } : prev);
-        if (sparkMode) {
+        if (activeTab === 'ai') {
+          setAiAttachment({
+            type: 'file',
+            url: uploaded.url,
+            mime_type: asset.mimeType || 'application/octet-stream',
+            name: asset.name,
+          });
+        } else if (sparkMode) {
           attachUploadToSpark(uploaded, asset.name, asset.mimeType || 'application/octet-stream');
           setSparkWorkflowState('attachment_ready');
         }
@@ -413,7 +459,14 @@ export default function CustomerChatScreen() {
           const uploaded = await uploadAttachment(uri, fileName, 'audio/x-m4a', uploadId);
           if (uploaded) {
             setAttachmentPreview(prev => prev?.upload_id === uploadId ? { ...prev, url: uploaded.url, storage_path: uploaded.storage_path, upload_status: 'ready' } : prev);
-            if (sparkMode) {
+            if (activeTab === 'ai') {
+              setAiAttachment({
+                type: 'audio',
+                url: uploaded.url,
+                mime_type: 'audio/x-m4a',
+                name: fileName,
+              });
+            } else if (sparkMode) {
               attachUploadToSpark(uploaded, fileName, 'audio/x-m4a');
               setSparkWorkflowState('attachment_ready');
             }
@@ -1089,6 +1142,10 @@ export default function CustomerChatScreen() {
     };
     setMessages(prev => [queryMsg, ...prev]);
 
+    // Capture attachment before clearing
+    const capturedAttachment = aiAttachment;
+    setAiAttachment(null);
+
     try {
       const token = await getToken();
       if (!token) return;
@@ -1096,7 +1153,11 @@ export default function CustomerChatScreen() {
       const res = await fetch(`${backendUrl}/api/chat/${customer_id}/ai-query`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: text, conversation_id: conversationId }),
+        body: JSON.stringify({ 
+          query: text, 
+          conversation_id: conversationId,
+          attachment: capturedAttachment || null,
+        }),
       });
       if (res.ok) {
         const data = await res.json();
@@ -1114,6 +1175,51 @@ export default function CustomerChatScreen() {
       Alert.alert('Error', 'AI query failed.');
     } finally {
       setAiQuerying(false);
+    }
+  };
+
+  const sendCapsuleQuery = (query: string) => {
+    if (aiQuerying || !conversationId) return;
+    setAiQueryText(query);
+    setTimeout(() => {
+      handleAiQuery();
+    }, 50);
+  };
+
+  const toggleCapsuleExpand = () => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setCapsuleExpanded(prev => !prev);
+  };
+
+  // Auto-brief on AI tab open (once per day)
+  useEffect(() => {
+    if (activeTab === 'ai' && customer_id && conversationId) {
+      checkAndSendAutoBrief();
+    }
+  }, [activeTab, customer_id, conversationId]);
+
+  const checkAndSendAutoBrief = async () => {
+    if (!customer_id || !conversationId) return;
+    try {
+      const today = new Date().toISOString().split('T')[0];
+      const storageKey = `ai_brief_${customer_id}_${today}`;
+      
+      // Check AsyncStorage
+      const briefSent = await AsyncStorage.getItem(storageKey);
+      if (briefSent) return; // Already sent today
+      
+      // Check message count in AI thread today
+      const aiMsgs = messages.filter(m => m.message_type === 'ai_query' || m.message_type === 'ai_response');
+      if (aiMsgs.length >= 2) return; // Thread already active
+      
+      // Send auto-brief
+      await AsyncStorage.setItem(storageKey, '1');
+      setAiQueryText('Give me a quick brief on this customer before I start. Key facts only — outstanding balance, last order date, payment reliability, and one thing I should act on today.');
+      setTimeout(() => {
+        handleAiQuery();
+      }, 100);
+    } catch (err) {
+      console.error('Auto-brief error:', err);
     }
   };
 
@@ -1579,6 +1685,54 @@ export default function CustomerChatScreen() {
       {activeTab === 'broadcast' ? null : activeTab === 'ai' ? (
         /* AI Messages input */
         <View style={[styles.inputBarWrapper, { paddingBottom: insets.bottom }]}>
+          {/* Intelligence Capsules */}
+          <View style={{ backgroundColor: '#FFF', paddingHorizontal: 12, paddingTop: 8 }}>
+            {/* Row 1 */}
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={{ paddingVertical: 4 }}
+            >
+              {CUSTOMER_AI_PILLS_ROW1.map(pill => (
+                <TouchableOpacity
+                  key={pill.id}
+                  onPress={() => sendCapsuleQuery(pill.query)}
+                  style={styles.capsulePill}
+                  activeOpacity={0.7}
+                >
+                  <Text style={{ fontSize: 13 }}>
+                    {pill.icon} {pill.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+              <TouchableOpacity onPress={toggleCapsuleExpand} style={[styles.capsulePill, { paddingHorizontal: 10 }]}>
+                <Ionicons name={capsuleExpanded ? 'chevron-up' : 'chevron-down'} size={16} color="#075E54" />
+              </TouchableOpacity>
+            </ScrollView>
+            
+            {/* Row 2 (conditional) */}
+            {capsuleExpanded && (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={{ paddingVertical: 4 }}
+              >
+                {CUSTOMER_AI_PILLS_ROW2.map(pill => (
+                  <TouchableOpacity
+                    key={pill.id}
+                    onPress={() => sendCapsuleQuery(pill.query)}
+                    style={styles.capsulePill}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={{ fontSize: 13 }}>
+                      {pill.icon} {pill.label}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            )}
+          </View>
+
           {aiQuerying && (
             <View style={styles.sparkProcessingBar}>
               <ActivityIndicator size="small" color="#075E54" />
@@ -1586,6 +1740,20 @@ export default function CustomerChatScreen() {
             </View>
           )}
           <View style={styles.inputRow}>
+            {/* Media Input Buttons */}
+            <TouchableOpacity style={styles.inputIconBtn} onPress={handleAudioRecording}>
+              <Ionicons name={isRecording ? 'stop-circle' : 'mic-outline'} size={22} color="#075E54" />
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.inputIconBtn} onPress={handleOpenCamera}>
+              <Ionicons name="camera-outline" size={22} color="#075E54" />
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.inputIconBtn} onPress={handlePickGallery}>
+              <Ionicons name="image-outline" size={22} color="#075E54" />
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.inputIconBtn} onPress={handlePickDocument}>
+              <Ionicons name="document-attach-outline" size={22} color="#075E54" />
+            </TouchableOpacity>
+
             <View style={[styles.inputPill, styles.aiInputPill]}>
               <Ionicons name="sparkles" size={20} color="#075E54" style={{ marginLeft: 6 }} />
               <TextInput
@@ -2495,6 +2663,15 @@ const styles = StyleSheet.create({
   },
   aiInputPill: {
     borderWidth: 1.5, borderColor: '#00796B', backgroundColor: '#E0F2F1',
+  },
+  capsulePill: {
+    backgroundColor: '#F0FAF8',
+    borderRadius: 20,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    marginRight: 8,
+    borderWidth: 1,
+    borderColor: '#B3E5DB',
   },
   sparkIndicator: {
     flexDirection: 'row', alignItems: 'center', backgroundColor: '#E8F5E9',
