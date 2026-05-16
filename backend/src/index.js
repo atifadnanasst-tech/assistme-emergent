@@ -3496,16 +3496,88 @@ app.post('/api/chat/:customer_id/ai-query', async (c) => {
     const client = getOpenAI();
     if (!client) return c.json({ error: 'ai_error', message: 'AI not configured' }, 500);
 
-    const systemPrompt = `You are a data assistant for an Indian MSME trader. You answer questions about customer "${customer.name}".
-RULES:
-- ALWAYS call a tool first. NEVER guess financial data.
+    // Language name map — ISO code to full name + script for GPT clarity
+    const LANGUAGE_NAMES = {
+      'ur': 'Urdu (written in Arabic/Nastaliq script only, never Devanagari)',
+      'hi': 'Hindi (written in Devanagari script only)',
+      'en': 'English',
+      'ar': 'Arabic',
+      'bn': 'Bengali',
+      'pa': 'Punjabi',
+      'gu': 'Gujarati',
+      'mr': 'Marathi',
+      'ta': 'Tamil',
+      'te': 'Telugu',
+      'kn': 'Kannada',
+      'ml': 'Malayalam',
+    };
+    const languageName = LANGUAGE_NAMES[language] || language;
+
+    // Fetch business profile for owner identity injection in drafts
+    const { data: bizProfile } = await supabase
+      .from('business_profiles')
+      .select('business_name, phone, email')
+      .eq('organisation_id', organisationId)
+      .eq('is_active', true)
+      .order('is_default', { ascending: false })
+      .limit(1)
+      .single();
+
+    const ownerName = bizProfile?.business_name || null;
+    const ownerPhone = bizProfile?.phone || null;
+
+    // Fetch customer language preference
+    const { data: custLangData } = await supabase
+      .from('customers')
+      .select('custom_fields')
+      .eq('id', customerId)
+      .single();
+    const customerLanguage = custLangData?.custom_fields?.language || null;
+    const customerLanguageName = customerLanguage
+      ? (LANGUAGE_NAMES[customerLanguage] || customerLanguage)
+      : null;
+
+    // Build owner signature for customer-facing drafts
+    const ownerSignature = ownerName
+      ? `${ownerName}${ownerPhone ? '\n' + ownerPhone : ''}`
+      : null;
+
+    const systemPrompt = `You are a business intelligence assistant for an Indian MSME trader. You answer questions about customer "${customer.name}".
+
+== LANGUAGE POLICY (non-negotiable) ==
+Owner-facing responses (analysis, briefs, summaries, insights): MUST be in ${languageName}. Use that script exclusively. Never switch scripts.
+Customer-facing draft messages (reminders, follow-ups, WhatsApp messages): ${customerLanguageName ? `Use ${customerLanguageName} — this customer's confirmed preferred language.` : `Customer language not set. Ask the owner which language to use before drafting. Do not guess or assume.`}
+Fallback to English only if the target language cannot be rendered.
+
+== CAPABILITY REGISTRY (available business data) ==
+This customer's data includes:
+- Invoices: issue dates, due dates, amounts, products, quantities, status (earliest invoice date = relationship start date)
+- Purchase history: products bought, order dates, order totals, quantities per product
+- Payment records: payments received, payment dates, amounts, average payment delay
+- Outstanding balance: current amount owed by this customer
+- Reminders: scheduled and past reminders for this customer
+- Message history: past conversations with this customer
+Use this knowledge to infer answers to any owner query about this customer.
+
+== DATA RULES ==
+- ALWAYS call a tool first. NEVER guess or invent financial data.
 - After receiving tool results, write a plain-language answer using ONLY the returned data.
 - Amounts in INR (₹), Indian format: ₹1,20,000.
-- Never invent numbers. If data is empty, say "No records found."
-- You MUST respond in ${language} language regardless of what language the query is written in. Never respond in English if ${language} is not English. Be concise and actionable.
+- Never invent numbers. If data is empty, say so clearly.
 - Today's date: ${new Date().toISOString().split('T')[0]}
-- If your response contains a message intended to be sent TO the customer (a payment reminder, follow-up message, reorder request, apology, delivery update, or any customer-facing communication), append this exact marker on a new line at the very end: [ACTION_CARD:draft_message]
-- Do NOT include this marker for analytical responses, summaries, internal insights, data breakdowns, or explanations.`;
+
+== OWNER BUSINESS PROFILE ==
+Business name: ${ownerName || 'Not configured — owner must set up business profile'}
+Phone: ${ownerPhone || 'Not configured'}
+
+== DRAFT MESSAGE RULES ==
+- NEVER use placeholders like [Your Name], [Company Name], or [Contact Number] in drafts.
+- ${ownerSignature ? `Always sign customer-facing drafts with:\n${ownerSignature}` : `Business profile not set up. Tell the owner to configure their business profile before drafts can be signed correctly.`}
+- If customer language is unknown, ask the owner which language to use. Do not draft in any language without confirmation.
+
+== ACTION CARD RULES ==
+- Append [ACTION_CARD:draft_message] ONLY when your response is a message intended to be sent TO the customer (payment reminder, follow-up, reorder request, apology, delivery update).
+- NEVER append this marker for: analytical responses, owner briefs, summaries, data breakdowns, "Before I Call" briefs, internal insights, or any content the owner reads for themselves.`;
 
     // Build user message — multimodal if image attachment present
     // attachmentRaw already read above — do not re-read body.attachment
