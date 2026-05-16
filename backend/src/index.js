@@ -3389,21 +3389,109 @@ app.post('/api/chat/:customer_id/ai-query', async (c) => {
     if (!customer) return c.json({ error: 'customer_not_found' }, 404);
 
     const body = await c.req.json();
-    const query = body.query?.trim() || (body.forwarded_attachment ? 'Extract product names, quantities and prices from this attachment and create an invoice.' : '');
     const conversationId = body.conversation_id;
-    if (!query) return c.json({ error: 'empty_query' }, 400);
     if (!conversationId) return c.json({ error: 'missing_conversation_id' }, 400);
 
     // Get owner's preferred language
     const language = auth.primaryLanguage || 'en';
 
+    // Read attachment early — needed before empty_query guard for audio
+    const attachmentRaw = body.attachment || null;
+
+    // Determine input modality
+    let inputModality = 'text';
+    if (attachmentRaw) {
+      if (attachmentRaw.type === 'audio' || attachmentRaw.mime_type?.startsWith('audio')) inputModality = 'audio';
+      else if (attachmentRaw.type === 'image' || attachmentRaw.mime_type?.startsWith('image')) inputModality = 'image';
+      else if (attachmentRaw.type === 'file') inputModality = 'document';
+    }
+
+    // Whisper transcription for audio attachments
+    let audioTranscript = '';
+    if (inputModality === 'audio' && attachmentRaw?.url) {
+      try {
+        const whisperClient = getOpenAI();
+        if (whisperClient) {
+          const fetchController = new AbortController();
+          const fetchTimeout = setTimeout(() => fetchController.abort(), 10000);
+          try {
+            const audioRes = await fetch(attachmentRaw.url, { signal: fetchController.signal });
+            if (audioRes.ok) {
+              const audioBuffer = await audioRes.arrayBuffer();
+              if (audioBuffer.byteLength <= 8 * 1024 * 1024) {
+                const { toFile } = await import('openai');
+                const audioFile = await toFile(
+                  Buffer.from(audioBuffer),
+                  attachmentRaw.name || 'audio.m4a',
+                  { type: attachmentRaw.mime_type || 'audio/m4a' }
+                );
+                const whisperController = new AbortController();
+                const whisperTimeout = setTimeout(() => whisperController.abort(), 30000);
+                try {
+                  const transcription = await whisperClient.audio.transcriptions.create({
+                    model: 'whisper-1',
+                    file: audioFile,
+                  }, { signal: whisperController.signal });
+                  audioTranscript = transcription.text?.trim() || '';
+                } finally {
+                  clearTimeout(whisperTimeout);
+                }
+              }
+            }
+          } finally {
+            clearTimeout(fetchTimeout);
+          }
+        }
+      } catch (whisperErr) {
+        console.error('AI query Whisper transcription failed:', whisperErr.message);
+      }
+    }
+
+    // Build effective query — transcript overrides empty text for audio
+    const rawQuery = body.query?.trim() || '';
+    let effectiveQuery = rawQuery;
+    if (inputModality === 'audio') {
+      if (audioTranscript) {
+        effectiveQuery = audioTranscript;
+        if (rawQuery) effectiveQuery = rawQuery + '\n\n[Voice note transcript: ' + audioTranscript + ']';
+      } else if (!rawQuery) {
+        effectiveQuery = 'Owner sent a voice note but transcription failed. Ask them to type their question.';
+      }
+    } else if (!rawQuery && attachmentRaw) {
+      effectiveQuery = attachmentRaw.type === 'image'
+        ? 'Analyze this image in the context of this customer.'
+        : 'Analyze this document in the context of this customer.';
+      if (rawQuery) effectiveQuery = rawQuery + '\n\n[Customer attachment: ' + attachmentRaw.name + ']';
+    }
+
+    if (!effectiveQuery) return c.json({ error: 'empty_query' }, 400);
+
+    // canonical_text = faithful extraction (transcript for audio, raw text for others)
+    const canonicalText = inputModality === 'audio'
+      ? (audioTranscript || rawQuery || null)
+      : (rawQuery || null);
+
+    // UI display content — audio shows voice note label
+    const displayContent = inputModality === 'audio'
+      ? (rawQuery || '\ud83c\udfa4 Voice note')
+      : effectiveQuery;
+
     // Save owner's query as owner-only message
     await supabase.from('messages').insert({
       organisation_id: organisationId, conversation_id: conversationId,
-      role: 'user', content: query,
-      metadata: { sender_type: 'owner', visibility: 'owner_only', message_type: 'ai_query', read_by_owner: true, preview_text: query.substring(0, 50) },
+      role: 'user', content: displayContent,
+      canonical_text: canonicalText,
+      input_modality: inputModality,
+      metadata: {
+        sender_type: 'owner', visibility: 'owner_only', message_type: 'ai_query',
+        read_by_owner: true, preview_text: displayContent.substring(0, 50),
+        attachment: attachmentRaw || undefined,
+      },
       tokens_input: 0, tokens_output: 0,
     });
+
+    // Use effectiveQuery for AI reasoning
+    const query = effectiveQuery;
 
     const client = getOpenAI();
     if (!client) return c.json({ error: 'ai_error', message: 'AI not configured' }, 500);
@@ -3420,11 +3508,11 @@ RULES:
 - Do NOT include this marker for analytical responses, summaries, internal insights, data breakdowns, or explanations.`;
 
     // Build user message — multimodal if image attachment present
-    const attachment = body.attachment || null;
+    // attachmentRaw already read above — do not re-read body.attachment
     const isImageAttachment = (
-      attachment &&
-      (attachment.type === 'image' || attachment.mime_type?.startsWith?.('image')) &&
-      attachment.url
+      attachmentRaw &&
+      (attachmentRaw.type === 'image' || attachmentRaw.mime_type?.startsWith?.('image')) &&
+      attachmentRaw.url
     );
     let userMessage;
     if (isImageAttachment) {
@@ -3432,7 +3520,7 @@ RULES:
         role: 'user',
         content: [
           { type: 'text', text: query },
-          { type: 'image_url', image_url: { url: attachment.url, detail: 'auto' } },
+          { type: 'image_url', image_url: { url: attachmentRaw.url, detail: 'auto' } },
         ],
       };
     } else {
@@ -3493,6 +3581,8 @@ RULES:
     const { data: savedMsg } = await supabase.from('messages').insert({
       organisation_id: organisationId, conversation_id: conversationId,
       role: 'assistant', content: cleanResponse,
+      canonical_text: cleanResponse,
+      input_modality: 'text',
       metadata: {
         sender_type: 'ai', visibility: 'owner_only',
         message_type: isActionCard ? 'action_card' : 'ai_response',
