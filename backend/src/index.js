@@ -3414,14 +3414,33 @@ RULES:
 - After receiving tool results, write a plain-language answer using ONLY the returned data.
 - Amounts in INR (₹), Indian format: ₹1,20,000.
 - Never invent numbers. If data is empty, say "No records found."
-- Respond in ${language}. Be concise and actionable.
+- You MUST respond in ${language} language regardless of what language the query is written in. Never respond in English if ${language} is not English. Be concise and actionable.
 - Today's date: ${new Date().toISOString().split('T')[0]}
 - If your response contains a message intended to be sent TO the customer (a payment reminder, follow-up message, reorder request, apology, delivery update, or any customer-facing communication), append this exact marker on a new line at the very end: [ACTION_CARD:draft_message]
 - Do NOT include this marker for analytical responses, summaries, internal insights, data breakdowns, or explanations.`;
 
+    // Build user message — multimodal if image attachment present
+    const attachment = body.attachment || null;
+    const isImageAttachment = (
+      attachment &&
+      (attachment.type === 'image' || attachment.mime_type?.startsWith?.('image')) &&
+      attachment.url
+    );
+    let userMessage;
+    if (isImageAttachment) {
+      userMessage = {
+        role: 'user',
+        content: [
+          { type: 'text', text: query },
+          { type: 'image_url', image_url: { url: attachment.url, detail: 'auto' } },
+        ],
+      };
+    } else {
+      userMessage = { role: 'user', content: query };
+    }
     let messages = [
       { role: 'system', content: systemPrompt },
-      { role: 'user', content: query },
+      userMessage,
     ];
 
     // First call — get tool call

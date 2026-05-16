@@ -1485,7 +1485,7 @@ export default function CustomerChatScreen() {
               <Ionicons name="sparkles" size={14} color={isActionCard ? '#E91E63' : '#075E54'} />
               <Text style={{ fontSize: 11, fontWeight: '700', color: isActionCard ? '#E91E63' : '#075E54' }}>{isActionCard ? 'AI Draft' : 'AI'}</Text>
             </View>
-            <Text style={styles.incomingText}>{item.content}</Text>
+            <Text style={styles.incomingText}>{item.content.replace(/\*\*(.*?)\*\*/g, '$1').replace(/\*(.*?)\*/g, '$1')}</Text>
             <Text style={styles.incomingTime}>{formatTime(item.created_at)}</Text>
           </View>
           {isActionCard && (
@@ -1761,8 +1761,12 @@ export default function CustomerChatScreen() {
             )}
             {aiAttachment && (
               <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 4, backgroundColor: '#F0F0F0' }}>
-                <Ionicons name={aiAttachment.type === 'audio' ? 'mic' : aiAttachment.type === 'image' ? 'image' : 'document'} size={16} color="#075E54" />
-                <Text style={{ fontSize: 12, color: '#333', marginLeft: 6, flex: 1 }} numberOfLines={1}>{aiAttachment.name}</Text>
+                {aiAttachment.type === 'image' && aiAttachment.url ? (
+                  <Image source={{ uri: aiAttachment.url }} style={{ width: 36, height: 36, borderRadius: 4, marginRight: 6 }} />
+                ) : (
+                  <Ionicons name={aiAttachment.type === 'audio' ? 'mic' : 'document'} size={16} color="#075E54" style={{ marginRight: 6 }} />
+                )}
+                <Text style={{ fontSize: 12, color: '#333', flex: 1 }} numberOfLines={1}>{aiAttachment.name}</Text>
                 <TouchableOpacity onPress={() => setAiAttachment(null)}>
                   <Ionicons name="close-circle" size={18} color="#999" />
                 </TouchableOpacity>
@@ -1782,26 +1786,29 @@ export default function CustomerChatScreen() {
                   multiline
                   maxLength={2000}
                 />
-                <TouchableOpacity style={styles.inputIconBtn} onPress={handleAudioRecording}>
-                  <Ionicons name={isRecording ? 'stop-circle' : 'mic-outline'} size={22} color="#E91E63" />
+                <TouchableOpacity style={styles.inputIconBtn} onPress={() => setAttachSheetVisible(true)}>
+                  <Ionicons name="attach" size={22} color="#E91E63" />
                 </TouchableOpacity>
                 <TouchableOpacity style={styles.inputIconBtn} onPress={handleOpenCamera}>
                   <Ionicons name="camera-outline" size={22} color="#E91E63" />
                 </TouchableOpacity>
-                <TouchableOpacity style={styles.inputIconBtn} onPress={handlePickGallery}>
-                  <Ionicons name="image-outline" size={22} color="#E91E63" />
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.inputIconBtn} onPress={handlePickDocument}>
-                  <Ionicons name="document-attach-outline" size={22} color="#E91E63" />
-                </TouchableOpacity>
               </View>
-              <TouchableOpacity
-                style={[styles.sendBtn, { backgroundColor: '#E91E63' }]}
-                onPress={handleAiQuery}
-                disabled={aiQuerying || (aiQueryText.trim().length === 0 && !aiAttachment)}
-              >
-                {aiQuerying ? <ActivityIndicator size="small" color="#FFF" /> : <Ionicons name="send" size={20} color="#FFF" />}
-              </TouchableOpacity>
+              {(aiQueryText.trim().length > 0 || aiAttachment) ? (
+                <TouchableOpacity
+                  style={[styles.sendBtn, { backgroundColor: '#E91E63' }]}
+                  onPress={handleAiQuery}
+                  disabled={aiQuerying}
+                >
+                  {aiQuerying ? <ActivityIndicator size="small" color="#FFF" /> : <Ionicons name="send" size={20} color="#FFF" />}
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity
+                  style={[styles.micBtn, { backgroundColor: '#E91E63' }]}
+                  onPress={handleAudioRecording}
+                >
+                  <Ionicons name={isRecording ? 'stop' : 'mic'} size={22} color="#FFF" />
+                </TouchableOpacity>
+              )}
             </View>
           </View>
         </View>
