@@ -1795,7 +1795,7 @@ export default function CustomerChatScreen() {
                 ) : (
                   <Ionicons name={aiAttachment.type === 'audio' ? 'mic' : 'document'} size={16} color="#075E54" style={{ marginRight: 6 }} />
                 )}
-                <Text style={{ fontSize: 12, color: '#333', flex: 1 }} numberOfLines={1}>{aiAttachment.name}</Text>
+                <Text style={{ fontSize: 12, color: '#333', flex: 1 }} numberOfLines={1}>{aiAttachment.type === 'audio' ? '🎤 Voice note' : aiAttachment.type === 'image' ? '🖼 Image' : '📄 Document'}</Text>
                 <TouchableOpacity onPress={() => setAiAttachment(null)}>
                   <Ionicons name="close-circle" size={18} color="#999" />
                 </TouchableOpacity>
