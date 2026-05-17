@@ -154,6 +154,38 @@ export default function CustomerChatScreen() {
     upload_status: 'uploading' | 'ready' | 'failed';
     upload_id: string;
   } | null>(null);
+
+  const applyUploadState = (
+    origin: 'dm' | 'ai' | 'spark',
+    modality: 'image' | 'audio' | 'document' | 'video',
+    uploadId: string,
+    phase: 'uploading' | 'ready' | 'failed',
+    payload?: { url?: string; storage_path?: string; uri?: string; name?: string; mime_type?: string; size?: number }
+  ) => {
+    // Upload pipeline determines ownership at upload start.
+    // UI tab state is NOT authoritative after upload begins.
+    if (origin === 'dm' || origin === 'spark') {
+      if (phase === 'uploading') {
+        setAttachmentPreview({ uri: payload!.uri!, name: payload!.name!, mime_type: payload!.mime_type!, size: payload?.size, upload_status: 'uploading', upload_id: uploadId });
+      } else if (phase === 'ready') {
+        // Stale callback protection: only update if uploadId matches
+        setAttachmentPreview(prev => prev?.upload_id === uploadId ? { ...prev, url: payload!.url!, storage_path: payload!.storage_path!, upload_status: 'ready' } : prev);
+      } else {
+        setAttachmentPreview(prev => prev?.upload_id === uploadId ? { ...prev, upload_status: 'failed' } : prev);
+      }
+    }
+    if (origin === 'ai' && phase === 'ready' && payload?.url) {
+      setAiAttachment({ type: modality === 'image' ? 'image' : modality === 'audio' ? 'audio' : 'file', url: payload.url, mime_type: payload.mime_type || '', name: payload.name || '' });
+    }
+    if (origin === 'spark' && phase === 'ready' && payload?.url && payload?.storage_path) {
+      attachUploadToSpark({ url: payload.url, storage_path: payload.storage_path }, payload.name || '', payload.mime_type || '');
+      setSparkWorkflowState('attachment_ready');
+    }
+    if (origin === 'spark' && phase === 'failed') {
+      setSparkWorkflowState('upload_failed');
+    }
+  };
+
   const [recording, setRecording] = useState<Audio.Recording | null>(null);
   const [isRecording, setIsRecording] = useState(false);
 
@@ -281,33 +313,29 @@ export default function CustomerChatScreen() {
         return;
       }
       const asset = result.assets[0];
+      const uploadOrigin = sparkMode ? 'spark' : activeTab === 'ai' ? 'ai' : 'dm';
       const uploadId = Date.now().toString();
+      
+      if (uploadOrigin !== 'ai') {
+        applyUploadState(uploadOrigin, 'image', uploadId, 'uploading', {
+          uri: asset.uri,
+          name: asset.fileName || 'image.jpg',
+          mime_type: asset.mimeType || 'image/jpeg',
+          size: asset.fileSize ?? undefined,
+        });
+      }
       if (sparkMode) setSparkWorkflowState('uploading');
-      setAttachmentPreview({
-        uri: asset.uri,
-        name: asset.fileName || 'image.jpg',
-        mime_type: asset.mimeType || 'image/jpeg',
-        size: asset.fileSize ?? undefined,
-        upload_status: 'uploading',
-        upload_id: uploadId,
-      });
+
       const uploaded = await uploadAttachment(asset.uri, asset.fileName || 'image.jpg', asset.mimeType || 'image/jpeg', uploadId);
       if (uploaded) {
-        setAttachmentPreview(prev => prev?.upload_id === uploadId ? { ...prev, url: uploaded.url, storage_path: uploaded.storage_path, upload_status: 'ready' } : prev);
-        if (activeTab === 'ai') {
-          setAiAttachment({
-            type: 'image',
-            url: uploaded.url,
-            mime_type: asset.mimeType || 'image/jpeg',
-            name: asset.fileName || 'image.jpg',
-          });
-        } else if (sparkMode) {
-          attachUploadToSpark(uploaded, asset.fileName || 'image.jpg', asset.mimeType || 'image/jpeg');
-          setSparkWorkflowState('attachment_ready');
-        }
+        applyUploadState(uploadOrigin, 'image', uploadId, 'ready', {
+          url: uploaded.url,
+          storage_path: uploaded.storage_path,
+          name: asset.fileName || 'image.jpg',
+          mime_type: asset.mimeType || 'image/jpeg',
+        });
       } else {
-        setAttachmentPreview(prev => prev?.upload_id === uploadId ? { ...prev, upload_status: 'failed' } : prev);
-        if (sparkMode) setSparkWorkflowState('upload_failed');
+        applyUploadState(uploadOrigin, 'image', uploadId, 'failed');
       }
     } catch (e) {
       console.error('Gallery picker error:', e);
@@ -342,34 +370,29 @@ export default function CustomerChatScreen() {
         return;
       }
       const asset = result.assets[0];
+      const uploadOrigin = sparkMode ? 'spark' : activeTab === 'ai' ? 'ai' : 'dm';
       const uploadId = Date.now().toString();
+      
+      if (uploadOrigin !== 'ai') {
+        applyUploadState(uploadOrigin, 'image', uploadId, 'uploading', {
+          uri: asset.uri,
+          name: asset.fileName || 'photo.jpg',
+          mime_type: asset.mimeType || 'image/jpeg',
+          size: asset.fileSize ?? undefined,
+        });
+      }
       if (sparkMode) setSparkWorkflowState('uploading');
-      setAttachmentPreview({
-        uri: asset.uri,
-        name: asset.fileName || 'photo.jpg',
-        mime_type: asset.mimeType || 'image/jpeg',
-        size: asset.fileSize ?? undefined,
-        upload_status: 'uploading',
-        upload_id: uploadId,
-      });
 
       const uploaded = await uploadAttachment(asset.uri, asset.fileName || 'photo.jpg', asset.mimeType || 'image/jpeg', uploadId);
       if (uploaded) {
-        setAttachmentPreview(prev => prev?.upload_id === uploadId ? { ...prev, url: uploaded.url, storage_path: uploaded.storage_path, upload_status: 'ready' } : prev);
-        if (activeTab === 'ai') {
-          setAiAttachment({
-            type: 'image',
-            url: uploaded.url,
-            mime_type: asset.mimeType || 'image/jpeg',
-            name: asset.fileName || 'photo.jpg',
-          });
-        } else if (sparkMode) {
-          attachUploadToSpark(uploaded, asset.fileName || 'photo.jpg', asset.mimeType || 'image/jpeg');
-          setSparkWorkflowState('attachment_ready');
-        }
+        applyUploadState(uploadOrigin, 'image', uploadId, 'ready', {
+          url: uploaded.url,
+          storage_path: uploaded.storage_path,
+          name: asset.fileName || 'photo.jpg',
+          mime_type: asset.mimeType || 'image/jpeg',
+        });
       } else {
-        setAttachmentPreview(prev => prev?.upload_id === uploadId ? { ...prev, upload_status: 'failed' } : prev);
-        if (sparkMode) setSparkWorkflowState('upload_failed');
+        applyUploadState(uploadOrigin, 'image', uploadId, 'failed');
       }
     } catch (e) {
       console.error('Camera error:', e);
@@ -397,34 +420,29 @@ export default function CustomerChatScreen() {
         return;
       }
       const asset = result.assets[0];
+      const uploadOrigin = sparkMode ? 'spark' : activeTab === 'ai' ? 'ai' : 'dm';
       const uploadId = Date.now().toString();
+      
+      if (uploadOrigin !== 'ai') {
+        applyUploadState(uploadOrigin, 'document', uploadId, 'uploading', {
+          uri: asset.uri,
+          name: asset.name,
+          mime_type: asset.mimeType || 'application/octet-stream',
+          size: asset.size ?? undefined,
+        });
+      }
       if (sparkMode) setSparkWorkflowState('uploading');
-      setAttachmentPreview({
-        uri: asset.uri,
-        name: asset.name,
-        mime_type: asset.mimeType || 'application/octet-stream',
-        size: asset.size ?? undefined,
-        upload_status: 'uploading',
-        upload_id: uploadId,
-      });
 
       const uploaded = await uploadAttachment(asset.uri, asset.name, asset.mimeType || 'application/octet-stream', uploadId);
       if (uploaded) {
-        setAttachmentPreview(prev => prev?.upload_id === uploadId ? { ...prev, url: uploaded.url, storage_path: uploaded.storage_path, upload_status: 'ready' } : prev);
-        if (activeTab === 'ai') {
-          setAiAttachment({
-            type: 'file',
-            url: uploaded.url,
-            mime_type: asset.mimeType || 'application/octet-stream',
-            name: asset.name,
-          });
-        } else if (sparkMode) {
-          attachUploadToSpark(uploaded, asset.name, asset.mimeType || 'application/octet-stream');
-          setSparkWorkflowState('attachment_ready');
-        }
+        applyUploadState(uploadOrigin, 'document', uploadId, 'ready', {
+          url: uploaded.url,
+          storage_path: uploaded.storage_path,
+          name: asset.name,
+          mime_type: asset.mimeType || 'application/octet-stream',
+        });
       } else {
-        setAttachmentPreview(prev => prev?.upload_id === uploadId ? { ...prev, upload_status: 'failed' } : prev);
-        if (sparkMode) setSparkWorkflowState('upload_failed');
+        applyUploadState(uploadOrigin, 'document', uploadId, 'failed');
       }
     } catch (e) {
       console.error('Document picker error:', e);
@@ -438,6 +456,8 @@ export default function CustomerChatScreen() {
     if (isRecording) {
       // Stop recording — close sheet
       setAttachSheetVisible(false);
+      const uploadOrigin = sparkMode ? 'spark' : activeTab === 'ai' ? 'ai' : 'dm';
+      const uploadId = Date.now().toString();
       if (sparkMode) setSparkWorkflowState('uploading');
       try {
         const rec = recording;
@@ -447,32 +467,25 @@ export default function CustomerChatScreen() {
         const uri = rec?.getURI();
         if (uri) {
           const fileName = `audio_${Date.now()}.m4a`;
-          const uploadId = Date.now().toString();
-          setAttachmentPreview({
-            uri,
-            name: fileName,
-            mime_type: 'audio/x-m4a',
-            upload_status: 'uploading',
-            upload_id: uploadId,
-          });
+          
+          if (uploadOrigin !== 'ai') {
+            applyUploadState(uploadOrigin, 'audio', uploadId, 'uploading', {
+              uri,
+              name: fileName,
+              mime_type: 'audio/x-m4a',
+            });
+          }
 
           const uploaded = await uploadAttachment(uri, fileName, 'audio/x-m4a', uploadId);
           if (uploaded) {
-            setAttachmentPreview(prev => prev?.upload_id === uploadId ? { ...prev, url: uploaded.url, storage_path: uploaded.storage_path, upload_status: 'ready' } : prev);
-            if (activeTab === 'ai') {
-              setAiAttachment({
-                type: 'audio',
-                url: uploaded.url,
-                mime_type: 'audio/x-m4a',
-                name: fileName,
-              });
-            } else if (sparkMode) {
-              attachUploadToSpark(uploaded, fileName, 'audio/x-m4a');
-              setSparkWorkflowState('attachment_ready');
-            }
+            applyUploadState(uploadOrigin, 'audio', uploadId, 'ready', {
+              url: uploaded.url,
+              storage_path: uploaded.storage_path,
+              name: fileName,
+              mime_type: 'audio/x-m4a',
+            });
           } else {
-            setAttachmentPreview(prev => prev?.upload_id === uploadId ? { ...prev, upload_status: 'failed' } : prev);
-            if (sparkMode) setSparkWorkflowState('upload_failed');
+            applyUploadState(uploadOrigin, 'audio', uploadId, 'failed');
           }
         }
       } catch (e) {
