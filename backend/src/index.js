@@ -1037,6 +1037,8 @@ app.get('/api/chat/:customer_id', async (c) => {
           card_data: m.metadata?.card_data || {},
           preview_text: m.metadata?.preview_text || null,
           metadata: m.metadata || {},
+          input_modality: m.input_modality || null,
+          canonical_text: m.canonical_text || null,
         })).reverse();
       }
 

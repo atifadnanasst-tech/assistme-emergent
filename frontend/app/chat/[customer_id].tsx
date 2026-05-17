@@ -1506,7 +1506,7 @@ export default function CustomerChatScreen() {
       const aiQueryDisplayText = (item.content && item.content !== '🎤 Voice note') ? item.content : null;
       content = (
         <View style={styles.outgoingContainer}>
-          <View style={[styles.outgoingBubble, { backgroundColor: '#E0F2F1', padding: isAiQueryImage ? 0 : undefined, overflow: 'hidden' }]}>
+          <View style={[styles.outgoingBubble, { backgroundColor: '#E0F2F1', overflow: 'hidden', padding: isAiQueryImage ? 0 : 10 }]}>
             {isAiQueryAudio ? (
               <TouchableOpacity
                 style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 4 }}
@@ -1516,7 +1516,7 @@ export default function CustomerChatScreen() {
                 <Text style={[styles.outgoingText, { color: '#00695C' }]}>🎤 Voice note</Text>
               </TouchableOpacity>
             ) : isAiQueryImage ? (
-              <Image source={{ uri: aiQueryAttachUrl! }} style={{ width: 180, height: 180, borderRadius: 8, marginBottom: 4 }} resizeMode="cover" />
+              <Image source={{ uri: aiQueryAttachUrl! }} style={{ width: 220, minHeight: 140, maxHeight: 260, borderRadius: 0 }} resizeMode="cover" />
             ) : null}
             {!isAiQueryAudio && aiQueryDisplayText ? (
               <Text style={[styles.outgoingText, { color: '#00695C' }]}>{aiQueryDisplayText}</Text>
