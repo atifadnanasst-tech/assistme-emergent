@@ -1410,7 +1410,7 @@ export default function CustomerChatScreen() {
               <View style={styles.attachMsgCard}>
                 <Image source={{ uri: item.metadata.attachment?.url || item.metadata.attachment?.uri }} style={{ width: 200, height: 160, borderRadius: 8, marginBottom: 4 }} resizeMode="cover" />
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.attachMsgName} numberOfLines={1}>{item.metadata.attachment?.name}</Text>
+                  <Text style={styles.attachMsgName} numberOfLines={1}>🎤 Voice note</Text>
                   <Text style={styles.attachMsgMeta}>Image</Text>
                 </View>
               </View>
@@ -1430,7 +1430,7 @@ export default function CustomerChatScreen() {
               <View style={styles.attachMsgCard}>
                 <Ionicons name="document-outline" size={32} color="#075E54" />
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.attachMsgName} numberOfLines={1}>{item.metadata.attachment?.name}</Text>
+                  <Text style={styles.attachMsgName} numberOfLines={1}>🎤 Voice note</Text>
                   <Text style={styles.attachMsgMeta}>Document</Text>
                 </View>
               </View>
@@ -1461,7 +1461,7 @@ export default function CustomerChatScreen() {
               <View style={styles.attachMsgCard}>
                 <Ionicons name={isPlaying ? 'pause-circle' : 'play-circle'} size={36} color='#075E54' />
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.attachMsgName} numberOfLines={1}>{item.metadata.attachment?.name}</Text>
+                  <Text style={styles.attachMsgName} numberOfLines={1}>🎤 Voice note</Text>
                   <Text style={styles.attachMsgMeta}>{isPlaying ? 'Playing...' : 'Audio'}</Text>
                 </View>
               </View>
