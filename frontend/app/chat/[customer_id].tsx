@@ -44,6 +44,9 @@ interface ChatMessage {
   card_type: string | null; card_data: Record<string, any>;
   preview_text: string | null;
   delivery_status?: 'sent' | 'delivered' | 'read';
+  delivery_status?: 'sent' | 'delivered' | 'read';
+  input_modality?: string;
+  metadata?: Record<string, any>;
 }
 
 export default function CustomerChatScreen() {
@@ -1138,8 +1141,8 @@ export default function CustomerChatScreen() {
   };
 
   // ── AI Query handler ───────────────────────────────────────
-  const handleAiQuery = async () => {
-    const rawText = aiQueryText.trim();
+  const handleAiQuery = async (directQuery?: string) => {
+    const rawText = directQuery !== undefined ? directQuery : aiQueryText.trim();
     if ((!rawText && !aiAttachment) || aiQuerying || !conversationId) return;
     Keyboard.dismiss();
     setAiQueryText('');
@@ -1207,10 +1210,8 @@ export default function CustomerChatScreen() {
 
   const sendCapsuleQuery = (query: string) => {
     if (aiQuerying || !conversationId) return;
-    setAiQueryText(query);
-    setTimeout(() => {
-      handleAiQuery();
-    }, 50);
+    setCapsuleExpanded(false);
+    handleAiQuery(query);
   };
 
   const toggleCapsuleExpand = () => {
@@ -1480,16 +1481,34 @@ export default function CustomerChatScreen() {
       content = renderInvoiceCard(item);
     } else if (item.message_type === 'ai_query') {
       // Owner's AI query — right-aligned teal bubble
+    } else if (item.message_type === 'ai_query') {
+      // Owner's AI query — right-aligned teal bubble
+      const aiQueryModality = item.input_modality || 'text';
+      const aiQueryAttachUrl = item.metadata?.attachment?.url || null;
+      const isAiQueryAudio = aiQueryModality === 'audio' && aiQueryAttachUrl;
+      const isAiQueryImage = aiQueryModality === 'image' && aiQueryAttachUrl;
+      const aiQueryDisplayText = (item.content && item.content !== '\ud83c\udfa4 Voice note') ? item.content : null;
       content = (
         <View style={styles.outgoingContainer}>
           <View style={[styles.outgoingBubble, { backgroundColor: '#E0F2F1' }]}>
-            <Text style={[styles.outgoingText, { color: '#00695C' }]}>{item.content}</Text>
+            {isAiQueryAudio ? (
+              <TouchableOpacity
+                style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 4 }}
+                onPress={() => handlePlayAudio(aiQueryAttachUrl)}
+              >
+                <Ionicons name={playingUri === aiQueryAttachUrl ? 'pause-circle' : 'play-circle'} size={32} color="#00695C" />
+                <Text style={[styles.outgoingText, { color: '#00695C' }]}>\ud83c\udfa4 Voice note</Text>
+              </TouchableOpacity>
+            ) : isAiQueryImage ? (
+              <Image source={{ uri: aiQueryAttachUrl }} style={{ width: 180, height: 180, borderRadius: 8, marginBottom: 4 }} resizeMode="cover" />
+            ) : null}
+            {!isAiQueryAudio && aiQueryDisplayText ? (
+              <Text style={[styles.outgoingText, { color: '#00695C' }]}>{aiQueryDisplayText}</Text>
+            ) : null}
             <Text style={styles.outgoingTime}>{formatTime(item.created_at)}</Text>
           </View>
         </View>
       );
-    } else if (item.message_type === 'ai_response' || item.message_type === 'action_card') {
-      // AI response — left-aligned with AI icon
       const isActionCard = item.message_type === 'action_card' || item.card_data?.shareable === true || item.metadata?.shareable === true;
       content = (
         <View style={styles.incomingContainer}>
@@ -1974,8 +1993,8 @@ export default function CustomerChatScreen() {
                 <TouchableOpacity style={styles.sparkFab} onPress={() => { setSparkMode(true); setSparkWorkflowState('idle'); }}>
                   <Ionicons name="sparkles" size={22} color="#FFF" />
                 </TouchableOpacity>
-                <TouchableOpacity style={styles.micBtn}>
-                  <Ionicons name="mic" size={22} color="#FFF" />
+                <TouchableOpacity style={styles.micBtn} onPress={handleAudioRecording}>
+                  <Ionicons name={isRecording ? 'stop' : 'mic'} size={22} color="#FFF" />
                 </TouchableOpacity>
               </View>
             )}
