@@ -44,6 +44,8 @@ interface ChatMessage {
   card_type: string | null; card_data: Record<string, any>;
   preview_text: string | null;
   delivery_status?: 'sent' | 'delivered' | 'read';
+  input_modality?: string;
+  metadata?: Record<string, any>;
 }
 
 export default function CustomerChatScreen() {
@@ -1408,7 +1410,7 @@ export default function CustomerChatScreen() {
               <View style={styles.attachMsgCard}>
                 <Image source={{ uri: item.metadata.attachment?.url || item.metadata.attachment?.uri }} style={{ width: 200, height: 160, borderRadius: 8, marginBottom: 4 }} resizeMode="cover" />
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.attachMsgName} numberOfLines={1}>{item.metadata.attachment?.name}</Text>
+                  <Text style={styles.attachMsgName} numberOfLines={1}>🖼 Image</Text>
                   <Text style={styles.attachMsgMeta}>Image</Text>
                 </View>
               </View>
@@ -1428,7 +1430,7 @@ export default function CustomerChatScreen() {
               <View style={styles.attachMsgCard}>
                 <Ionicons name="document-outline" size={32} color="#075E54" />
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.attachMsgName} numberOfLines={1}>{item.metadata.attachment?.name}</Text>
+                  <Text style={styles.attachMsgName} numberOfLines={1}>📄 Document</Text>
                   <Text style={styles.attachMsgMeta}>Document</Text>
                 </View>
               </View>
@@ -1478,10 +1480,28 @@ export default function CustomerChatScreen() {
       content = renderInvoiceCard(item);
     } else if (item.message_type === 'ai_query') {
       // Owner's AI query — right-aligned teal bubble
+      const aiQueryModality = item.input_modality || 'text';
+      const aiQueryAttachUrl = item.metadata?.attachment?.url || null;
+      const isAiQueryAudio = aiQueryModality === 'audio' && !!aiQueryAttachUrl;
+      const isAiQueryImage = aiQueryModality === 'image' && !!aiQueryAttachUrl;
+      const aiQueryDisplayText = (item.content && item.content !== '🎤 Voice note') ? item.content : null;
       content = (
         <View style={styles.outgoingContainer}>
           <View style={[styles.outgoingBubble, { backgroundColor: '#E0F2F1' }]}>
-            <Text style={[styles.outgoingText, { color: '#00695C' }]}>{item.content}</Text>
+            {isAiQueryAudio ? (
+              <TouchableOpacity
+                style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 4 }}
+                onPress={() => handlePlayAudio(aiQueryAttachUrl!)}
+              >
+                <Ionicons name={playingUri === aiQueryAttachUrl ? 'pause-circle' : 'play-circle'} size={32} color="#00695C" />
+                <Text style={[styles.outgoingText, { color: '#00695C' }]}>🎤 Voice note</Text>
+              </TouchableOpacity>
+            ) : isAiQueryImage ? (
+              <Image source={{ uri: aiQueryAttachUrl! }} style={{ width: 180, height: 180, borderRadius: 8, marginBottom: 4 }} resizeMode="cover" />
+            ) : null}
+            {!isAiQueryAudio && aiQueryDisplayText ? (
+              <Text style={[styles.outgoingText, { color: '#00695C' }]}>{aiQueryDisplayText}</Text>
+            ) : null}
             <Text style={styles.outgoingTime}>{formatTime(item.created_at)}</Text>
           </View>
         </View>
