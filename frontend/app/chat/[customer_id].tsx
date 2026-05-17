@@ -1160,6 +1160,10 @@ export default function CustomerChatScreen() {
       text = rawText + '\n\n[Customer attachment: ' + aiAttachment.name + ']';
     }
 
+    // Capture attachment before clearing (must be before queryMsg for optimistic render)
+    const capturedAttachment = aiAttachment;
+    setAiAttachment(null);
+
     // Optimistic: add owner's query locally
     const tempQId = `aiq-${Date.now()}`;
     const queryMsg: ChatMessage = {
@@ -1167,12 +1171,25 @@ export default function CustomerChatScreen() {
       created_at: new Date().toISOString(), sender_type: 'owner',
       visibility: 'owner_only', message_type: 'ai_query', card_type: null,
       card_data: {}, preview_text: text.substring(0, 50),
+      input_modality: capturedAttachment
+        ? (capturedAttachment.type === 'audio'
+            ? 'audio'
+            : capturedAttachment.type === 'image'
+            ? 'image'
+            : 'document')
+        : 'text',
+      metadata: capturedAttachment
+        ? {
+            attachment: {
+              url: capturedAttachment.url,
+              name: capturedAttachment.name,
+              type: capturedAttachment.type,
+              mime_type: capturedAttachment.mime_type,
+            },
+          }
+        : {},
     };
     setMessages(prev => [queryMsg, ...prev]);
-
-    // Capture attachment before clearing
-    const capturedAttachment = aiAttachment;
-    setAiAttachment(null);
 
     try {
       const token = await getToken();
