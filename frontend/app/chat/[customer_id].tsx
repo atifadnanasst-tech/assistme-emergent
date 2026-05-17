@@ -1140,8 +1140,8 @@ export default function CustomerChatScreen() {
   };
 
   // ── AI Query handler ───────────────────────────────────────
-  const handleAiQuery = async (directQuery?: string) => {
-    const rawText = directQuery !== undefined ? directQuery : aiQueryText.trim();
+  const handleAiQuery = async (directQuery?: unknown) => {
+    const rawText = typeof directQuery === 'string' ? directQuery : aiQueryText.trim();
     if ((!rawText && !aiAttachment) || aiQuerying || !conversationId) return;
     Keyboard.dismiss();
     setAiQueryText('');
@@ -1827,7 +1827,7 @@ export default function CustomerChatScreen() {
               {(aiQueryText.trim().length > 0 || aiAttachment) ? (
                 <TouchableOpacity
                   style={[styles.sendBtn, { backgroundColor: '#E91E63' }]}
-                  onPress={handleAiQuery}
+                  onPress={() => handleAiQuery()}
                   disabled={aiQuerying}
                 >
                   {aiQuerying ? <ActivityIndicator size="small" color="#FFF" /> : <Ionicons name="send" size={20} color="#FFF" />}
