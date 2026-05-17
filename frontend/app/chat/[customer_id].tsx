@@ -1159,6 +1159,8 @@ export default function CustomerChatScreen() {
     if (rawText && aiAttachment) {
       text = rawText + '\n\n[Customer attachment: ' + aiAttachment.name + ']';
     }
+    // Display text for bubble — no attachment suffix (attachment shown visually)
+    const displayText = rawText || text;
 
     // Capture attachment before clearing (must be before queryMsg for optimistic render)
     const capturedAttachment = aiAttachment;
@@ -1167,10 +1169,10 @@ export default function CustomerChatScreen() {
     // Optimistic: add owner's query locally
     const tempQId = `aiq-${Date.now()}`;
     const queryMsg: ChatMessage = {
-      id: tempQId, role: 'user', content: text,
+      id: tempQId, role: 'user', content: displayText,
       created_at: new Date().toISOString(), sender_type: 'owner',
       visibility: 'owner_only', message_type: 'ai_query', card_type: null,
-      card_data: {}, preview_text: text.substring(0, 50),
+      card_data: {}, preview_text: displayText.substring(0, 50),
       input_modality: capturedAttachment
         ? (capturedAttachment.type === 'audio'
             ? 'audio'
@@ -1504,7 +1506,7 @@ export default function CustomerChatScreen() {
       const aiQueryDisplayText = (item.content && item.content !== '🎤 Voice note') ? item.content : null;
       content = (
         <View style={styles.outgoingContainer}>
-          <View style={[styles.outgoingBubble, { backgroundColor: '#E0F2F1' }]}>
+          <View style={[styles.outgoingBubble, { backgroundColor: '#E0F2F1', padding: isAiQueryImage ? 0 : undefined, overflow: 'hidden' }]}>
             {isAiQueryAudio ? (
               <TouchableOpacity
                 style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 4 }}

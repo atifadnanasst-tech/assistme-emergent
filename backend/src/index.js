@@ -1010,7 +1010,7 @@ app.get('/api/chat/:customer_id', async (c) => {
       const before = c.req.query('before');
       let query = supabase
         .from('messages')
-        .select('id, role, content, metadata, created_at')
+        .select('id, role, content, metadata, created_at, input_modality, canonical_text')
         .eq('conversation_id', conversation.id)
         .is('deleted_at', null)
         .order('created_at', { ascending: false })
