@@ -3598,8 +3598,40 @@ Phone: ${ownerPhone || 'Not configured'}
     } else {
       userMessage = { role: 'user', content: query };
     }
+    // Fetch last 15 AI conversation messages for continuity
+    const { data: recentAiMessages } = await supabase
+      .from('messages')
+      .select('role, content, input_modality, created_at')
+      .eq('conversation_id', conversationId)
+      .in('metadata->>message_type', ['ai_query', 'ai_response', 'action_card'])
+      .order('created_at', { ascending: false })
+      .limit(15);
+    const conversationHistory = (recentAiMessages || [])
+      .reverse()
+      .map(m => ({
+        role: m.role === 'user' ? 'user' : 'assistant',
+        content: m.content || '',
+      }))
+      .filter(m => m.content.trim().length > 0);
+
+    // Fetch working state from ai_conversations
+    const { data: aiConvData } = await supabase
+      .from('ai_conversations')
+      .select('custom_fields')
+      .eq('organisation_id', organisationId)
+      .eq('customer_id', customerId)
+      .eq('scope', 'customer')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .single();
+    const workingState = aiConvData?.custom_fields?.working_state || null;
+    const workingStateContext = workingState
+      ? '\n\n== ACTIVE CONVERSATION STATE ==\n' + JSON.stringify(workingState, null, 2) + '\nUse this state to resolve references and avoid re-asking resolved questions.'
+      : '';
+
     let messages = [
-      { role: 'system', content: systemPrompt },
+      { role: 'system', content: systemPrompt + workingStateContext },
+      ...conversationHistory,
       userMessage,
     ];
 
