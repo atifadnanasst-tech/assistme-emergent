@@ -44,7 +44,6 @@ interface ChatMessage {
   card_type: string | null; card_data: Record<string, any>;
   preview_text: string | null;
   delivery_status?: 'sent' | 'delivered' | 'read';
-  delivery_status?: 'sent' | 'delivered' | 'read';
   input_modality?: string;
   metadata?: Record<string, any>;
 }
@@ -1481,13 +1480,11 @@ export default function CustomerChatScreen() {
       content = renderInvoiceCard(item);
     } else if (item.message_type === 'ai_query') {
       // Owner's AI query — right-aligned teal bubble
-    } else if (item.message_type === 'ai_query') {
-      // Owner's AI query — right-aligned teal bubble
       const aiQueryModality = item.input_modality || 'text';
       const aiQueryAttachUrl = item.metadata?.attachment?.url || null;
       const isAiQueryAudio = aiQueryModality === 'audio' && aiQueryAttachUrl;
       const isAiQueryImage = aiQueryModality === 'image' && aiQueryAttachUrl;
-      const aiQueryDisplayText = (item.content && item.content !== '\ud83c\udfa4 Voice note') ? item.content : null;
+      const aiQueryDisplayText = (item.content && item.content !== '🎤 Voice note') ? item.content : null;
       content = (
         <View style={styles.outgoingContainer}>
           <View style={[styles.outgoingBubble, { backgroundColor: '#E0F2F1' }]}>
@@ -1497,7 +1494,7 @@ export default function CustomerChatScreen() {
                 onPress={() => handlePlayAudio(aiQueryAttachUrl)}
               >
                 <Ionicons name={playingUri === aiQueryAttachUrl ? 'pause-circle' : 'play-circle'} size={32} color="#00695C" />
-                <Text style={[styles.outgoingText, { color: '#00695C' }]}>\ud83c\udfa4 Voice note</Text>
+                <Text style={[styles.outgoingText, { color: '#00695C' }]}>🎤 Voice note</Text>
               </TouchableOpacity>
             ) : isAiQueryImage ? (
               <Image source={{ uri: aiQueryAttachUrl }} style={{ width: 180, height: 180, borderRadius: 8, marginBottom: 4 }} resizeMode="cover" />
