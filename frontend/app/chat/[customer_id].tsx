@@ -1818,7 +1818,7 @@ export default function CustomerChatScreen() {
             <Text style={[styles.tabText, activeTab === 'broadcast' && styles.tabTextActive]}>Broadcast</Text>
           </TouchableOpacity>
           <TouchableOpacity
-            style={[styles.tab, activeTab === 'ai' && styles.tabActive]}
+            style={[styles.tab, activeTab === 'ai' && styles.tabActive, activeTab === 'ai' && { flexDirection: 'row', justifyContent: 'center', alignItems: 'center' }]}
             onPress={() => {
               if (activeTab === 'ai') {
                 setShowConvDropdown(prev => !prev);
@@ -1830,17 +1830,12 @@ export default function CustomerChatScreen() {
           >
             <Text style={[styles.tabText, activeTab === 'ai' && styles.tabTextActive]}>AI Messages</Text>
             {activeTab === 'ai' && (
-              <TouchableOpacity 
-                onPress={() => setShowConvDropdown(prev => !prev)} 
-                style={{ marginLeft: 4, padding: 4 }}
-                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-              >
-                <Ionicons 
-                  name={showConvDropdown ? 'chevron-up' : 'chevron-down'} 
-                  size={16} 
-                  color="#075E54" 
-                />
-              </TouchableOpacity>
+              <Ionicons
+                name={showConvDropdown ? 'chevron-up' : 'chevron-down'}
+                size={12}
+                color="#FFFFFF"
+                style={{ marginLeft: 3 }}
+              />
             )}
           </TouchableOpacity>
         </View>
@@ -3105,7 +3100,7 @@ const styles = StyleSheet.create({
   },
   convDropdownContainer: {
     position: 'absolute',
-    top: 90,
+    top: 140,
     right: 8,
     width: 240,
     backgroundColor: '#FFF',
