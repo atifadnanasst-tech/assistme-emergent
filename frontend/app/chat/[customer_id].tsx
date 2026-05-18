@@ -1722,7 +1722,12 @@ export default function CustomerChatScreen() {
             style={[styles.tab, activeTab === 'ai' && styles.tabActive]}
             onPress={() => setActiveTab('ai')}
           >
-            <Text style={[styles.tabText, activeTab === 'ai' && styles.tabTextActive]}>AI Messages</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
+              <Text style={[styles.tabText, activeTab === 'ai' && styles.tabTextActive]}>AI Messages</Text>
+              {activeTab === 'ai' && (
+                <Ionicons name="chevron-down" size={12} color="#FFFFFF" />
+              )}
+            </View>
           </TouchableOpacity>
         </View>
       </SafeAreaView>
