@@ -135,6 +135,16 @@ export default function CustomerChatScreen() {
     name: string;
   } | null>(null);
   const [capsuleExpanded, setCapsuleExpanded] = useState(false);
+  // AI conversation context switcher
+  const [activeAiConvId, setActiveAiConvId] = useState<string | null>(null);
+  const [aiConversations, setAiConversations] = useState<Array<{
+    id: string;
+    title: string;
+    is_archived: boolean;
+    created_at: string;
+  }>>([]);
+  const [showConvDropdown, setShowConvDropdown] = useState(false);
+  const [loadingConversations, setLoadingConversations] = useState(false);
   // Pagination
   const [hasMore, setHasMore] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
@@ -203,7 +213,6 @@ export default function CustomerChatScreen() {
   const inputRef = useRef<any>(null);
   const channelRef = useRef<any>(null);
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
-  const aiQueryAbortRef = useRef<AbortController | null>(null);
 
   // ── Attachment upload ──────────────────────────────────────
   const uploadAttachment = async (localUri: string, name: string, mimeType: string, uploadId: string) => {
@@ -1141,8 +1150,8 @@ export default function CustomerChatScreen() {
   };
 
   // ── AI Query handler ───────────────────────────────────────
-  const handleAiQuery = async (directQuery?: unknown) => {
-    const rawText = typeof directQuery === 'string' ? directQuery : aiQueryText.trim();
+  const handleAiQuery = async (directQuery?: string) => {
+    const rawText = directQuery !== undefined ? directQuery : aiQueryText.trim();
     if ((!rawText && !aiAttachment) || aiQuerying || !conversationId) return;
     Keyboard.dismiss();
     setAiQueryText('');
@@ -1160,55 +1169,34 @@ export default function CustomerChatScreen() {
     if (rawText && aiAttachment) {
       text = rawText + '\n\n[Customer attachment: ' + aiAttachment.name + ']';
     }
-    // Display text for bubble — no attachment suffix (attachment shown visually)
-    const displayText = rawText || text;
-
-    // Capture attachment before clearing (must be before queryMsg for optimistic render)
-    const capturedAttachment = aiAttachment;
-    setAiAttachment(null);
 
     // Optimistic: add owner's query locally
     const tempQId = `aiq-${Date.now()}`;
     const queryMsg: ChatMessage = {
-      id: tempQId, role: 'user', content: displayText,
+      id: tempQId, role: 'user', content: text,
       created_at: new Date().toISOString(), sender_type: 'owner',
       visibility: 'owner_only', message_type: 'ai_query', card_type: null,
-      card_data: {}, preview_text: displayText.substring(0, 50),
-      input_modality: capturedAttachment
-        ? (capturedAttachment.type === 'audio'
-            ? 'audio'
-            : capturedAttachment.type === 'image'
-            ? 'image'
-            : 'document')
-        : 'text',
-      metadata: capturedAttachment
-        ? {
-            attachment: {
-              url: capturedAttachment.url,
-              name: capturedAttachment.name,
-              type: capturedAttachment.type,
-              mime_type: capturedAttachment.mime_type,
-            },
-          }
-        : {},
+      card_data: {}, preview_text: text.substring(0, 50),
     };
     setMessages(prev => [queryMsg, ...prev]);
+
+    // Capture attachment before clearing
+    const capturedAttachment = aiAttachment;
+    setAiAttachment(null);
 
     try {
       const token = await getToken();
       if (!token) return;
       const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
-      const abortController = new AbortController();
-      aiQueryAbortRef.current = abortController;
       const res = await fetch(`${backendUrl}/api/chat/${customer_id}/ai-query`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           query: text, 
           conversation_id: conversationId,
+          ai_conversation_id: activeAiConvId || null,
           attachment: capturedAttachment || null,
         }),
-        signal: abortController.signal,
       });
       if (res.ok) {
         const data = await res.json();
@@ -1223,13 +1211,10 @@ export default function CustomerChatScreen() {
       } else {
         Alert.alert('Error', 'Could not get AI response. Try again.');
       }
-    } catch (e: any) {
-      if (e?.name !== 'AbortError') {
-        Alert.alert('Error', 'AI query failed.');
-      }
+    } catch {
+      Alert.alert('Error', 'AI query failed.');
     } finally {
       setAiQuerying(false);
-      aiQueryAbortRef.current = null;
     }
   };
 
@@ -1243,6 +1228,116 @@ export default function CustomerChatScreen() {
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     setCapsuleExpanded(prev => !prev);
   };
+
+  // ── AI Conversation Context Switcher ──────────────────────────
+  const initAiConversation = async () => {
+    if (!customer_id || !conversationId) return;
+    try {
+      const token = await getToken();
+      if (!token) return;
+      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+      
+      // Fetch existing conversations
+      const listRes = await fetch(`${backendUrl}/api/chat/${customer_id}/ai-conversations`, {
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      
+      if (listRes.ok) {
+        const data = await listRes.json();
+        const convList = data.conversations || [];
+        setAiConversations(convList);
+        
+        if (convList.length > 0) {
+          // Set most recent conversation as active
+          setActiveAiConvId(convList[0].id);
+        } else {
+          // No conversations exist — create default one
+          const createRes = await fetch(`${backendUrl}/api/chat/${customer_id}/ai-conversations`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ title: 'New Chat' }),
+          });
+          if (createRes.ok) {
+            const createData = await createRes.json();
+            const newConv = createData.conversation;
+            setAiConversations([newConv]);
+            setActiveAiConvId(newConv.id);
+          }
+        }
+      }
+    } catch (err) {
+      console.error('initAiConversation error:', err);
+    }
+  };
+
+  const fetchAiConversations = async () => {
+    if (!customer_id || loadingConversations) return;
+    setLoadingConversations(true);
+    try {
+      const token = await getToken();
+      if (!token) return;
+      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+      const res = await fetch(`${backendUrl}/api/chat/${customer_id}/ai-conversations`, {
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setAiConversations(data.conversations || []);
+      }
+    } catch (err) {
+      console.error('fetchAiConversations error:', err);
+    } finally {
+      setLoadingConversations(false);
+    }
+  };
+
+  const createNewAiConversation = async () => {
+    if (!customer_id || loadingConversations) return;
+    setLoadingConversations(true);
+    try {
+      const token = await getToken();
+      if (!token) return;
+      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+      const res = await fetch(`${backendUrl}/api/chat/${customer_id}/ai-conversations`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: 'New Chat' }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const newConv = data.conversation;
+        setAiConversations(prev => [newConv, ...prev]);
+        setActiveAiConvId(newConv.id);
+        setShowConvDropdown(false);
+        // Clear current AI messages from view
+        setMessages(prev => prev.filter(m => m.message_type !== 'ai_query' && m.message_type !== 'ai_response' && m.message_type !== 'action_card'));
+      }
+    } catch (err) {
+      console.error('createNewAiConversation error:', err);
+    } finally {
+      setLoadingConversations(false);
+    }
+  };
+
+  const switchAiConversation = async (convId: string) => {
+    if (convId === activeAiConvId) {
+      setShowConvDropdown(false);
+      return;
+    }
+    setActiveAiConvId(convId);
+    setShowConvDropdown(false);
+    // Clear current AI messages from view — they will be refetched via useEffect
+    setMessages(prev => prev.filter(m => m.message_type !== 'ai_query' && m.message_type !== 'ai_response' && m.message_type !== 'action_card'));
+    // Trigger refetch by reloading chat with new filter
+    await loadChat(false);
+  };
+
+  // Initialize AI conversation on mount or when AI tab is activated
+  useEffect(() => {
+    if (activeTab === 'ai' && customer_id && conversationId && !activeAiConvId) {
+      initAiConversation();
+    }
+  }, [activeTab, customer_id, conversationId]);
 
   // Auto-brief on AI tab open (once per day)
   useEffect(() => {
@@ -1510,10 +1605,10 @@ export default function CustomerChatScreen() {
       const aiQueryAttachUrl = item.metadata?.attachment?.url || null;
       const isAiQueryAudio = aiQueryModality === 'audio' && !!aiQueryAttachUrl;
       const isAiQueryImage = aiQueryModality === 'image' && !!aiQueryAttachUrl;
-      const aiQueryDisplayText = (item.content && item.content !== '🎤 Voice note') ? item.content.replace(/\n\n\[Customer attachment:[^\]]+\]/g, '').trim() : null;
+      const aiQueryDisplayText = (item.content && item.content !== '🎤 Voice note') ? item.content : null;
       content = (
         <View style={styles.outgoingContainer}>
-          <View style={[styles.outgoingBubble, { backgroundColor: '#E0F2F1', overflow: 'hidden' }]}>
+          <View style={[styles.outgoingBubble, { backgroundColor: '#E0F2F1' }]}>
             {isAiQueryAudio ? (
               <TouchableOpacity
                 style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 4 }}
@@ -1523,7 +1618,7 @@ export default function CustomerChatScreen() {
                 <Text style={[styles.outgoingText, { color: '#00695C' }]}>🎤 Voice note</Text>
               </TouchableOpacity>
             ) : isAiQueryImage ? (
-              <Image source={{ uri: aiQueryAttachUrl! }} style={{ width: 220, minHeight: 140, maxHeight: 260, borderRadius: 0 }} resizeMode="cover" />
+              <Image source={{ uri: aiQueryAttachUrl! }} style={{ width: 180, height: 180, borderRadius: 8, marginBottom: 4 }} resizeMode="cover" />
             ) : null}
             {!isAiQueryAudio && aiQueryDisplayText ? (
               <Text style={[styles.outgoingText, { color: '#00695C' }]}>{aiQueryDisplayText}</Text>
@@ -1722,15 +1817,70 @@ export default function CustomerChatScreen() {
             style={[styles.tab, activeTab === 'ai' && styles.tabActive]}
             onPress={() => setActiveTab('ai')}
           >
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
-              <Text style={[styles.tabText, activeTab === 'ai' && styles.tabTextActive]}>AI Messages</Text>
-              {activeTab === 'ai' && (
-                <Ionicons name="chevron-down" size={12} color="#FFFFFF" />
-              )}
-            </View>
+            <Text style={[styles.tabText, activeTab === 'ai' && styles.tabTextActive]}>AI Messages</Text>
+            {activeTab === 'ai' && (
+              <TouchableOpacity 
+                onPress={() => setShowConvDropdown(prev => !prev)} 
+                style={{ marginLeft: 4, padding: 4 }}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              >
+                <Ionicons 
+                  name={showConvDropdown ? 'chevron-up' : 'chevron-down'} 
+                  size={16} 
+                  color="#075E54" 
+                />
+              </TouchableOpacity>
+            )}
           </TouchableOpacity>
         </View>
       </SafeAreaView>
+
+      {/* AI Conversation Dropdown (inline below tab bar) */}
+      {activeTab === 'ai' && showConvDropdown && (
+        <View style={styles.convDropdownContainer}>
+          <TouchableOpacity
+            style={styles.convDropdownNewBtn}
+            onPress={createNewAiConversation}
+            disabled={loadingConversations}
+          >
+            <Ionicons name="add-circle-outline" size={20} color="#075E54" />
+            <Text style={styles.convDropdownNewBtnText}>New Chat</Text>
+          </TouchableOpacity>
+          <ScrollView style={styles.convDropdownList} keyboardShouldPersistTaps="handled">
+            {aiConversations.map((conv) => (
+              <TouchableOpacity
+                key={conv.id}
+                style={[
+                  styles.convDropdownItem,
+                  conv.id === activeAiConvId && styles.convDropdownItemActive,
+                ]}
+                onPress={() => switchAiConversation(conv.id)}
+              >
+                <View style={{ flex: 1 }}>
+                  <Text 
+                    style={[
+                      styles.convDropdownItemTitle,
+                      conv.id === activeAiConvId && styles.convDropdownItemTitleActive,
+                    ]} 
+                    numberOfLines={1}
+                  >
+                    {conv.title || 'Untitled'}
+                  </Text>
+                  <Text style={styles.convDropdownItemDate}>
+                    {new Date(conv.created_at).toLocaleDateString('en-IN', { 
+                      day: 'numeric', 
+                      month: 'short' 
+                    })}
+                  </Text>
+                </View>
+                {conv.id === activeAiConvId && (
+                  <Ionicons name="checkmark-circle" size={20} color="#075E54" />
+                )}
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </View>
+      )}
 
       {/* Chat area — filtered by active tab */}
       <View style={styles.chatArea}>
@@ -1819,16 +1969,6 @@ export default function CustomerChatScreen() {
               <View style={styles.sparkProcessingBar}>
                 <ActivityIndicator size="small" color="#075E54" />
                 <Text style={styles.sparkProcessingText}>AI is thinking...</Text>
-                <TouchableOpacity
-                  onPress={() => {
-                    aiQueryAbortRef.current?.abort();
-                    aiQueryAbortRef.current = null;
-                    setAiQuerying(false);
-                  }}
-                  style={{ marginLeft: 'auto', padding: 4 }}
-                >
-                  <Ionicons name="close-circle" size={18} color="#075E54" />
-                </TouchableOpacity>
               </View>
             )}
             {aiAttachment && (
@@ -1868,7 +2008,7 @@ export default function CustomerChatScreen() {
               {(aiQueryText.trim().length > 0 || aiAttachment) ? (
                 <TouchableOpacity
                   style={[styles.sendBtn, { backgroundColor: '#E91E63' }]}
-                  onPress={() => handleAiQuery()}
+                  onPress={handleAiQuery}
                   disabled={aiQuerying}
                 >
                   {aiQuerying ? <ActivityIndicator size="small" color="#FFF" /> : <Ionicons name="send" size={20} color="#FFF" />}
@@ -2958,4 +3098,60 @@ const styles = StyleSheet.create({
   },
   attachMsgName: { fontSize: 13, color: '#333', fontWeight: '500' },
   attachMsgMeta: { fontSize: 11, color: '#999', marginTop: 2 },
+
+  // AI Conversation Dropdown
+  convDropdownContainer: {
+    backgroundColor: '#FFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+    maxHeight: 280,
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+  },
+  convDropdownNewBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+    backgroundColor: '#F5F5F5',
+  },
+  convDropdownNewBtnText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#075E54',
+  },
+  convDropdownList: {
+    maxHeight: 220,
+  },
+  convDropdownItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0F0F0',
+  },
+  convDropdownItemActive: {
+    backgroundColor: '#E8F5E9',
+  },
+  convDropdownItemTitle: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#333',
+    marginBottom: 2,
+  },
+  convDropdownItemTitleActive: {
+    color: '#075E54',
+    fontWeight: '600',
+  },
+  convDropdownItemDate: {
+    fontSize: 11,
+    color: '#999',
+  },
 });

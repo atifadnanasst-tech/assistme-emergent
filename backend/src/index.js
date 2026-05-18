@@ -1010,7 +1010,7 @@ app.get('/api/chat/:customer_id', async (c) => {
       const before = c.req.query('before');
       let query = supabase
         .from('messages')
-        .select('id, role, content, metadata, created_at, input_modality, canonical_text')
+        .select('id, role, content, metadata, created_at')
         .eq('conversation_id', conversation.id)
         .is('deleted_at', null)
         .order('created_at', { ascending: false })
@@ -1037,8 +1037,6 @@ app.get('/api/chat/:customer_id', async (c) => {
           card_data: m.metadata?.card_data || {},
           preview_text: m.metadata?.preview_text || null,
           metadata: m.metadata || {},
-          input_modality: m.input_modality || null,
-          canonical_text: m.canonical_text || null,
         })).reverse();
       }
 
@@ -3314,7 +3312,6 @@ const AI_QUERY_TOOLS = [
   { type: 'function', function: { name: 'get_purchase_history', description: 'Get products purchased by this customer with quantities, amounts, dates', parameters: { type: 'object', properties: { months: { type: 'number', description: 'How many months back to look. Default: 6' } }, required: [] } } },
   { type: 'function', function: { name: 'get_financial_summary', description: 'Total purchases, total payments, outstanding balance, avg order value for this customer in a date range', parameters: { type: 'object', properties: { months: { type: 'number', description: 'Months back. Default: 6' } }, required: [] } } },
   { type: 'function', function: { name: 'get_customer_tasks', description: 'Get pending tasks, reminders, deliveries for this customer', parameters: { type: 'object', properties: {}, required: [] } } },
-  { type: 'function', function: { name: 'set_entity_field', description: 'Set a field on a customer entity. Use when owner wants to update customer information like language, GSTIN, phone, email, or notes. Always requires owner confirmation before executing.', parameters: { type: 'object', properties: { mutation_key: { type: 'string', description: 'The mutation key identifying which field to set. Example: customer.language.set' }, value: { type: 'string', description: 'The new value to set' }, confirmed: { type: 'boolean', description: 'Set to true only when owner has explicitly confirmed the change in this conversation' } }, required: ['mutation_key', 'value'] } } },
 ];
 
 async function executeAiQueryTool(toolName, args, supabase, organisationId, customerId) {
@@ -3376,181 +3373,77 @@ async function executeAiQueryTool(toolName, args, supabase, organisationId, cust
         .eq('organisation_id', organisationId).eq('entity_id', customerId).neq('status', 'completed').order('due_date', { ascending: true }).limit(10);
       return { tasks: tasks || [], count: (tasks || []).length };
     }
-    case 'set_entity_field': {
-      // Generic AI mutation engine — whitelist-driven, no hardcoded field names
-      // v1 scope: customer entity only (organisationId + customerId always in scope)
-      // Known limitation: single pending_action only — queue semantics deferred to v2
-      // When multi-pending arrives: use pending_actions:[] not nested object
-      const { mutation_key, value, confirmed } = args;
-      if (!mutation_key || value === undefined || value === null) {
-        return { error: 'missing_args', message: 'mutation_key and value are required' };
-      }
-      // Step 1 — Read whitelist row from DB (generic — no hardcoded field names)
-      const { data: fieldDef, error: fieldErr } = await supabase
-        .from('ai_writable_fields')
-        .select('mutation_key, entity_type, table_name, field_path, field_label, value_type, permission_level, allowed_values, requires_confirmation, rejection_message, deep_link_screen')
-        .eq('mutation_key', mutation_key)
-        .eq('is_active', true)
-        .single();
-      if (fieldErr || !fieldDef) {
-        return { error: 'mutation_not_allowed', message: 'This field cannot be set by AI. Please update it manually.' };
-      }
-      if (fieldDef.permission_level !== 'writable_with_confirmation') {
-        return { error: 'mutation_not_allowed', message: fieldDef.rejection_message || 'This field cannot be set by AI.' };
-      }
-      // Step 2 — Validate value (two-layer typed validator)
-      // Layer 1: enum check — if allowed_values is set on the whitelist row, enforce strict match
-      // Used for future fields like status, currency, country_code with finite value sets
-      if (fieldDef.allowed_values && Array.isArray(fieldDef.allowed_values)) {
-        if (!fieldDef.allowed_values.includes(value)) {
-          return { error: 'invalid_value', message: `Value "${value}" is not allowed for ${fieldDef.field_label}. Allowed: ${fieldDef.allowed_values.join(', ')}` };
-        }
-      }
-      // Layer 2: type-based format validator — derives from value_type column on whitelist row
-      // language_code: accepts any valid BCP-47/ISO 639-1 code, rejects garbage strings
-      // Future types: phone_number, email, gstin, currency_code, country_code
-      if (fieldDef.value_type === 'language_code') {
-        const LANGUAGE_CODE_REGEX = /^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$/;
-        if (!LANGUAGE_CODE_REGEX.test(value)) {
-          return { error: 'invalid_value', message: `"${value}" is not a valid language code. Please use a standard code like: ur, hi, bn, ta, te, ml, en, fr, zh-CN` };
-        }
-      }
-      // Step 3 — Validate entity belongs to org (v1: customer-scoped only)
-      const { data: entityCheck } = await supabase
-        .from('customers')
-        .select('id')
-        .eq('id', customerId)
-        .eq('organisation_id', organisationId)
-        .single();
-      if (!entityCheck) {
-        return { error: 'entity_not_found', message: 'Customer not found.' };
-      }
-      // Step 4 — If not confirmed, store pending_action and request confirmation
-      if (!confirmed) {
-        const pendingAction = {
-          type: 'entity_field_update',
-          mutation_key: fieldDef.mutation_key,
-          target_entity_id: customerId,
-          field_path: fieldDef.field_path,
-          field_label: fieldDef.field_label,
-          new_value: value,
-          table_name: fieldDef.table_name,
-        };
-        const { data: aiConv } = await supabase
-          .from('ai_conversations')
-          .select('id, custom_fields')
-          .eq('organisation_id', organisationId)
-          .eq('customer_id', customerId)
-          .eq('scope', 'customer')
-          .order('created_at', { ascending: false })
-          .limit(1)
-          .single();
-        if (aiConv) {
-          const updatedFields = {
-            ...(aiConv.custom_fields || {}),
-            working_state: {
-              ...((aiConv.custom_fields || {}).working_state || {}),
-              pending_action: pendingAction,
-            },
-          };
-          await supabase
-            .from('ai_conversations')
-            .update({ custom_fields: updatedFields })
-            .eq('id', aiConv.id);
-        }
-        return {
-          status: 'awaiting_confirmation',
-          field_label: fieldDef.field_label,
-          new_value: value,
-          message: `Ready to set ${fieldDef.field_label} to "${value}". Please confirm.`,
-        };
-      }
-      // Step 5 — confirmed=true: execute deterministic write
-      // TRANSITIONAL NOTE: set_customer_custom_field RPC is customer custom_fields only
-      // Does not support: direct columns, business_profiles, nested paths beyond one level
-      // Phase 2: replace with generic mutation_executor supporting all table_name + field_path combos
-      // TODO Phase 2 — Add mutation provenance logging before write:
-      // { old_value, new_value, mutation_key, origin_message_id, confirmed_by, ai_confidence_score }
-      // Store in ai_mutation_logs table (separate from activity_logs — semantic audit trail)
-      const fieldPath = fieldDef.field_path;
-      if (fieldPath.startsWith('custom_fields.')) {
-        const jsonbKey = fieldPath.replace('custom_fields.', '');
-        const { error: rpcErr } = await supabase.rpc('set_customer_custom_field', {
-          p_customer_id: customerId,
-          p_org_id: organisationId,
-          p_key: jsonbKey,
-          p_value: value,
-        });
-        if (rpcErr) {
-          console.error('set_entity_field jsonb write error:', rpcErr);
-          return { status: 'write_failed', message: 'Update failed. Please try again.' };
-        }
-      } else {
-        // Direct column update
-        const { error: updateErr } = await supabase
-          .from(fieldDef.table_name)
-          .update({ [fieldPath]: value })
-          .eq('id', customerId)
-          .eq('organisation_id', organisationId);
-        if (updateErr) {
-          console.error('set_entity_field direct write error:', updateErr);
-          return { status: 'write_failed', message: 'Update failed. Please try again.' };
-        }
-      }
-      // Step 6 — Read-after-write verification (generic — selects only the field being verified)
-      const selectField = fieldPath.startsWith('custom_fields.') ? 'custom_fields' : fieldPath;
-      const { data: verified } = await supabase
-        .from('customers')
-        .select(selectField)
-        .eq('id', customerId)
-        .eq('organisation_id', organisationId)
-        .single();
-      let verifiedValue;
-      if (fieldPath.startsWith('custom_fields.')) {
-        const jsonbKey = fieldPath.replace('custom_fields.', '');
-        verifiedValue = verified?.custom_fields?.[jsonbKey];
-      } else {
-        verifiedValue = verified?.[fieldPath];
-      }
-      if (String(verifiedValue) !== String(value)) {
-        console.error(`set_entity_field verification failed: expected "${value}", got "${verifiedValue}"`);
-        return { status: 'write_failed', message: 'Update could not be verified. Please try again.' };
-      }
-      // Step 7 — Clear pending_action from working_state after successful verified write
-      const { data: aiConvPost } = await supabase
-        .from('ai_conversations')
-        .select('id, custom_fields')
-        .eq('organisation_id', organisationId)
-        .eq('customer_id', customerId)
-        .eq('scope', 'customer')
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .single();
-      if (aiConvPost) {
-        const clearedFields = {
-          ...(aiConvPost.custom_fields || {}),
-          working_state: {
-            ...((aiConvPost.custom_fields || {}).working_state || {}),
-            pending_action: null,
-          },
-        };
-        await supabase
-          .from('ai_conversations')
-          .update({ custom_fields: clearedFields })
-          .eq('id', aiConvPost.id);
-      }
-      // Step 8 — Return verified success for AI narration
-      return {
-        status: 'success',
-        field_label: fieldDef.field_label,
-        new_value: value,
-        message: `${fieldDef.field_label} successfully updated to "${value}".`,
-      };
-    }
     default:
       return { error: 'Unknown tool' };
   }
 }
+
+// ─── GET /api/chat/:customer_id/ai-conversations ────────────────
+app.get('/api/chat/:customer_id/ai-conversations', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+    const customerId = c.req.param('customer_id');
+
+    const customer = await validateCustomer(customerId, organisationId);
+    if (!customer) return c.json({ error: 'customer_not_found' }, 404);
+
+    // Fetch all AI conversations for this customer
+    const { data: conversations } = await supabase
+      .from('ai_conversations')
+      .select('id, title, is_archived, created_at')
+      .eq('organisation_id', organisationId)
+      .eq('customer_id', customerId)
+      .eq('scope', 'customer')
+      .eq('is_archived', false)
+      .order('created_at', { ascending: false });
+
+    return c.json({ conversations: conversations || [] });
+  } catch (error) {
+    console.error('GET /api/chat/:customer_id/ai-conversations error:', error);
+    return c.json({ error: 'server_error' }, 500);
+  }
+});
+
+// ─── POST /api/chat/:customer_id/ai-conversations ───────────────
+app.post('/api/chat/:customer_id/ai-conversations', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { userId, organisationId } = auth;
+    const customerId = c.req.param('customer_id');
+
+    const customer = await validateCustomer(customerId, organisationId);
+    if (!customer) return c.json({ error: 'customer_not_found' }, 404);
+
+    const body = await c.req.json();
+    const title = body.title || 'New Chat';
+
+    // Create new AI conversation
+    const { data: newConv, error: convError } = await supabase
+      .from('ai_conversations')
+      .insert({
+        organisation_id: organisationId,
+        customer_id: customerId,
+        scope: 'customer',
+        title: title,
+        is_archived: false,
+        custom_fields: {},
+      })
+      .select('id, title, is_archived, created_at')
+      .single();
+
+    if (convError || !newConv) {
+      return c.json({ error: 'failed_to_create_conversation' }, 500);
+    }
+
+    return c.json({ conversation: newConv });
+  } catch (error) {
+    console.error('POST /api/chat/:customer_id/ai-conversations error:', error);
+    return c.json({ error: 'server_error' }, 500);
+  }
+});
 
 app.post('/api/chat/:customer_id/ai-query', async (c) => {
   try {
@@ -3565,6 +3458,9 @@ app.post('/api/chat/:customer_id/ai-query', async (c) => {
     const body = await c.req.json();
     const conversationId = body.conversation_id;
     if (!conversationId) return c.json({ error: 'missing_conversation_id' }, 400);
+
+    // Accept optional ai_conversation_id (additive — conversation_id continues working)
+    const aiConversationId = body.ai_conversation_id || null;
 
     // Get owner's preferred language
     const language = auth.primaryLanguage || 'en';
@@ -3651,7 +3547,7 @@ app.post('/api/chat/:customer_id/ai-query', async (c) => {
       : effectiveQuery;
 
     // Save owner's query as owner-only message
-    await supabase.from('messages').insert({
+    const insertPayload = {
       organisation_id: organisationId, conversation_id: conversationId,
       role: 'user', content: displayContent,
       canonical_text: canonicalText,
@@ -3662,7 +3558,11 @@ app.post('/api/chat/:customer_id/ai-query', async (c) => {
         attachment: attachmentRaw || undefined,
       },
       tokens_input: 0, tokens_output: 0,
-    });
+    };
+    if (aiConversationId) {
+      insertPayload.ai_conversation_id = aiConversationId;
+    }
+    await supabase.from('messages').insert(insertPayload);
 
     // Use effectiveQuery for AI reasoning
     const query = effectiveQuery;
@@ -3720,7 +3620,7 @@ app.post('/api/chat/:customer_id/ai-query', async (c) => {
 
 == LANGUAGE POLICY (non-negotiable) ==
 Owner-facing responses (analysis, briefs, summaries, insights): MUST be in ${languageName}. Use that script exclusively. Never switch scripts.
-Customer-facing draft messages (reminders, follow-ups, WhatsApp messages): ${customerLanguageName ? `Use ${customerLanguageName} — this customer's confirmed preferred language.` : `Customer language not set. Ask the owner which language to use FOR THIS DRAFT ONLY. This is a one-time drafting choice — do NOT propose setting or saving the language permanently. Do NOT call set_entity_field. Do NOT suggest any specific language. Simply ask: which language should I draft this message in?`}
+Customer-facing draft messages (reminders, follow-ups, WhatsApp messages): ${customerLanguageName ? `Use ${customerLanguageName} — this customer's confirmed preferred language.` : `Customer language not set. Ask the owner which language to use before drafting. Do not guess or assume.`}
 Fallback to English only if the target language cannot be rendered.
 
 == CAPABILITY REGISTRY (available business data) ==
@@ -3739,7 +3639,6 @@ Use this knowledge to infer answers to any owner query about this customer.
 - Amounts in INR (₹), Indian format: ₹1,20,000.
 - Never invent numbers. If data is empty, say so clearly.
 - Today's date: ${new Date().toISOString().split('T')[0]}
-- When answering any query, naturally reference the specific subject in your answer (product name, invoice number, customer name, date) so the owner feels their question was understood. Do not announce what you see — just answer with the specific reference woven in naturally. Example: owner shows photo of Noorani Qaida and asks how much was sold — answer 'Ania Adnan purchased Noorani Qaida for ₹60' not 'I can see you are showing me Noorani Qaida...'.
 
 == OWNER BUSINESS PROFILE ==
 Business name: ${ownerName || 'Not configured — owner must set up business profile'}
@@ -3748,61 +3647,11 @@ Phone: ${ownerPhone || 'Not configured'}
 == DRAFT MESSAGE RULES ==
 - NEVER use placeholders like [Your Name], [Company Name], or [Contact Number] in drafts.
 - ${ownerSignature ? `Always sign customer-facing drafts with:\n${ownerSignature}` : `Business profile not set up. Tell the owner to configure their business profile before drafts can be signed correctly.`}
-- If customer language is unknown, ask the owner which language to use FOR THIS MESSAGE ONLY. Example: "Which language should I draft this reminder in?" — then draft immediately after owner replies. This is ephemeral. Do NOT call set_entity_field. Do NOT suggest a specific language. Do NOT propose saving or setting the language permanently.
+- If customer language is unknown, ask the owner which language to use. Do not draft in any language without confirmation.
 
 == ACTION CARD RULES ==
 - Append [ACTION_CARD:draft_message] ONLY when your response is a message intended to be sent TO the customer (payment reminder, follow-up, reorder request, apology, delivery update).
-- NEVER append this marker for: analytical responses, owner briefs, summaries, data breakdowns, "Before I Call" briefs, internal insights, or any content the owner reads for themselves.
-
-== ENTITY FIELD SETTING ==
-You can update certain customer fields on behalf of the owner using the set_entity_field tool.
-Supported mutation keys (v1): customer.language.set
-
-LANGUAGE CODE NORMALIZATION (mandatory):
-- Always pass ISO 639-1 or BCP-47 codes as the value — never pass full language names
-- You already know these codes. Normalize before calling the tool.
-- Examples: Urdu → ur, Hindi → hi, Bengali → bn, Tamil → ta, Telugu → te,
-  Malayalam → ml, Kannada → kn, Gujarati → gu, Marathi → mr, Punjabi → pa,
-  Arabic → ar, English → en, French → fr, Spanish → es, Chinese Simplified → zh-CN
-- For any language not listed: use the correct ISO 639-1 code you already know
-- If you genuinely cannot determine the ISO code for a language, ask the owner to clarify
-- NEVER pass values like "Urdu", "Bengali", "Hindi" — always the code: "ur", "bn", "hi"
-- Always emit codes in lowercase except where region tag requires uppercase (e.g. zh-CN, pt-BR)
-
-MUTATION INTENT GATE (critical):
-set_entity_field must ONLY be called when owner explicitly expresses intent to permanently change a customer field.
-Valid triggers: "set language to X", "language change karo", "inki language X kar do", "remember their language as X", "save X as their preferred language"
-NEVER valid triggers: "send reminder", "draft message", "write to customer", "reply", any communication/drafting request
-If owner is asking for a draft and language is unknown — that is a DRAFT FLOW, not a mutation flow. Ask language for the draft only.
-If normalization fails — say "I could not map that to a language code, please try again." NEVER suggest an alternative language. NEVER guess.
-
-WHEN TO USE:
-- Owner says things like "is customer ki language Urdu kar do", "set this customer's language to Hindi", "inki language change karo"
-- Only call set_entity_field when the owner clearly intends to change a customer field
-- If a pending confirmation already exists in this conversation, continue that flow before starting a new field update
-
-CONFIRMATION FLOW (mandatory — never skip):
-1. First call: set_entity_field(mutation_key, value, confirmed=false)
-   - Tool returns { status: "awaiting_confirmation", field_label, new_value }
-   - You MUST ask owner to confirm before proceeding
-   - Example: "Customer ki language Urdu set kar doon?" or "Should I set this customer's preferred language to Urdu?"
-2. Owner confirms ("haan", "yes", "kar do", "ok", "theek hai"):
-   - Call set_entity_field(mutation_key, value, confirmed=true)
-   - Tool returns { status: "success" } or { status: "write_failed" }
-3. On success: narrate naturally in the same language and script the owner is currently using — do not switch scripts unless owner explicitly switches
-   - Example (Urdu): "Customer ki language Urdu set ho gayi."
-   - Example (English): "Done — customer's preferred language set to Urdu."
-   - ONLY narrate success AFTER receiving status: "success" from tool — never assume
-4. On write_failed: tell owner clearly in their current language
-   - Example: "Language update nahi hua. Dobara try karein."
-5. Owner cancels ("nahi", "rehne do", "cancel", "chodo"):
-   - Do not call the tool. Acknowledge and move on.
-
-HARD RULES:
-- NEVER call set_entity_field with confirmed=true without explicit owner confirmation in this conversation
-- NEVER invent or assume a confirmed=true — it must come from owner's message
-- NEVER narrate success before receiving status: "success" from the tool
-- If tool returns error: "mutation_not_allowed" — tell owner this field must be updated manually and do not retry`;
+- NEVER append this marker for: analytical responses, owner briefs, summaries, data breakdowns, "Before I Call" briefs, internal insights, or any content the owner reads for themselves.`;
 
     // Build user message — multimodal if image attachment present
     // attachmentRaw already read above — do not re-read body.attachment
@@ -3824,11 +3673,18 @@ HARD RULES:
       userMessage = { role: 'user', content: query };
     }
     // Fetch last 15 AI conversation messages for continuity
-    const { data: recentAiMessages } = await supabase
+    // If ai_conversation_id provided, filter by it; else fetch all AI messages
+    let aiMessagesQuery = supabase
       .from('messages')
       .select('role, content, input_modality, created_at')
       .eq('conversation_id', conversationId)
-      .in('metadata->>message_type', ['ai_query', 'ai_response', 'action_card'])
+      .in('metadata->>message_type', ['ai_query', 'ai_response', 'action_card']);
+    
+    if (aiConversationId) {
+      aiMessagesQuery = aiMessagesQuery.eq('ai_conversation_id', aiConversationId);
+    }
+    
+    const { data: recentAiMessages } = await aiMessagesQuery
       .order('created_at', { ascending: false })
       .limit(15);
     const conversationHistory = (recentAiMessages || [])
@@ -3840,15 +3696,21 @@ HARD RULES:
       .filter(m => m.content.trim().length > 0);
 
     // Fetch working state from ai_conversations
-    const { data: aiConvData } = await supabase
+    // If ai_conversation_id provided, fetch from that specific conversation
+    let aiConvQuery = supabase
       .from('ai_conversations')
-      .select('custom_fields')
+      .select('custom_fields, title')
       .eq('organisation_id', organisationId)
       .eq('customer_id', customerId)
-      .eq('scope', 'customer')
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .single();
+      .eq('scope', 'customer');
+    
+    if (aiConversationId) {
+      aiConvQuery = aiConvQuery.eq('id', aiConversationId);
+    } else {
+      aiConvQuery = aiConvQuery.order('created_at', { ascending: false }).limit(1);
+    }
+    
+    const { data: aiConvData } = await aiConvQuery.maybeSingle();
     const workingState = aiConvData?.custom_fields?.working_state || null;
     const workingStateContext = workingState
       ? '\n\n== ACTIVE CONVERSATION STATE ==\n' + JSON.stringify(workingState, null, 2) + '\nUse this state to resolve references and avoid re-asking resolved questions.'
@@ -3907,7 +3769,7 @@ HARD RULES:
     const cleanResponse = responseText.replace(/\[ACTION_CARD:[^\]]+\]/g, '').trim();
 
     // Save AI response as owner-only message
-    const { data: savedMsg } = await supabase.from('messages').insert({
+    const responsePayload = {
       organisation_id: organisationId, conversation_id: conversationId,
       role: 'assistant', content: cleanResponse,
       canonical_text: cleanResponse,
@@ -3921,7 +3783,26 @@ HARD RULES:
         preview_text: cleanResponse.substring(0, 50),
       },
       tokens_input: 0, tokens_output: 0,
-    }).select('id').single();
+    };
+    if (aiConversationId) {
+      responsePayload.ai_conversation_id = aiConversationId;
+    }
+    const { data: savedMsg } = await supabase.from('messages').insert(responsePayload).select('id').single();
+
+    // Auto-generate title if ai_conversation has default/empty title
+    if (aiConversationId && aiConvData) {
+      const currentTitle = aiConvData.title || '';
+      if (!currentTitle || currentTitle === 'New Chat' || currentTitle.trim() === '') {
+        // Generate title from first query (max 40 chars)
+        const firstQuery = effectiveQuery.substring(0, 40).trim();
+        const autoTitle = firstQuery.length < effectiveQuery.length ? firstQuery + '...' : firstQuery;
+        await supabase
+          .from('ai_conversations')
+          .update({ title: autoTitle })
+          .eq('id', aiConversationId)
+          .eq('organisation_id', organisationId);
+      }
+    }
 
     return c.json({
       message_id: savedMsg?.id,
