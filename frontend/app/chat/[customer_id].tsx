@@ -1828,71 +1828,50 @@ export default function CustomerChatScreen() {
               }
             }}
           >
-            <Text style={[styles.tabText, activeTab === 'ai' && styles.tabTextActive]}>AI Messages</Text>
-            {activeTab === 'ai' && (
-              <TouchableOpacity 
-                onPress={() => setShowConvDropdown(prev => !prev)} 
-                style={{ marginLeft: 4, padding: 4 }}
-                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-              >
-                <Ionicons 
-                  name={showConvDropdown ? 'chevron-up' : 'chevron-down'} 
-                  size={16} 
-                  color="#075E54" 
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <Text style={[styles.tabText, activeTab === 'ai' && styles.tabTextActive]}>AI Messages</Text>
+              {activeTab === 'ai' && (
+                <Ionicons
+                  name={showConvDropdown ? 'chevron-up' : 'chevron-down'}
+                  size={12}
+                  color="#FFFFFF"
+                  style={{ marginLeft: 3 }}
                 />
-              </TouchableOpacity>
-            )}
-          </TouchableOpacity>
-        </View>
-      </SafeAreaView>
+              )}
+            </View>
 
-      {/* AI Conversation Dropdown (inline below tab bar) */}
+      {/* AI Conversation Dropdown - floating overlay */}
       {activeTab === 'ai' && showConvDropdown && (
-        <View style={styles.convDropdownContainer}>
-          <TouchableOpacity
-            style={styles.convDropdownNewBtn}
-            onPress={createNewAiConversation}
-            disabled={loadingConversations}
-          >
-            <Ionicons name="add-circle-outline" size={20} color="#075E54" />
-            <Text style={styles.convDropdownNewBtnText}>New Chat</Text>
-          </TouchableOpacity>
-          <ScrollView style={styles.convDropdownList} keyboardShouldPersistTaps="handled">
-            {aiConversations.map((conv) => (
-              <TouchableOpacity
-                key={conv.id}
-                style={[
-                  styles.convDropdownItem,
-                  conv.id === activeAiConvId && styles.convDropdownItemActive,
-                ]}
-                onPress={() => switchAiConversation(conv.id)}
-              >
-                <View style={{ flex: 1 }}>
-                  <Text 
-                    style={[
-                      styles.convDropdownItemTitle,
-                      conv.id === activeAiConvId && styles.convDropdownItemTitleActive,
-                    ]} 
-                    numberOfLines={1}
-                  >
-                    {conv.title || 'Untitled'}
+        <Pressable
+          style={styles.convDropdownOverlay}
+          onPress={() => setShowConvDropdown(false)}
+        >
+          <Pressable style={styles.convDropdownContainer} onPress={() => {}}>
+            <TouchableOpacity
+              style={styles.convDropdownNewBtn}
+              onPress={createNewAiConversation}
+              disabled={loadingConversations}
+            >
+              <Ionicons name="create-outline" size={16} color="#075E54" />
+              <Text style={styles.convDropdownNewBtnText}>New Chat</Text>
+            </TouchableOpacity>
+            <View style={styles.convDropdownDivider} />
+            <ScrollView style={styles.convDropdownList} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+              {aiConversations.map((conv) => (
+                <TouchableOpacity
+                  key={conv.id}
+                  style={[styles.convDropdownItem, conv.id === activeAiConvId && styles.convDropdownItemActive]}
+                  onPress={() => switchAiConversation(conv.id)}
+                >
+                  <Text style={[styles.convDropdownItemTitle, conv.id === activeAiConvId && styles.convDropdownItemTitleActive]} numberOfLines={1} ellipsizeMode="tail">
+                    {conv.title || new Date(conv.created_at).toLocaleString("en-IN", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
                   </Text>
-                  <Text style={styles.convDropdownItemDate}>
-                    {new Date(conv.created_at).toLocaleDateString('en-IN', { 
-                      day: 'numeric', 
-                      month: 'short' 
-                    })}
-                  </Text>
-                </View>
-                {conv.id === activeAiConvId && (
-                  <Ionicons name="checkmark-circle" size={20} color="#075E54" />
-                )}
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
-        </View>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </Pressable>
+        </Pressable>
       )}
-
       {/* Chat area — filtered by active tab */}
       <View style={styles.chatArea}>
         {activeTab === 'broadcast' ? (
@@ -3111,58 +3090,61 @@ const styles = StyleSheet.create({
   attachMsgMeta: { fontSize: 11, color: '#999', marginTop: 2 },
 
   // AI Conversation Dropdown
+  convDropdownOverlay: {
+    position: 'absolute',
+    top: 0, left: 0, right: 0, bottom: 0,
+    zIndex: 1000,
+    elevation: 20,
+  },
   convDropdownContainer: {
+    position: 'absolute',
+    top: 90,
+    right: 8,
+    width: 240,
     backgroundColor: '#FFF',
-    borderBottomWidth: 1,
-    borderBottomColor: '#E0E0E0',
-    maxHeight: 280,
-    elevation: 2,
+    borderRadius: 8,
+    elevation: 8,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    paddingVertical: 4,
+    zIndex: 1001,
   },
   convDropdownNewBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
     paddingVertical: 12,
     paddingHorizontal: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#E0E0E0',
-    backgroundColor: '#F5F5F5',
   },
   convDropdownNewBtnText: {
     fontSize: 15,
-    fontWeight: '600',
+    fontWeight: '700',
     color: '#075E54',
+    marginLeft: 8,
+  },
+  convDropdownDivider: {
+    height: 1,
+    backgroundColor: '#EEEEEE',
+    marginHorizontal: 12,
   },
   convDropdownList: {
     maxHeight: 220,
   },
   convDropdownItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 12,
+    paddingVertical: 11,
     paddingHorizontal: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F0F0F0',
   },
   convDropdownItemActive: {
     backgroundColor: '#E8F5E9',
   },
   convDropdownItemTitle: {
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '500',
     color: '#333',
-    marginBottom: 2,
   },
   convDropdownItemTitleActive: {
     color: '#075E54',
     fontWeight: '600',
-  },
-  convDropdownItemDate: {
-    fontSize: 11,
-    color: '#999',
   },
 });
