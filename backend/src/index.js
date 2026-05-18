@@ -3397,7 +3397,8 @@ app.get('/api/chat/:customer_id/ai-conversations', async (c) => {
       .eq('customer_id', customerId)
       .eq('scope', 'customer')
       .eq('is_archived', false)
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false })
+      .limit(20);
 
     return c.json({ conversations: conversations || [] });
   } catch (error) {
@@ -3418,7 +3419,7 @@ app.post('/api/chat/:customer_id/ai-conversations', async (c) => {
     if (!customer) return c.json({ error: 'customer_not_found' }, 404);
 
     const body = await c.req.json();
-    const title = body.title || 'New Chat';
+    const title = null; // title set via auto-title on first message, not on creation
 
     // Create new AI conversation
     const { data: newConv, error: convError } = await supabase
@@ -3461,6 +3462,22 @@ app.post('/api/chat/:customer_id/ai-query', async (c) => {
 
     // Accept optional ai_conversation_id (additive — conversation_id continues working)
     const aiConversationId = body.ai_conversation_id || null;
+
+    // Validate ai_conversation_id belongs to this org + customer — security boundary
+    if (aiConversationId) {
+      const { data: aiConvCheck } = await supabase
+        .from('ai_conversations')
+        .select('id')
+        .eq('id', aiConversationId)
+        .eq('organisation_id', organisationId)
+        .eq('customer_id', customerId)
+        .eq('scope', 'customer')
+        .eq('is_archived', false)
+        .single();
+      if (!aiConvCheck) {
+        return c.json({ error: 'invalid_ai_conversation_id', message: 'AI conversation not found or access denied.' }, 403);
+      }
+    }
 
     // Get owner's preferred language
     const language = auth.primaryLanguage || 'en';

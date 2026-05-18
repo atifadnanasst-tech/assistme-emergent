@@ -213,6 +213,7 @@ export default function CustomerChatScreen() {
   const inputRef = useRef<any>(null);
   const channelRef = useRef<any>(null);
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
+  const initAiConvRef = useRef(false);
 
   // ── Attachment upload ──────────────────────────────────────
   const uploadAttachment = async (localUri: string, name: string, mimeType: string, uploadId: string) => {
@@ -1334,10 +1335,13 @@ export default function CustomerChatScreen() {
 
   // Initialize AI conversation on mount or when AI tab is activated
   useEffect(() => {
-    if (activeTab === 'ai' && customer_id && conversationId && !activeAiConvId) {
+    if (customer_id && conversationId) {
+      initAiConvRef.current = false;
+      setActiveAiConvId(null);
+      setAiConversations([]);
       initAiConversation();
     }
-  }, [activeTab, customer_id, conversationId]);
+  }, [customer_id]);
 
   // Auto-brief on AI tab open (once per day)
   useEffect(() => {
@@ -1815,7 +1819,14 @@ export default function CustomerChatScreen() {
           </TouchableOpacity>
           <TouchableOpacity
             style={[styles.tab, activeTab === 'ai' && styles.tabActive]}
-            onPress={() => setActiveTab('ai')}
+            onPress={() => {
+              if (activeTab === 'ai') {
+                setShowConvDropdown(prev => !prev);
+              } else {
+                setActiveTab('ai');
+                setShowConvDropdown(false);
+              }
+            }}
           >
             <Text style={[styles.tabText, activeTab === 'ai' && styles.tabTextActive]}>AI Messages</Text>
             {activeTab === 'ai' && (
