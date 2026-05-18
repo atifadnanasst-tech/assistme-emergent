@@ -203,6 +203,7 @@ export default function CustomerChatScreen() {
   const inputRef = useRef<any>(null);
   const channelRef = useRef<any>(null);
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
+  const aiQueryAbortRef = useRef<AbortController | null>(null);
 
   // ── Attachment upload ──────────────────────────────────────
   const uploadAttachment = async (localUri: string, name: string, mimeType: string, uploadId: string) => {
@@ -1197,6 +1198,8 @@ export default function CustomerChatScreen() {
       const token = await getToken();
       if (!token) return;
       const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+      const abortController = new AbortController();
+      aiQueryAbortRef.current = abortController;
       const res = await fetch(`${backendUrl}/api/chat/${customer_id}/ai-query`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
@@ -1205,6 +1208,7 @@ export default function CustomerChatScreen() {
           conversation_id: conversationId,
           attachment: capturedAttachment || null,
         }),
+        signal: abortController.signal,
       });
       if (res.ok) {
         const data = await res.json();
@@ -1219,10 +1223,13 @@ export default function CustomerChatScreen() {
       } else {
         Alert.alert('Error', 'Could not get AI response. Try again.');
       }
-    } catch {
-      Alert.alert('Error', 'AI query failed.');
+    } catch (e: any) {
+      if (e?.name !== 'AbortError') {
+        Alert.alert('Error', 'AI query failed.');
+      }
     } finally {
       setAiQuerying(false);
+      aiQueryAbortRef.current = null;
     }
   };
 
@@ -1807,6 +1814,16 @@ export default function CustomerChatScreen() {
               <View style={styles.sparkProcessingBar}>
                 <ActivityIndicator size="small" color="#075E54" />
                 <Text style={styles.sparkProcessingText}>AI is thinking...</Text>
+                <TouchableOpacity
+                  onPress={() => {
+                    aiQueryAbortRef.current?.abort();
+                    aiQueryAbortRef.current = null;
+                    setAiQuerying(false);
+                  }}
+                  style={{ marginLeft: 'auto', padding: 4 }}
+                >
+                  <Ionicons name="close-circle" size={18} color="#075E54" />
+                </TouchableOpacity>
               </View>
             )}
             {aiAttachment && (
