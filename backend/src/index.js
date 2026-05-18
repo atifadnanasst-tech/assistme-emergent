@@ -3398,10 +3398,21 @@ async function executeAiQueryTool(toolName, args, supabase, organisationId, cust
       if (fieldDef.permission_level !== 'writable_with_confirmation') {
         return { error: 'mutation_not_allowed', message: fieldDef.rejection_message || 'This field cannot be set by AI.' };
       }
-      // Step 2 — Validate value against allowed_values if defined
+      // Step 2 — Validate value (two-layer typed validator)
+      // Layer 1: enum check — if allowed_values is set on the whitelist row, enforce strict match
+      // Used for future fields like status, currency, country_code with finite value sets
       if (fieldDef.allowed_values && Array.isArray(fieldDef.allowed_values)) {
         if (!fieldDef.allowed_values.includes(value)) {
           return { error: 'invalid_value', message: `Value "${value}" is not allowed for ${fieldDef.field_label}. Allowed: ${fieldDef.allowed_values.join(', ')}` };
+        }
+      }
+      // Layer 2: type-based format validator — derives from value_type column on whitelist row
+      // language_code: accepts any valid BCP-47/ISO 639-1 code, rejects garbage strings
+      // Future types: phone_number, email, gstin, currency_code, country_code
+      if (fieldDef.value_type === 'language_code') {
+        const LANGUAGE_CODE_REGEX = /^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$/;
+        if (!LANGUAGE_CODE_REGEX.test(value)) {
+          return { error: 'invalid_value', message: `"${value}" is not a valid language code. Please use a standard code like: ur, hi, bn, ta, te, ml, en, fr, zh-CN` };
         }
       }
       // Step 3 — Validate entity belongs to org (v1: customer-scoped only)
@@ -3746,6 +3757,17 @@ Phone: ${ownerPhone || 'Not configured'}
 == ENTITY FIELD SETTING ==
 You can update certain customer fields on behalf of the owner using the set_entity_field tool.
 Supported mutation keys (v1): customer.language.set
+
+LANGUAGE CODE NORMALIZATION (mandatory):
+- Always pass ISO 639-1 or BCP-47 codes as the value — never pass full language names
+- You already know these codes. Normalize before calling the tool.
+- Examples: Urdu → ur, Hindi → hi, Bengali → bn, Tamil → ta, Telugu → te,
+  Malayalam → ml, Kannada → kn, Gujarati → gu, Marathi → mr, Punjabi → pa,
+  Arabic → ar, English → en, French → fr, Spanish → es, Chinese Simplified → zh-CN
+- For any language not listed: use the correct ISO 639-1 code you already know
+- If you genuinely cannot determine the ISO code for a language, ask the owner to clarify
+- NEVER pass values like "Urdu", "Bengali", "Hindi" — always the code: "ur", "bn", "hi"
+- Always emit codes in lowercase except where region tag requires uppercase (e.g. zh-CN, pt-BR)
 
 WHEN TO USE:
 - Owner says things like "is customer ki language Urdu kar do", "set this customer's language to Hindi", "inki language change karo"
