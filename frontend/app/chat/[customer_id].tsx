@@ -1828,17 +1828,23 @@ export default function CustomerChatScreen() {
               }
             }}
           >
-            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <Text style={[styles.tabText, activeTab === 'ai' && styles.tabTextActive]}>AI Messages</Text>
-              {activeTab === 'ai' && (
-                <Ionicons
-                  name={showConvDropdown ? 'chevron-up' : 'chevron-down'}
-                  size={12}
-                  color="#FFFFFF"
-                  style={{ marginLeft: 3 }}
+            <Text style={[styles.tabText, activeTab === 'ai' && styles.tabTextActive]}>AI Messages</Text>
+            {activeTab === 'ai' && (
+              <TouchableOpacity 
+                onPress={() => setShowConvDropdown(prev => !prev)} 
+                style={{ marginLeft: 4, padding: 4 }}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              >
+                <Ionicons 
+                  name={showConvDropdown ? 'chevron-up' : 'chevron-down'} 
+                  size={16} 
+                  color="#075E54" 
                 />
-              )}
-            </View>
+              </TouchableOpacity>
+            )}
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
 
       {/* AI Conversation Dropdown - floating overlay */}
       {activeTab === 'ai' && showConvDropdown && (
@@ -1864,7 +1870,7 @@ export default function CustomerChatScreen() {
                   onPress={() => switchAiConversation(conv.id)}
                 >
                   <Text style={[styles.convDropdownItemTitle, conv.id === activeAiConvId && styles.convDropdownItemTitleActive]} numberOfLines={1} ellipsizeMode="tail">
-                    {conv.title || new Date(conv.created_at).toLocaleString("en-IN", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                    {conv.title || new Date(conv.created_at).toLocaleString('en-IN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
                   </Text>
                 </TouchableOpacity>
               ))}
@@ -1872,6 +1878,7 @@ export default function CustomerChatScreen() {
           </Pressable>
         </Pressable>
       )}
+
       {/* Chat area — filtered by active tab */}
       <View style={styles.chatArea}>
         {activeTab === 'broadcast' ? (
