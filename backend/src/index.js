@@ -3720,7 +3720,7 @@ app.post('/api/chat/:customer_id/ai-query', async (c) => {
 
 == LANGUAGE POLICY (non-negotiable) ==
 Owner-facing responses (analysis, briefs, summaries, insights): MUST be in ${languageName}. Use that script exclusively. Never switch scripts.
-Customer-facing draft messages (reminders, follow-ups, WhatsApp messages): ${customerLanguageName ? `Use ${customerLanguageName} — this customer's confirmed preferred language.` : `Customer language not set. Ask the owner which language to use before drafting. Do not guess or assume.`}
+Customer-facing draft messages (reminders, follow-ups, WhatsApp messages): ${customerLanguageName ? `Use ${customerLanguageName} — this customer's confirmed preferred language.` : `Customer language not set. Ask the owner which language to use FOR THIS DRAFT ONLY. This is a one-time drafting choice — do NOT propose setting or saving the language permanently. Do NOT call set_entity_field. Do NOT suggest any specific language. Simply ask: which language should I draft this message in?`}
 Fallback to English only if the target language cannot be rendered.
 
 == CAPABILITY REGISTRY (available business data) ==
@@ -3748,7 +3748,7 @@ Phone: ${ownerPhone || 'Not configured'}
 == DRAFT MESSAGE RULES ==
 - NEVER use placeholders like [Your Name], [Company Name], or [Contact Number] in drafts.
 - ${ownerSignature ? `Always sign customer-facing drafts with:\n${ownerSignature}` : `Business profile not set up. Tell the owner to configure their business profile before drafts can be signed correctly.`}
-- If customer language is unknown, ask the owner which language to use. Do not draft in any language without confirmation.
+- If customer language is unknown, ask the owner which language to use FOR THIS MESSAGE ONLY. Example: "Which language should I draft this reminder in?" — then draft immediately after owner replies. This is ephemeral. Do NOT call set_entity_field. Do NOT suggest a specific language. Do NOT propose saving or setting the language permanently.
 
 == ACTION CARD RULES ==
 - Append [ACTION_CARD:draft_message] ONLY when your response is a message intended to be sent TO the customer (payment reminder, follow-up, reorder request, apology, delivery update).
@@ -3768,6 +3768,13 @@ LANGUAGE CODE NORMALIZATION (mandatory):
 - If you genuinely cannot determine the ISO code for a language, ask the owner to clarify
 - NEVER pass values like "Urdu", "Bengali", "Hindi" — always the code: "ur", "bn", "hi"
 - Always emit codes in lowercase except where region tag requires uppercase (e.g. zh-CN, pt-BR)
+
+MUTATION INTENT GATE (critical):
+set_entity_field must ONLY be called when owner explicitly expresses intent to permanently change a customer field.
+Valid triggers: "set language to X", "language change karo", "inki language X kar do", "remember their language as X", "save X as their preferred language"
+NEVER valid triggers: "send reminder", "draft message", "write to customer", "reply", any communication/drafting request
+If owner is asking for a draft and language is unknown — that is a DRAFT FLOW, not a mutation flow. Ask language for the draft only.
+If normalization fails — say "I could not map that to a language code, please try again." NEVER suggest an alternative language. NEVER guess.
 
 WHEN TO USE:
 - Owner says things like "is customer ki language Urdu kar do", "set this customer's language to Hindi", "inki language change karo"
