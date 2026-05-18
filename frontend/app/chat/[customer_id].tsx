@@ -1503,10 +1503,10 @@ export default function CustomerChatScreen() {
       const aiQueryAttachUrl = item.metadata?.attachment?.url || null;
       const isAiQueryAudio = aiQueryModality === 'audio' && !!aiQueryAttachUrl;
       const isAiQueryImage = aiQueryModality === 'image' && !!aiQueryAttachUrl;
-      const aiQueryDisplayText = (item.content && item.content !== '🎤 Voice note') ? item.content : null;
+      const aiQueryDisplayText = (item.content && item.content !== '🎤 Voice note') ? item.content.replace(/\n\n\[Customer attachment:[^\]]+\]/g, '').trim() : null;
       content = (
         <View style={styles.outgoingContainer}>
-          <View style={[styles.outgoingBubble, { backgroundColor: '#E0F2F1', overflow: 'hidden', padding: isAiQueryImage ? 0 : 10 }]}>
+          <View style={[styles.outgoingBubble, { backgroundColor: '#E0F2F1', overflow: 'hidden' }]}>
             {isAiQueryAudio ? (
               <TouchableOpacity
                 style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 4 }}
