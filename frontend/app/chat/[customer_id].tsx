@@ -1364,10 +1364,8 @@ export default function CustomerChatScreen() {
 
   // Initialize AI conversation on mount or when AI tab is activated
   useEffect(() => {
-    if (customer_id && conversationId) {
-      initAiConvRef.current = false;
-      setActiveAiConvId(null);
-      setAiConversations([]);
+    if (customer_id && conversationId && !initAiConvRef.current) {
+      initAiConvRef.current = true;
       initAiConversation();
     }
   }, [customer_id, conversationId]);
