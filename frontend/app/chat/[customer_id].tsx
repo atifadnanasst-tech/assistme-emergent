@@ -217,6 +217,25 @@ export default function CustomerChatScreen() {
   const initAiConvRef = useRef(false);
   const aiMsgRequestRef = useRef(0);
 
+  const mountedRef = useRef(true);
+  const aiExecutionRef = useRef(0);
+  const activeAiConvIdRef = useRef<string | null>(null);
+  const customerIdRef = useRef<string | null>(null);
+
+  // ── Runtime authority mirrors ──────────────────────────────
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+  useEffect(() => { activeAiConvIdRef.current = activeAiConvId; }, [activeAiConvId]);
+  useEffect(() => { customerIdRef.current = customer_id ?? null; }, [customer_id]);
+
+  const isExecutionValid = (execId: number, custId: string | null, convId: string | null) =>
+    mountedRef.current &&
+    aiExecutionRef.current === execId &&
+    customerIdRef.current === custId &&
+    activeAiConvIdRef.current === convId;
+
   // ── Attachment upload ──────────────────────────────────────
   const uploadAttachment = async (localUri: string, name: string, mimeType: string, uploadId: string) => {
     const controller = new AbortController();
@@ -1204,11 +1223,21 @@ export default function CustomerChatScreen() {
   const handleAiQuery = async (directQuery?: string) => {
     const rawText = directQuery !== undefined ? directQuery : aiQueryText.trim();
     if ((!rawText && !aiAttachment) || aiQuerying || !conversationId) return;
+
+    // Fetch token BEFORE spinner — prevents permanent spinner on token failure
+    const token = await getToken();
+    if (!token) return;
+
+    // Capture execution authority
+    const execId = ++aiExecutionRef.current;
+    const capturedCustomerId = customerIdRef.current;
+    const capturedConvId = activeAiConvIdRef.current;
+
     Keyboard.dismiss();
     setAiQueryText('');
     setAiQuerying(true);
 
-    // Build query text — preserve both text and attachment context
+    // Build query text
     let text = rawText;
     if (!text && aiAttachment) {
       text = aiAttachment.type === 'audio'
@@ -1228,44 +1257,51 @@ export default function CustomerChatScreen() {
       created_at: new Date().toISOString(), sender_type: 'owner',
       visibility: 'owner_only', message_type: 'ai_query', card_type: null,
       card_data: {}, preview_text: text.substring(0, 50),
+      input_modality: 'text', metadata: {},
     };
     setAiMessages(prev => [queryMsg, ...prev]);
 
-    // Capture attachment before clearing
     const capturedAttachment = aiAttachment;
     setAiAttachment(null);
 
     try {
-      const token = await getToken();
-      if (!token) return;
       const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
       const res = await fetch(`${backendUrl}/api/chat/${customer_id}/ai-query`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          query: text, 
+        body: JSON.stringify({
+          query: text,
           conversation_id: conversationId,
           ai_conversation_id: activeAiConvId || null,
           attachment: capturedAttachment || null,
         }),
       });
+
+      if (!isExecutionValid(execId, capturedCustomerId, capturedConvId)) return;
+
       if (res.ok) {
         const data = await res.json();
+        if (!isExecutionValid(execId, capturedCustomerId, capturedConvId)) return;
         const respMsg: ChatMessage = {
-          id: data.message_id || `air-${Date.now()}`, role: 'assistant', content: data.response,
+          id: data.message_id || `air-${Date.now()}`, role: 'assistant', content: data.response || '',
           created_at: new Date().toISOString(), sender_type: 'ai',
           visibility: 'owner_only', message_type: data.message_type || 'ai_response',
           card_type: data.card_type || null,
-          card_data: { shareable: data.shareable || false }, preview_text: data.response?.substring(0, 50),
+          card_data: { shareable: data.shareable || false },
+          preview_text: data.response?.substring(0, 50) || null,
+          input_modality: 'text', metadata: {},
         };
+        if (!isExecutionValid(execId, capturedCustomerId, capturedConvId)) return;
         setAiMessages(prev => [respMsg, ...prev]);
       } else {
+        if (!isExecutionValid(execId, capturedCustomerId, capturedConvId)) return;
         Alert.alert('Error', 'Could not get AI response. Try again.');
       }
     } catch {
+      if (!isExecutionValid(execId, capturedCustomerId, capturedConvId)) return;
       Alert.alert('Error', 'AI query failed.');
     } finally {
-      setAiQuerying(false);
+      if (mountedRef.current) setAiQuerying(false);
     }
   };
 
@@ -1346,6 +1382,7 @@ export default function CustomerChatScreen() {
 
   const createNewAiConversation = async () => {
     if (!customer_id || loadingConversations) return;
+    aiExecutionRef.current++; // invalidate stale async on new conversation
     setLoadingConversations(true);
     try {
       const token = await getToken();
@@ -1379,6 +1416,7 @@ export default function CustomerChatScreen() {
     }
     setActiveAiConvId(convId);
     setShowConvDropdown(false);
+    aiExecutionRef.current++; // invalidate stale async before state clear
     setAiMessages([]); // clear immediately before fetch
     await loadAiMessages(convId); // Stage 1.5: verify fetch works via console logs before FlatList switch
   };
@@ -1394,7 +1432,7 @@ export default function CustomerChatScreen() {
   // Auto-brief on AI tab open (once per day)
   useEffect(() => {
     if (activeTab === 'ai' && customer_id && conversationId) {
-      checkAndSendAutoBrief();
+      // checkAndSendAutoBrief(); // disabled during stabilization
     }
   }, [activeTab, customer_id, conversationId]);
 
