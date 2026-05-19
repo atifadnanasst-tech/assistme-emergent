@@ -215,6 +215,7 @@ export default function CustomerChatScreen() {
   const channelRef = useRef<any>(null);
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
   const initAiConvRef = useRef(false);
+  const aiMsgRequestRef = useRef(0);
 
   // ── Attachment upload ──────────────────────────────────────
   const uploadAttachment = async (localUri: string, name: string, mimeType: string, uploadId: string) => {
@@ -717,6 +718,7 @@ export default function CustomerChatScreen() {
       setAiMessages([]);
       return;
     }
+    const requestId = ++aiMsgRequestRef.current;
     try {
       const token = await getToken();
       if (!token) return;
@@ -725,17 +727,21 @@ export default function CustomerChatScreen() {
         `${backendUrl}/api/chat/${customer_id}/ai-messages?ai_conversation_id=${convId}`,
         { headers: { 'Authorization': `Bearer ${token}` } }
       );
+      if (requestId !== aiMsgRequestRef.current) return;
       if (res.ok) {
         const data = await res.json();
         const msgs = data.messages || [];
+        if (requestId !== aiMsgRequestRef.current) return;
         setAiMessages(msgs);
         console.log('[AI-MESSAGES] Loaded', msgs.length, 'messages for conv', convId);
       } else {
         console.error('[AI-MESSAGES] Fetch error:', res.status);
+        if (requestId !== aiMsgRequestRef.current) return;
         setAiMessages([]);
       }
     } catch (err) {
       console.error('[AI-MESSAGES] loadAiMessages error:', err);
+      if (requestId !== aiMsgRequestRef.current) return;
       setAiMessages([]);
     }
   };
