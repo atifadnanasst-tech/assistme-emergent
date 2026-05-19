@@ -1012,6 +1012,7 @@ app.get('/api/chat/:customer_id', async (c) => {
         .from('messages')
         .select('id, role, content, metadata, created_at')
         .eq('conversation_id', conversation.id)
+        .or('metadata->>message_type.is.null,metadata->>message_type.not.in.(ai_query,ai_response,action_card)')
         .is('deleted_at', null)
         .order('created_at', { ascending: false })
         .limit(31);
@@ -3442,6 +3443,90 @@ app.post('/api/chat/:customer_id/ai-conversations', async (c) => {
     return c.json({ conversation: newConv });
   } catch (error) {
     console.error('POST /api/chat/:customer_id/ai-conversations error:', error);
+    return c.json({ error: 'server_error' }, 500);
+  }
+});
+
+// ─── GET /api/chat/:customer_id/ai-messages ──────────────────
+// Returns only AI messages (ai_query, ai_response, action_card) for a specific ai_conversation_id
+// Separate from /api/chat/:customer_id which returns direct/operational messages only
+app.get('/api/chat/:customer_id/ai-messages', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+    const customerId = c.req.param('customer_id');
+
+    const customer = await validateCustomer(customerId, organisationId);
+    if (!customer) return c.json({ error: 'customer_not_found' }, 404);
+
+    const aiConversationId = c.req.query('ai_conversation_id');
+    if (!aiConversationId) return c.json({ error: 'missing_ai_conversation_id' }, 400);
+
+    // Validate ai_conversation_id belongs to this org + customer — security boundary
+    const { data: aiConvCheck } = await supabase
+      .from('ai_conversations')
+      .select('id')
+      .eq('id', aiConversationId)
+      .eq('organisation_id', organisationId)
+      .eq('customer_id', customerId)
+      .eq('scope', 'customer')
+      .eq('is_archived', false)
+      .single();
+    if (!aiConvCheck) return c.json({ error: 'ai_conversation_not_found' }, 403);
+
+    // Fetch the conversation_id for this customer
+    const { data: conversation } = await supabase
+      .from('conversations')
+      .select('id')
+      .eq('organisation_id', organisationId)
+      .eq('entity_type', 'customer')
+      .eq('entity_id', customerId)
+      .eq('status', 'active')
+      .maybeSingle();
+
+    if (!conversation) return c.json({ messages: [], has_more: false });
+
+    const before = c.req.query('before');
+    let query = supabase
+      .from('messages')
+      .select('id, role, content, metadata, created_at, ai_conversation_id')
+      .eq('conversation_id', conversation.id)
+      .eq('ai_conversation_id', aiConversationId)
+      .in('metadata->>message_type', ['ai_query', 'ai_response', 'action_card'])
+      .is('deleted_at', null)
+      .order('created_at', { ascending: false })
+      .limit(31);
+
+    if (before) query = query.lt('created_at', before);
+
+    const { data: msgData, error: msgErr } = await query;
+    if (msgErr) {
+      console.error('GET /ai-messages query error:', msgErr);
+      return c.json({ error: 'server_error' }, 500);
+    }
+
+    const hasMore = msgData.length === 31;
+    const slice = hasMore ? msgData.slice(0, 30) : msgData;
+    const messages = slice.map(m => ({
+      id: m.id,
+      role: m.role,
+      content: m.content,
+      created_at: m.created_at,
+      sender_type: m.metadata?.sender_type || null,
+      visibility: m.metadata?.visibility || 'both',
+      message_type: m.metadata?.message_type || 'text',
+      card_type: m.metadata?.card_type || null,
+      card_data: m.metadata?.card_data || {},
+      preview_text: m.metadata?.preview_text || null,
+      metadata: m.metadata || {},
+      ai_conversation_id: m.ai_conversation_id || null,
+    })).reverse();
+
+    return c.json({ messages, has_more: hasMore });
+
+  } catch (error) {
+    console.error('GET /api/chat/:customer_id/ai-messages error:', error);
     return c.json({ error: 'server_error' }, 500);
   }
 });
