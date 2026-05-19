@@ -1789,6 +1789,7 @@ export default function CustomerChatScreen() {
     }
   });
 
+  const displayMessages = activeTab === 'ai' ? aiMessages : filtered;
   // ── Main render ────────────────────────────────────────────
   const canSend = !sparkMode && (attachmentPreview
     ? attachmentPreview.upload_status === 'ready'
@@ -1919,7 +1920,7 @@ export default function CustomerChatScreen() {
         ) : (
           <FlatList
             ref={flatListRef}
-            data={filtered}
+            data={displayMessages}
             renderItem={renderMessage}
             keyExtractor={item => item.id}
             contentContainerStyle={styles.chatContent}
