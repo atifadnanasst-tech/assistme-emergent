@@ -1208,7 +1208,7 @@ export default function CustomerChatScreen() {
       visibility: 'owner_only', message_type: 'ai_query', card_type: null,
       card_data: {}, preview_text: text.substring(0, 50),
     };
-    setMessages(prev => [queryMsg, ...prev]);
+    setAiMessages(prev => [queryMsg, ...prev]);
 
     // Capture attachment before clearing
     const capturedAttachment = aiAttachment;
@@ -1237,7 +1237,7 @@ export default function CustomerChatScreen() {
           card_type: data.card_type || null,
           card_data: { shareable: data.shareable || false }, preview_text: data.response?.substring(0, 50),
         };
-        setMessages(prev => [respMsg, ...prev]);
+        setAiMessages(prev => [respMsg, ...prev]);
       } else {
         Alert.alert('Error', 'Could not get AI response. Try again.');
       }
@@ -1280,6 +1280,7 @@ export default function CustomerChatScreen() {
         if (convList.length > 0) {
           // Set most recent conversation as active
           setActiveAiConvId(convList[0].id);
+          await loadAiMessages(convList[0].id);
         } else {
           // No conversations exist — create default one
           const createRes = await fetch(`${backendUrl}/api/chat/${customer_id}/ai-conversations`, {
@@ -1292,6 +1293,7 @@ export default function CustomerChatScreen() {
             const newConv = createData.conversation;
             setAiConversations([newConv]);
             setActiveAiConvId(newConv.id);
+            await loadAiMessages(newConv.id);
           }
         }
       }
@@ -1340,7 +1342,7 @@ export default function CustomerChatScreen() {
         setActiveAiConvId(newConv.id);
         setShowConvDropdown(false);
         // Clear current AI messages from view
-        setMessages(prev => prev.filter(m => m.message_type !== 'ai_query' && m.message_type !== 'ai_response' && m.message_type !== 'action_card'));
+        setAiMessages([]);
       }
     } catch (err) {
       console.error('createNewAiConversation error:', err);
