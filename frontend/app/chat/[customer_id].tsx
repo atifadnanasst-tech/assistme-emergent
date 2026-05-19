@@ -1370,7 +1370,7 @@ export default function CustomerChatScreen() {
       setAiConversations([]);
       initAiConversation();
     }
-  }, [customer_id]);
+  }, [customer_id, conversationId]);
 
   // Auto-brief on AI tab open (once per day)
   useEffect(() => {
