@@ -1670,7 +1670,7 @@ export default function CustomerChatScreen() {
               <Ionicons name="sparkles" size={14} color={isActionCard ? '#E91E63' : '#075E54'} />
               <Text style={{ fontSize: 11, fontWeight: '700', color: isActionCard ? '#E91E63' : '#075E54' }}>{isActionCard ? 'AI Draft' : 'AI'}</Text>
             </View>
-            <Text style={styles.incomingText}>{item.content.replace(/\*\*(.*?)\*\*/g, '$1').replace(/\*(.*?)\*/g, '$1')}</Text>
+            <Text style={styles.incomingText}>{(item.content || '').replace(/\*\*(.*?)\*\*/g, '$1').replace(/\*(.*?)\*/g, '$1')}</Text>
             <Text style={styles.incomingTime}>{formatTime(item.created_at)}</Text>
           </View>
           {isActionCard && (
