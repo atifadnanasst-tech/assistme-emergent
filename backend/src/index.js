@@ -3490,7 +3490,7 @@ app.get('/api/chat/:customer_id/ai-messages', async (c) => {
     const before = c.req.query('before');
     let query = supabase
       .from('messages')
-      .select('id, role, content, metadata, created_at, ai_conversation_id')
+      .select('id, role, content, canonical_text, input_modality, metadata, created_at, ai_conversation_id')
       .eq('conversation_id', conversation.id)
       .eq('ai_conversation_id', aiConversationId)
       .in('metadata->>message_type', ['ai_query', 'ai_response', 'action_card'])
@@ -3521,6 +3521,8 @@ app.get('/api/chat/:customer_id/ai-messages', async (c) => {
       preview_text: m.metadata?.preview_text || null,
       metadata: m.metadata || {},
       ai_conversation_id: m.ai_conversation_id || null,
+      canonical_text: m.canonical_text || null,
+      input_modality: m.input_modality || m.metadata?.input_modality || "text",
     })).reverse();
 
     return c.json({ messages, has_more: hasMore });

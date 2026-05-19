@@ -713,6 +713,21 @@ export default function CustomerChatScreen() {
     }
   };
 
+  const normalizeAiMessage = (m: any): ChatMessage => ({
+    id: m.id || String(Date.now() + Math.random()),
+    role: m.role || "assistant",
+    content: typeof m.content === "string" ? m.content : "",
+    created_at: m.created_at || new Date().toISOString(),
+    sender_type: m.sender_type || null,
+    visibility: m.visibility || "owner_only",
+    message_type: m.message_type || m.metadata?.message_type || "ai_response",
+    card_type: m.card_type || null,
+    card_data: m.card_data && typeof m.card_data === "object" ? m.card_data : {},
+    preview_text: m.preview_text || null,
+    input_modality: m.input_modality || m.metadata?.input_modality || "text",
+    metadata: m.metadata && typeof m.metadata === "object" ? m.metadata : {},
+  });
+
   const loadAiMessages = async (convId: string | null) => {
     if (!convId || !customer_id) {
       setAiMessages([]);
@@ -732,7 +747,7 @@ export default function CustomerChatScreen() {
         const data = await res.json();
         const msgs = data.messages || [];
         if (requestId !== aiMsgRequestRef.current) return;
-        setAiMessages(msgs);
+        setAiMessages(msgs.map(normalizeAiMessage));
         console.log('[AI-MESSAGES] Loaded', msgs.length, 'messages for conv', convId);
       } else {
         console.error('[AI-MESSAGES] Fetch error:', res.status);
@@ -1394,15 +1409,13 @@ export default function CustomerChatScreen() {
       if (briefSent) return; // Already sent today
       
       // Check message count in AI thread today
-      const aiMsgs = messages.filter(m => m.message_type === 'ai_query' || m.message_type === 'ai_response');
+      const aiMsgs = aiMessages.filter(m => m.message_type === 'ai_query' || m.message_type === 'ai_response');
       if (aiMsgs.length >= 2) return; // Thread already active
       
-      // Send auto-brief
+      // Send auto-brief directly — avoid setState+setTimeout race condition
       await AsyncStorage.setItem(storageKey, '1');
-      setAiQueryText('Give me a quick brief on this customer before I start. Key facts only — outstanding balance, last order date, payment reliability, and one thing I should act on today.');
-      setTimeout(() => {
-        handleAiQuery();
-      }, 100);
+      const briefText = 'Give me a quick brief on this customer before I start. Key facts only — outstanding balance, last order date, payment reliability, and one thing I should act on today.';
+      handleAiQuery(briefText);
     } catch (err) {
       console.error('Auto-brief error:', err);
     }
@@ -1916,7 +1929,7 @@ export default function CustomerChatScreen() {
             <Text style={styles.emptyText}>Broadcast Messages</Text>
             <Text style={[styles.emptyText, { fontSize: 13, marginTop: 4 }]}>Coming soon</Text>
           </View>
-        ) : filtered.length === 0 ? (
+        ) : displayMessages.length === 0 ? (
           <View style={styles.emptyState}>
             <Ionicons name={activeTab === 'ai' ? 'sparkles-outline' : 'chatbubbles-outline'} size={48} color="#CCC" />
             <Text style={styles.emptyText}>
