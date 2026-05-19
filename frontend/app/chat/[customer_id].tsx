@@ -60,6 +60,7 @@ export default function CustomerChatScreen() {
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [customer, setCustomer] = useState<CustomerData | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [aiMessages, setAiMessages] = useState<ChatMessage[]>([]);
   const [inputText, setInputText] = useState('');
   const [menuVisible, setMenuVisible] = useState(false);
   const [activeTab, setActiveTab] = useState('direct');
@@ -711,6 +712,34 @@ export default function CustomerChatScreen() {
     }
   };
 
+  const loadAiMessages = async (convId: string | null) => {
+    if (!convId || !customer_id) {
+      setAiMessages([]);
+      return;
+    }
+    try {
+      const token = await getToken();
+      if (!token) return;
+      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+      const res = await fetch(
+        `${backendUrl}/api/chat/${customer_id}/ai-messages?ai_conversation_id=${convId}`,
+        { headers: { 'Authorization': `Bearer ${token}` } }
+      );
+      if (res.ok) {
+        const data = await res.json();
+        const msgs = data.messages || [];
+        setAiMessages(msgs);
+        console.log('[AI-MESSAGES] Loaded', msgs.length, 'messages for conv', convId);
+      } else {
+        console.error('[AI-MESSAGES] Fetch error:', res.status);
+        setAiMessages([]);
+      }
+    } catch (err) {
+      console.error('[AI-MESSAGES] loadAiMessages error:', err);
+      setAiMessages([]);
+    }
+  };
+
   const loadOlderMessages = async () => {
     if (!hasMore || loadingOlderRef.current || !oldestTimestamp) return;
     loadingOlderRef.current = true;
@@ -1327,10 +1356,8 @@ export default function CustomerChatScreen() {
     }
     setActiveAiConvId(convId);
     setShowConvDropdown(false);
-    // Clear current AI messages from view — they will be refetched via useEffect
-    setMessages(prev => prev.filter(m => m.message_type !== 'ai_query' && m.message_type !== 'ai_response' && m.message_type !== 'action_card'));
-    // Trigger refetch by reloading chat with new filter
-    await loadChat(false);
+    setAiMessages([]); // clear immediately before fetch
+    await loadAiMessages(convId); // Stage 1.5: verify fetch works via console logs before FlatList switch
   };
 
   // Initialize AI conversation on mount or when AI tab is activated
