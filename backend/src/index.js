@@ -3523,7 +3523,7 @@ app.get('/api/chat/:customer_id/ai-messages', async (c) => {
       ai_conversation_id: m.ai_conversation_id || null,
       canonical_text: m.canonical_text || null,
       input_modality: m.input_modality || m.metadata?.input_modality || "text",
-    })).reverse();
+    }));
 
     return c.json({ messages, has_more: hasMore });
 

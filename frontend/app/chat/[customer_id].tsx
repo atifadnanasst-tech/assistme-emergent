@@ -1260,7 +1260,7 @@ export default function CustomerChatScreen() {
       card_data: {}, preview_text: text.substring(0, 50),
       input_modality: 'text', metadata: {},
     };
-    setAiMessages(prev => [...prev, queryMsg]);
+    setAiMessages(prev => [queryMsg, ...prev]);
 
     const capturedAttachment = aiAttachment;
     setAiAttachment(null);
@@ -1289,7 +1289,7 @@ export default function CustomerChatScreen() {
           input_modality: 'text', metadata: {},
         };
         if (!isExecutionValid(execId, capturedCustomerId, capturedConvId)) return;
-        setAiMessages(prev => [...prev, respMsg]);
+        setAiMessages(prev => [respMsg, ...prev]);
       } else {
         if (!isExecutionValid(execId, capturedCustomerId, capturedConvId)) return;
         Alert.alert('Error', 'Could not get AI response. Try again.');
