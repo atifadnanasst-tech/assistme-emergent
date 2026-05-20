@@ -1337,7 +1337,7 @@ export default function CustomerChatScreen() {
         if (convList.length > 0) {
           // Set most recent conversation as active
           setActiveAiConvId(convList[0].id);
-          await loadAiMessages(convList[0].id);
+          // await loadAiMessages(convList[0].id); // TEMP TEST 2
         } else {
           // No conversations exist — create default one
           const createRes = await fetch(`${backendUrl}/api/chat/${customer_id}/ai-conversations`, {
@@ -1350,7 +1350,7 @@ export default function CustomerChatScreen() {
             const newConv = createData.conversation;
             setAiConversations([newConv]);
             setActiveAiConvId(newConv.id);
-            await loadAiMessages(newConv.id);
+            // await loadAiMessages(newConv.id); // TEMP TEST 2
           }
         }
       }
