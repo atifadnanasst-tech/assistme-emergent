@@ -1248,7 +1248,7 @@ export default function CustomerChatScreen() {
         : 'Analyze this document in the context of this customer.';
     }
     if (rawText && aiAttachment) {
-      text = rawText + '\n\n[Customer attachment: ' + aiAttachment.name + ']';
+      text = rawText + (aiAttachment.type !== 'image' ? '\n\n[Customer attachment: ' + aiAttachment.name + ']' : '');
     }
 
     // Optimistic: add owner's query locally
@@ -1260,7 +1260,7 @@ export default function CustomerChatScreen() {
       card_data: {}, preview_text: text.substring(0, 50),
       input_modality: 'text', metadata: {},
     };
-    setAiMessages(prev => [queryMsg, ...prev]);
+    setAiMessages(prev => [...prev, queryMsg]);
 
     const capturedAttachment = aiAttachment;
     setAiAttachment(null);
@@ -1289,7 +1289,7 @@ export default function CustomerChatScreen() {
           input_modality: 'text', metadata: {},
         };
         if (!isExecutionValid(execId, capturedCustomerId, capturedConvId)) return;
-        setAiMessages(prev => [respMsg, ...prev]);
+        setAiMessages(prev => [...prev, respMsg]);
       } else {
         if (!isExecutionValid(execId, capturedCustomerId, capturedConvId)) return;
         Alert.alert('Error', 'Could not get AI response. Try again.');
@@ -2049,7 +2049,7 @@ export default function CustomerChatScreen() {
                   onPress={() => { aiExecutionRef.current++; if (mountedRef.current) setAiQuerying(false); }}
                   style={{ marginLeft: 'auto', paddingHorizontal: 8, paddingVertical: 4 }}
                 >
-                  <Ionicons name="close" size={18} color="#075E54" />
+                  <Ionicons name="close-circle" size={18} color="#999" />
                 </TouchableOpacity>
               </View>
             )}
