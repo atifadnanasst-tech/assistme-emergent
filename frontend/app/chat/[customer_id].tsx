@@ -695,6 +695,7 @@ export default function CustomerChatScreen() {
 
 
   const loadChat = async (markRead: boolean = true) => {
+    setLoading(true);
     try {
       const token = await getToken();
       if (!token || !customer_id) return;
@@ -1430,8 +1431,6 @@ export default function CustomerChatScreen() {
   // Reset AI state when customer changes
   useEffect(() => {
     initAiConvRef.current = false;
-    setLoading(true);
-    setConversationId(null);
     setActiveAiConvId(null);
     setAiMessages([]);
     setAiConversations([]);
