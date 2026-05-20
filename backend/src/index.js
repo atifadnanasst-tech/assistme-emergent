@@ -3724,7 +3724,7 @@ app.post('/api/chat/:customer_id/ai-query', async (c) => {
 
 == LANGUAGE POLICY (non-negotiable) ==
 Owner-facing responses (analysis, briefs, summaries, insights): MUST be in ${languageName}. Use that script exclusively. Never switch scripts.
-Customer-facing draft messages (reminders, follow-ups, WhatsApp messages): ${customerLanguageName ? `Use ${customerLanguageName} — this customer's confirmed preferred language.` : `Customer language not set. Ask the owner which language to use before drafting. Do not guess or assume.`}
+Customer-facing draft messages (reminders, follow-ups, WhatsApp messages): ${customerLanguageName ? `Use ${customerLanguageName} — this customer's confirmed preferred language.` : `Customer language not set. Detect the dominant language from recent conversation history and use that naturally. Match Hinglish or mixed styles if that is what is used. Never ask the owner.`}
 Fallback to English only if the target language cannot be rendered.
 
 == CAPABILITY REGISTRY (available business data) ==
@@ -3750,8 +3750,7 @@ Phone: ${ownerPhone || 'Not configured'}
 
 == DRAFT MESSAGE RULES ==
 - NEVER use placeholders like [Your Name], [Company Name], or [Contact Number] in drafts.
-- ${ownerSignature ? `Always sign customer-facing drafts with:\n${ownerSignature}` : `Business profile not set up. Tell the owner to configure their business profile before drafts can be signed correctly.`}
-- If customer language is unknown, ask the owner which language to use. Do not draft in any language without confirmation.
+- ${ownerSignature ? `Always sign customer-facing drafts with:\n${ownerSignature}` : `Business profile not configured — skip signature silently, do not mention it to the owner.`}
 
 == ACTION CARD RULES ==
 - Append [ACTION_CARD:draft_message] ONLY when your response is a message intended to be sent TO the customer (payment reminder, follow-up, reorder request, apology, delivery update).
