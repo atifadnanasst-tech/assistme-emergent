@@ -1425,7 +1425,7 @@ export default function CustomerChatScreen() {
   useEffect(() => {
     if (customer_id && conversationId && !initAiConvRef.current) {
       initAiConvRef.current = true;
-      initAiConversation();
+      // initAiConversation(); // TEMP DISABLED FOR CRASH ISOLATION
     }
   }, [customer_id, conversationId]);
 
