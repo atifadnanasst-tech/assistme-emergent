@@ -1318,28 +1318,33 @@ export default function CustomerChatScreen() {
 
   // ── AI Conversation Context Switcher ──────────────────────────
   const initAiConversation = async () => {
-    if (!customer_id || loading) return;
+    console.log('[AI INIT] START customer_id:', customer_id, 'loading:', loading);
+    if (!customer_id || loading) { console.log("[AI INIT] GUARD BLOCKED"); return; }
     try {
+      console.log('[AI INIT] before getToken');
       const token = await getToken();
+      console.log('[AI INIT] token:', token ? 'ok' : 'null');
       if (!token) return;
       const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
       
-      // Fetch existing conversations
+      console.log('[AI INIT] before fetch conversations');
       const listRes = await fetch(`${backendUrl}/api/chat/${customer_id}/ai-conversations`, {
         headers: { 'Authorization': `Bearer ${token}` },
       });
-      
+      console.log('[AI INIT] fetch status:', listRes.status);
       if (listRes.ok) {
         const data = await listRes.json();
         const convList = data.conversations || [];
+        console.log('[AI INIT] convList length:', convList.length);
         setAiConversations(convList);
-        
         if (convList.length > 0) {
-          // Set most recent conversation as active
+          console.log('[AI INIT] setting activeAiConvId:', convList[0].id);
           setActiveAiConvId(convList[0].id);
+          console.log('[AI INIT] before loadAiMessages');
           await loadAiMessages(convList[0].id);
+          console.log('[AI INIT] after loadAiMessages DONE');
         } else {
-          // No conversations exist — create default one
+          console.log('[AI INIT] no convs, creating new');
           const createRes = await fetch(`${backendUrl}/api/chat/${customer_id}/ai-conversations`, {
             method: 'POST',
             headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
@@ -1351,11 +1356,12 @@ export default function CustomerChatScreen() {
             setAiConversations([newConv]);
             setActiveAiConvId(newConv.id);
             await loadAiMessages(newConv.id);
+            console.log('[AI INIT] new conv created DONE');
           }
         }
       }
     } catch (err) {
-      console.error('initAiConversation error:', err);
+      console.error('[AI INIT CRASH]', err);
     }
   };
 
