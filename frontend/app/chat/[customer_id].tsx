@@ -1424,6 +1424,7 @@ export default function CustomerChatScreen() {
   // Reset AI state when customer changes
   useEffect(() => {
     initAiConvRef.current = false;
+    setLoading(true);
     setConversationId(null);
     setActiveAiConvId(null);
     setAiMessages([]);
