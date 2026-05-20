@@ -1318,7 +1318,7 @@ export default function CustomerChatScreen() {
 
   // ── AI Conversation Context Switcher ──────────────────────────
   const initAiConversation = async () => {
-    if (!customer_id || !conversationId) return;
+    if (!customer_id || loading) return;
     try {
       const token = await getToken();
       if (!token) return;
@@ -1432,11 +1432,11 @@ export default function CustomerChatScreen() {
 
   // Initialize AI conversation on mount or when AI tab is activated
   useEffect(() => {
-    if (customer_id && conversationId && !initAiConvRef.current) {
+    if (customer_id && !loading && !initAiConvRef.current) {
       initAiConvRef.current = true;
       initAiConversation();
     }
-  }, [customer_id, conversationId]);
+  }, [customer_id, loading]);
 
   // Auto-brief on AI tab open (once per day)
   useEffect(() => {
