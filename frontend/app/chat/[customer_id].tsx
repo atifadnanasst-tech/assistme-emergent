@@ -1409,7 +1409,7 @@ export default function CustomerChatScreen() {
     setShowConvDropdown(false);
     aiExecutionRef.current++; // invalidate stale async before state clear
     setAiMessages([]); // clear immediately before fetch
-    await loadAiMessages(convId); // Stage 1.5: verify fetch works via console logs before FlatList switch
+    await loadAiMessages(convId); 
   };
 
   // Reset AI state when customer changes
@@ -2045,6 +2045,12 @@ export default function CustomerChatScreen() {
               <View style={styles.sparkProcessingBar}>
                 <ActivityIndicator size="small" color="#075E54" />
                 <Text style={styles.sparkProcessingText}>AI is thinking...</Text>
+                <TouchableOpacity
+                  onPress={() => { aiExecutionRef.current++; if (mountedRef.current) setAiQuerying(false); }}
+                  style={{ marginLeft: 'auto', paddingHorizontal: 8, paddingVertical: 4 }}
+                >
+                  <Ionicons name="close" size={18} color="#075E54" />
+                </TouchableOpacity>
               </View>
             )}
             {aiAttachment && (

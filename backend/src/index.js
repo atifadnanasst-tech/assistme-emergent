@@ -3393,12 +3393,12 @@ app.get('/api/chat/:customer_id/ai-conversations', async (c) => {
     // Fetch all AI conversations for this customer
     const { data: conversations } = await supabase
       .from('ai_conversations')
-      .select('id, title, is_archived, created_at')
+      .select('id, title, is_archived, created_at, last_message_at')
       .eq('organisation_id', organisationId)
       .eq('customer_id', customerId)
       .eq('scope', 'customer')
       .eq('is_archived', false)
-      .order('created_at', { ascending: false })
+      .order('last_message_at', { ascending: false })
       .limit(20);
 
     return c.json({ conversations: conversations || [] });
@@ -3892,6 +3892,14 @@ Phone: ${ownerPhone || 'Not configured'}
       responsePayload.ai_conversation_id = aiConversationId;
     }
     const { data: savedMsg } = await supabase.from('messages').insert(responsePayload).select('id').single();
+
+    // Update last_message_at on ai_conversation for correct recency ordering
+    if (aiConversationId) {
+      await supabase.from('ai_conversations')
+        .update({ last_message_at: new Date().toISOString() })
+        .eq('id', aiConversationId)
+        .eq('organisation_id', organisationId);
+    }
 
     // Auto-generate title if ai_conversation has default/empty title
     if (aiConversationId && aiConvData) {
