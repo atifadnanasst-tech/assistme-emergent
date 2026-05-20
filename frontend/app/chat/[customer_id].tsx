@@ -1258,7 +1258,8 @@ export default function CustomerChatScreen() {
       created_at: new Date().toISOString(), sender_type: 'owner',
       visibility: 'owner_only', message_type: 'ai_query', card_type: null,
       card_data: {}, preview_text: text.substring(0, 50),
-      input_modality: 'text', metadata: {},
+      input_modality: aiAttachment?.type || 'text',
+      metadata: aiAttachment ? { attachment: { url: aiAttachment.url, name: aiAttachment.name, type: aiAttachment.type } } : {},
     };
     setAiMessages(prev => [queryMsg, ...prev]);
 
