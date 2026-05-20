@@ -1430,6 +1430,7 @@ export default function CustomerChatScreen() {
 
   // Reset AI state when customer changes
   useEffect(() => {
+    console.log('[EFFECT RESET]', customer_id);
     initAiConvRef.current = false;
     setActiveAiConvId(null);
     setAiMessages([]);
@@ -1438,6 +1439,7 @@ export default function CustomerChatScreen() {
 
   // Initialize AI conversation on mount or when AI tab is activated
   useEffect(() => {
+    console.log('[EFFECT INIT]', { customer_id, loading, init: initAiConvRef.current });
     if (customer_id && !loading && !initAiConvRef.current) {
       initAiConvRef.current = true;
       initAiConversation();
