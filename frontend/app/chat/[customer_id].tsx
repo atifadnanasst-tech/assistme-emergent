@@ -1603,7 +1603,7 @@ export default function CustomerChatScreen() {
   };
 
   const renderMessage = ({ item, index }: { item: ChatMessage; index: number }) => {
-    const divider = shouldShowDateDivider(index, filtered) ? (
+    const divider = shouldShowDateDivider(index, displayMessages) ? (
       <View style={styles.dateDividerContainer}>
         <View style={styles.dateDividerPill}>
           <Text style={styles.dateDividerText}>{formatDateDivider(item.created_at)}</Text>
