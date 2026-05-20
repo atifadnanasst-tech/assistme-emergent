@@ -1261,7 +1261,7 @@ export default function CustomerChatScreen() {
       card_data: {}, preview_text: text.substring(0, 50),
       input_modality: 'text', metadata: {},
     };
-    setAiMessages(prev => [queryMsg, ...prev]);
+    // setAiMessages(prev => [queryMsg, ...prev]); // TEMP DISABLED
 
     const capturedAttachment = aiAttachment;
     setAiAttachment(null);
