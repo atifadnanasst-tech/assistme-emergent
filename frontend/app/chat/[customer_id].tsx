@@ -1233,7 +1233,6 @@ export default function CustomerChatScreen() {
     const execId = ++aiExecutionRef.current;
     const capturedCustomerId = customerIdRef.current;
     const capturedConvId = activeAiConvIdRef.current;
-    console.log("[QUERY] execId:", execId, "capturedConvId:", capturedConvId, "activeAiConvId:", activeAiConvId);
 
     Keyboard.dismiss();
     setAiQueryText('');
@@ -1253,7 +1252,6 @@ export default function CustomerChatScreen() {
     }
 
     // Optimistic: add owner's query locally
-    console.log("[QUERY TEXT]", typeof text, JSON.stringify(text));
     const tempQId = `aiq-${Date.now()}`;
     const queryMsg: ChatMessage = {
       id: tempQId, role: 'user', content: text,
@@ -1262,7 +1260,7 @@ export default function CustomerChatScreen() {
       card_data: {}, preview_text: text.substring(0, 50),
       input_modality: 'text', metadata: {},
     };
-    // setAiMessages(prev => [queryMsg, ...prev]); // TEMP DISABLED
+    setAiMessages(prev => [queryMsg, ...prev]);
 
     const capturedAttachment = aiAttachment;
     setAiAttachment(null);
@@ -1270,7 +1268,6 @@ export default function CustomerChatScreen() {
     try {
       const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
       const payload = { query: text, conversation_id: conversationId, ai_conversation_id: activeAiConvId || null, attachment: capturedAttachment || null };
-      console.log("[QUERY PAYLOAD]", JSON.stringify(payload));
       const res = await fetch(`${backendUrl}/api/chat/${customer_id}/ai-query`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
@@ -1298,7 +1295,6 @@ export default function CustomerChatScreen() {
         Alert.alert('Error', 'Could not get AI response. Try again.');
       }
     } catch (e) {
-      console.log("[QUERY ERROR]", String(e));
       if (!isExecutionValid(execId, capturedCustomerId, capturedConvId)) return;
       Alert.alert('Error', 'AI query failed.');
     } finally {
@@ -1319,33 +1315,22 @@ export default function CustomerChatScreen() {
 
   // ── AI Conversation Context Switcher ──────────────────────────
   const initAiConversation = async () => {
-    console.log('[AI INIT] START customer_id:', customer_id, 'loading:', loading);
-    if (!customer_id || loading) { console.log("[AI INIT] GUARD BLOCKED"); return; }
     try {
-      console.log('[AI INIT] before getToken');
       const token = await getToken();
-      console.log('[AI INIT] token:', token ? 'ok' : 'null');
       if (!token) return;
       const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
       
-      console.log('[AI INIT] before fetch conversations');
       const listRes = await fetch(`${backendUrl}/api/chat/${customer_id}/ai-conversations`, {
         headers: { 'Authorization': `Bearer ${token}` },
       });
-      console.log('[AI INIT] fetch status:', listRes.status);
       if (listRes.ok) {
         const data = await listRes.json();
         const convList = data.conversations || [];
-        console.log('[AI INIT] convList length:', convList.length);
         setAiConversations(convList);
         if (convList.length > 0) {
-          console.log('[AI INIT] setting activeAiConvId:', convList[0].id);
           setActiveAiConvId(convList[0].id);
-          console.log('[AI INIT] before loadAiMessages');
           await loadAiMessages(convList[0].id);
-          console.log('[AI INIT] after loadAiMessages DONE');
         } else {
-          console.log('[AI INIT] no convs, creating new');
           const createRes = await fetch(`${backendUrl}/api/chat/${customer_id}/ai-conversations`, {
             method: 'POST',
             headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
@@ -1357,7 +1342,6 @@ export default function CustomerChatScreen() {
             setAiConversations([newConv]);
             setActiveAiConvId(newConv.id);
             await loadAiMessages(newConv.id);
-            console.log('[AI INIT] new conv created DONE');
           }
         }
       }
@@ -1430,7 +1414,6 @@ export default function CustomerChatScreen() {
 
   // Reset AI state when customer changes
   useEffect(() => {
-    console.log('[EFFECT RESET]', customer_id);
     initAiConvRef.current = false;
     setActiveAiConvId(null);
     setAiMessages([]);
@@ -1439,7 +1422,6 @@ export default function CustomerChatScreen() {
 
   // Initialize AI conversation on mount or when AI tab is activated
   useEffect(() => {
-    console.log('[EFFECT INIT]', { customer_id, loading, init: initAiConvRef.current });
     if (customer_id && !loading && !initAiConvRef.current) {
       initAiConvRef.current = true;
       initAiConversation();
@@ -2102,7 +2084,7 @@ export default function CustomerChatScreen() {
               {(aiQueryText.trim().length > 0 || aiAttachment) ? (
                 <TouchableOpacity
                   style={[styles.sendBtn, { backgroundColor: '#E91E63' }]}
-                  onPress={handleAiQuery}
+                  onPress={() => handleAiQuery()}
                   disabled={aiQuerying}
                 >
                   {aiQuerying ? <ActivityIndicator size="small" color="#FFF" /> : <Ionicons name="send" size={20} color="#FFF" />}
