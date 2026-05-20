@@ -1253,6 +1253,7 @@ export default function CustomerChatScreen() {
     }
 
     // Optimistic: add owner's query locally
+    console.log("[QUERY TEXT]", typeof text, JSON.stringify(text));
     const tempQId = `aiq-${Date.now()}`;
     const queryMsg: ChatMessage = {
       id: tempQId, role: 'user', content: text,
