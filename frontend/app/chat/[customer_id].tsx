@@ -1233,6 +1233,7 @@ export default function CustomerChatScreen() {
     const execId = ++aiExecutionRef.current;
     const capturedCustomerId = customerIdRef.current;
     const capturedConvId = activeAiConvIdRef.current;
+    console.log("[QUERY] execId:", execId, "capturedConvId:", capturedConvId, "activeAiConvId:", activeAiConvId);
 
     Keyboard.dismiss();
     setAiQueryText('');
