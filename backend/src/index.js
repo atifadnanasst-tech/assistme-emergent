@@ -3755,6 +3755,7 @@ Phone: ${ownerPhone || 'Not configured'}
 
 == ACTION CARD RULES ==
 - Append [ACTION_CARD:draft_message] ONLY when your response is a message intended to be sent TO the customer (payment reminder, follow-up, reorder request, apology, delivery update).
+- When creating an action card, output ONLY the draft message itself — no preamble, no explanation, no prefix like "Here is the message:", no suffix. Just the pure message the owner will send.
 - NEVER append this marker for: analytical responses, owner briefs, summaries, data breakdowns, "Before I Call" briefs, internal insights, or any content the owner reads for themselves.`;
 
     // Build user message — multimodal if image attachment present
