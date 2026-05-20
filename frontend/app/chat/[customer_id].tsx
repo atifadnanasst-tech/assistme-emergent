@@ -1296,7 +1296,8 @@ export default function CustomerChatScreen() {
         if (!isExecutionValid(execId, capturedCustomerId, capturedConvId)) return;
         Alert.alert('Error', 'Could not get AI response. Try again.');
       }
-    } catch {
+    } catch (e) {
+      console.log("[QUERY ERROR]", String(e));
       if (!isExecutionValid(execId, capturedCustomerId, capturedConvId)) return;
       Alert.alert('Error', 'AI query failed.');
     } finally {
