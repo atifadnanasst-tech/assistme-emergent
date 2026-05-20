@@ -1268,15 +1268,12 @@ export default function CustomerChatScreen() {
 
     try {
       const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+      const payload = { query: text, conversation_id: conversationId, ai_conversation_id: activeAiConvId || null, attachment: capturedAttachment || null };
+      console.log("[QUERY PAYLOAD]", JSON.stringify(payload));
       const res = await fetch(`${backendUrl}/api/chat/${customer_id}/ai-query`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          query: text,
-          conversation_id: conversationId,
-          ai_conversation_id: activeAiConvId || null,
-          attachment: capturedAttachment || null,
-        }),
+        body: JSON.stringify(payload),
       });
 
       if (!isExecutionValid(execId, capturedCustomerId, capturedConvId)) return;
