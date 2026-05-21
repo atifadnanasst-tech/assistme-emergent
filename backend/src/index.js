@@ -3733,7 +3733,23 @@ app.post('/api/chat/:customer_id/ai-query', async (c) => {
 - End EVERY owner-facing response with one line starting with "→" suggesting the single most logical next action the owner should take, framed as a question. Example: "→ Want me to draft a payment reminder?" Make it specific and directly actionable within this app.
 - The → next action line must follow the same language as the rest of the owner-facing response (per language policy below).
 - NEVER suggest vague actions. Make it specific: draft a message, schedule a reminder, create an invoice.
-- MANDATORY: When your response contains any financial amounts, ranked data, invoice lists, or business metrics, you MUST append a [VIZ:{...}] block at the very end (after the → line). This is non-negotiable. See VISUALIZATION RULES below for exact format and types. Omitting the [VIZ:...] block when data is present is an error.
+- MANDATORY: When your response contains ANY of the following, you MUST append a [VIZ:{...}] block at the very end (after the → line):
+  * 2 or more financial or business KPIs (amounts, counts, ratios, averages)
+  * Any ranked list of customers, invoices, or products with amounts
+  * Any payment behavior analysis
+  * Any customer summary or account overview
+  * Any outstanding balance breakdown
+  * Any purchase history or product breakdown
+  * Any business health or performance summary
+  Use these type mappings:
+  * payment behavior / pattern analysis → metric_grid
+  * customer summary / account overview → metric_grid
+  * outstanding invoices / ranked amounts → ranked_list
+  * top products / purchase history → ranked_list
+  * single dominant KPI → metric
+  * risk or overdue alerts → risk_list
+  * one key insight → insight
+  Omitting [VIZ:...] when any of the above conditions are met is an error.
 
 == LANGUAGE POLICY (non-negotiable) ==
 Owner-facing responses (analysis, briefs, summaries, insights): MUST be in ${languageName}. Use that script exclusively. Never switch scripts.
@@ -3801,7 +3817,8 @@ Hard rules:
 - NEVER append [VIZ:...] if the response is purely conversational with no quantitative data.
 - The JSON inside [VIZ:...] must always be valid. Never break the JSON structure.
 - Never include markdown formatting or code fences inside [VIZ:...] block.
-- If no visualization type fits the response, do not include the block at all.`;
+- If no visualization type fits the response, do not include the block at all.
+- COMPLETION RULE: A response that contains financial data, business metrics, or ranked information is INCOMPLETE without a valid [VIZ:...] block as the final output. Always append it.`;
 
     // Build user message — multimodal if image attachment present
     // attachmentRaw already read above — do not re-read body.attachment

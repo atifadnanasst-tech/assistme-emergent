@@ -48,7 +48,7 @@ export function extractVisualization(responseText) {
   }
 
   // Match [VIZ:{...}] — handles multiline JSON inside the block
-  const vizRegex = /\[VIZ:(\{[\s\S]*?\})\]/;
+  const vizRegex = /\[VIZ:([\s\S]*?)\]$/m;
   const match = responseText.match(vizRegex);
 
   if (!match) {
