@@ -6,6 +6,7 @@ import { createClient } from '@supabase/supabase-js';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { registerAIRoutes, getOpenAI } from './ai-routes.js';
+import { extractVisualization } from './services/ai/visualizationParser.js';
 import PDFDocument from 'pdfkit';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -3766,7 +3767,39 @@ Phone: ${ownerPhone || 'Not configured'}
 == ACTION CARD RULES ==
 - Append [ACTION_CARD:draft_message] ONLY when your response is a message intended to be sent TO the customer (payment reminder, follow-up, reorder request, apology, delivery update).
 - When creating an action card: (1) output ONLY the pure draft message with no preamble, no explanation, no prefix or suffix text. (2) ALWAYS append [ACTION_CARD:draft_message] at the very end — this is a required system tag, invisible to the user, do not omit it.
-- NEVER append this marker for: analytical responses, owner briefs, summaries, data breakdowns, "Before I Call" briefs, internal insights, or any content the owner reads for themselves.`;
+- NEVER append this marker for: analytical responses, owner briefs, summaries, data breakdowns, "Before I Call" briefs, internal insights, or any content the owner reads for themselves.
+
+== VISUALIZATION RULES ==
+When your response contains ranked data, totals, comparisons, or any business metric, append ONE visualization block at the very end of your response (after all text).
+
+Supported types and when to use them:
+- "metric"       — single KPI answer (e.g. total outstanding, total collections). Use when the answer is one number.
+- "metric_grid"  — 2 to 4 KPIs together (e.g. business health summary, payment overview). Use for "how is my business doing" queries.
+- "ranked_list"  — top-N items with amounts (e.g. top customers by dues, purchase history, reorder candidates). Use when answer is a ranked list.
+- "risk_list"    — items with risk severity and days overdue (e.g. risk check, silence anomalies). Use for risk and alert queries.
+- "insight"      — single dominant observation (e.g. one customer dominates outstanding). Use when one fact is more important than a list.
+
+Format — append exactly ONE block in this format:
+[VIZ:{"type":"ranked_list","title":"Top Outstanding Customers","currency":"INR","series":[{"label":"Ali Traders","value":45000},{"label":"Noor Enterprise","value":32000}],"highlight":"Ali Traders contributes 38% of total dues","level":"warning"}]
+
+Schema per type:
+- metric:       { type, title, value (formatted string e.g. Rs.4,52,000), subtitle?, level? }
+- metric_grid:  { type, title, cards:[{ label, value, trend?, trend_direction }] } — trend_direction: up or down or flat
+- ranked_list:  { type, title, currency, series:[{ label, value }], highlight?, level? }
+- risk_list:    { type, title, series:[{ label, value, days_late?, level }], highlight? }
+- insight:      { type, title, text, level }
+
+Hard rules:
+- ONE [VIZ:...] block per response maximum. Never more than one.
+- series labels and title always in English regardless of owner language setting.
+- highlight text follows owner language setting.
+- value fields in series are always plain numbers — no currency symbol, no commas.
+- level values: info or warning or critical
+- NEVER append [VIZ:...] on action cards or customer-facing draft messages.
+- NEVER append [VIZ:...] if the response is purely conversational with no quantitative data.
+- The JSON inside [VIZ:...] must always be valid. Never break the JSON structure.
+- Never include markdown formatting or code fences inside [VIZ:...] block.
+- If no visualization type fits the response, do not include the block at all.`;
 
     // Build user message — multimodal if image attachment present
     // attachmentRaw already read above — do not re-read body.attachment
@@ -3883,19 +3916,23 @@ Phone: ${ownerPhone || 'Not configured'}
     const isActionCard = responseText.includes('[ACTION_CARD:draft_message]');
     const cleanResponse = responseText.replace(/\[ACTION_CARD:[^\]]+\]/g, '').trim();
 
+    // Extract and strip VIZ block — visualization data for frontend rendering
+    const { cleanText: finalResponse, chartData } = extractVisualization(cleanResponse);
+
     // Save AI response as owner-only message
     const responsePayload = {
       organisation_id: organisationId, conversation_id: conversationId,
-      role: 'assistant', content: cleanResponse,
-      canonical_text: cleanResponse,
+      role: 'assistant', content: finalResponse,
+      canonical_text: finalResponse,
       input_modality: 'text',
       metadata: {
         sender_type: 'ai', visibility: 'owner_only',
         message_type: isActionCard ? 'action_card' : 'ai_response',
         card_type: isActionCard ? 'draft_message' : null,
         shareable: isActionCard,
+        chart_data: chartData || null,
         read_by_owner: true,
-        preview_text: cleanResponse.substring(0, 50),
+        preview_text: finalResponse.substring(0, 50),
       },
       tokens_input: 0, tokens_output: 0,
     };
@@ -3929,10 +3966,11 @@ Phone: ${ownerPhone || 'Not configured'}
 
     return c.json({
       message_id: savedMsg?.id,
-      response: cleanResponse,
+      response: finalResponse,
       message_type: isActionCard ? 'action_card' : 'ai_response',
       card_type: isActionCard ? 'draft_message' : null,
       shareable: isActionCard,
+      chart_data: chartData || null,
     });
 
   } catch (error) {

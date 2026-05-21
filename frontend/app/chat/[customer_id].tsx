@@ -15,6 +15,7 @@ import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import { Audio } from 'expo-av';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import VisualizationCard from '../../components/charts/VisualizationCard';
 
 // ── Customer AI Pills ────────────────────────────────────────
 const CUSTOMER_AI_PILLS_ROW1 = [
@@ -1726,6 +1727,9 @@ export default function CustomerChatScreen() {
               <Text style={{ fontSize: 11, fontWeight: '700', color: isActionCard ? '#E91E63' : '#075E54' }}>{isActionCard ? 'AI Draft' : 'AI'}</Text>
             </View>
             <Text style={styles.incomingText}>{(item.content || '').replace(/\*\*(.*?)\*\*/g, '$1').replace(/\*(.*?)\*/g, '$1')}</Text>
+            {!isActionCard && item.metadata?.chart_data && (
+              <VisualizationCard data={item.metadata.chart_data} />
+            )}
             <Text style={styles.incomingTime}>{formatTime(item.created_at)}</Text>
           </View>
           {isActionCard && (
