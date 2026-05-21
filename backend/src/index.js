@@ -6,6 +6,7 @@ import { createClient } from '@supabase/supabase-js';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { registerAIRoutes, getOpenAI } from './ai-routes.js';
+import { registerOrgAiRoutes } from './services/ai/orgAi/routes.js';
 import { extractVisualization } from './services/ai/visualizationParser.js';
 import PDFDocument from 'pdfkit';
 
@@ -5626,6 +5627,7 @@ export { supabase };
 // Register AI routes (Flow 2B)
 if (supabase) {
   registerAIRoutes(app, supabase);
+  registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI);
   console.log('✅ AI routes registered');
 }
 
