@@ -1288,7 +1288,7 @@ export default function CustomerChatScreen() {
           card_type: data.card_type || null,
           card_data: { shareable: data.shareable || false },
           preview_text: data.response?.substring(0, 50) || null,
-          input_modality: 'text', metadata: {},
+          input_modality: 'text', metadata: { chart_data: data.chart_data || null },
         };
         if (!isExecutionValid(execId, capturedCustomerId, capturedConvId)) return;
         setAiMessages(prev => [respMsg, ...prev]);

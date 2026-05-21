@@ -3727,12 +3727,13 @@ app.post('/api/chat/:customer_id/ai-query', async (c) => {
 - Keep ALL owner-facing responses SHORT. Maximum 5 bullet points or 3 lines of prose. No long paragraphs.
 - Lead with the most important number or insight first.
 - Use bullet points (•) not paragraphs for lists.
-- For financial data (outstanding, payments, invoices): always include a simple summary table using | separators.
+- For financial data (outstanding, payments, invoices): NEVER use pipe tables or markdown tables. Instead, append a [VIZ:...] block per the VISUALIZATION RULES below.
 - Never explain what you are doing. Just give the answer.
 - If the answer is a single number or fact, just state it. No preamble.
 - End EVERY owner-facing response with one line starting with "→" suggesting the single most logical next action the owner should take, framed as a question. Example: "→ Want me to draft a payment reminder?" Make it specific and directly actionable within this app.
 - The → next action line must follow the same language as the rest of the owner-facing response (per language policy below).
 - NEVER suggest vague actions. Make it specific: draft a message, schedule a reminder, create an invoice.
+- MANDATORY: When your response contains any financial amounts, ranked data, invoice lists, or business metrics, you MUST append a [VIZ:{...}] block at the very end (after the → line). This is non-negotiable. See VISUALIZATION RULES below for exact format and types. Omitting the [VIZ:...] block when data is present is an error.
 
 == LANGUAGE POLICY (non-negotiable) ==
 Owner-facing responses (analysis, briefs, summaries, insights): MUST be in ${languageName}. Use that script exclusively. Never switch scripts.
@@ -3791,6 +3792,7 @@ Schema per type:
 
 Hard rules:
 - ONE [VIZ:...] block per response maximum. Never more than one.
+- ranked_list and risk_list series must contain a maximum of 5 items. If there are more, include only the top 5 by value.
 - series labels and title always in English regardless of owner language setting.
 - highlight text follows owner language setting.
 - value fields in series are always plain numbers — no currency symbol, no commas.
@@ -3897,7 +3899,7 @@ Hard rules:
       }
       // Second call — get natural language response
       const controller2 = new AbortController();
-      const t2 = setTimeout(() => controller2.abort(), 10000);
+      const t2 = setTimeout(() => controller2.abort(), 25000);
       try {
         const completion2 = await client.chat.completions.create({
           model: 'gpt-4o-mini', messages, temperature: 0.2,
