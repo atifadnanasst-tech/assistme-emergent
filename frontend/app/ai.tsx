@@ -21,6 +21,7 @@ import { Audio } from 'expo-av';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import { authService } from '../lib/auth';
+import VisualizationCard from '../components/charts/VisualizationCard';
 
 interface AIMessage {
   id: string;
@@ -28,6 +29,8 @@ interface AIMessage {
   content: string;
   card_type: string | null;
   card_data: Record<string, any>;
+  chart_data: Record<string, any> | null;
+  next_action: { text: string } | null;
   created_at: string;
 }
 
@@ -49,30 +52,119 @@ export default function AIScreen() {
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [aiRecording, setAiRecording] = useState<Audio.Recording | null>(null);
 
-  const QUICK_PILLS = [
-    { id: 'outstanding', icon: '💰', label: 'Outstanding', query: 'Show my total outstanding summary — total pending amount, top 5 defaulters, and overdue vs not-yet-due breakdown.' },
-    { id: 'collections', icon: '📥', label: 'Collections Today', query: 'How much did I collect today? List each payment received and compare with yesterday.' },
-    { id: 'sales', icon: '📊', label: 'Sales Today', query: 'What are my sales today? Total revenue, number of orders, and top products sold.' },
-    { id: 'deliveries', icon: '📦', label: 'Deliveries Due', query: 'What deliveries are due today? Are any deliveries late or pending confirmation?' },
-    { id: 'risk', icon: '⚠️', label: 'Risk Alerts', query: 'Any payment risk alerts today? Customers delaying payments, dropping order frequency, or showing unusual silence?' },
-    { id: 'followup', icon: '🔁', label: 'Follow Up', query: 'Which high-value customers have not ordered recently? Who should I reach out to today?' },
-    { id: 'quotes', icon: '📄', label: 'Expiring Quotes', query: 'Which quotes are about to expire or already expired? Who needs urgent follow-up?' },
-    { id: 'insight', icon: '🧠', label: 'AI Insight', query: 'Give me your single best business insight based on my data right now — a pattern, opportunity, or risk I should act on.' },
-    { id: 'trend', icon: '📈', label: 'Weekly Trend', query: 'Show me weekly sales trend and collection trend for the past 4 weeks. Any direction I should know about?' },
-    { id: 'bank', icon: '🏦', label: 'Bank Position', query: 'Show my current bank position — all accounts and total available cash.' },
-    { id: 'tasks', icon: '📅', label: "Today's Tasks", query: 'What are all my tasks for today? Deliveries, follow-ups, reminders, and pending actions.' },
-    { id: 'stock', icon: '📦', label: 'Low Stock', query: 'Which products are running low or below reorder level? What should I restock urgently?' },
-    { id: 'payables', icon: '🏭', label: 'Supplier Payables', query: 'How much do I owe my suppliers? Show total payable, overdue payables, and who I need to pay most urgently.' },
-    { id: 'festival', icon: '🎉', label: 'Festival Demand', query: 'Any upcoming festivals or seasonal events I should prepare stock for? What products historically sell more during this period?' },
+  // TODO: consolidate handleMenuQuery + handleSendDirect into shared sendAiRequest helper
+  const MENU_CATEGORIES = [
+    { id: 'finance', label: 'Finance', items: [
+      { id: 'collections_today', label: 'Collections Today' },
+      { id: 'total_outstanding', label: 'Total Outstanding' },
+      { id: 'revenue_this_month', label: 'Revenue This Month' },
+      { id: 'invoices_due_this_week', label: 'Invoices Due This Week' },
+      { id: 'weekly_trend', label: 'Weekly Trend' },
+    ]},
+    { id: 'customers', label: 'Customers', items: [
+      { id: 'top_customers', label: 'Top Customers' },
+      { id: 'follow_up_today', label: 'Follow Up Today' },
+      { id: 'risk_alerts', label: 'Risk Alerts' },
+      { id: 'gone_silent', label: 'Gone Silent' },
+    ]},
+    { id: 'products', label: 'Products', items: [
+      { id: 'top_sellers', label: 'Top Sellers' },
+      { id: 'low_stock', label: 'Low Stock' },
+      { id: 'slow_moving', label: 'Slow Moving' },
+    ]},
+    { id: 'ops', label: 'Ops', items: [
+      { id: 'deliveries_today', label: 'Deliveries Today' },
+      { id: 'expiring_quotes', label: 'Expiring Quotes' },
+      { id: 'todays_tasks', label: "Today's Tasks" },
+    ]},
+    { id: 'suppliers', label: 'Suppliers', items: [
+      { id: 'what_i_owe', label: 'What I Owe' },
+      { id: 'overdue_payables', label: 'Overdue Payables' },
+      { id: 'top_supplier', label: 'Top Supplier' },
+    ]},
   ];
-
-  const sendQuickQuery = (query: string) => {
+  const [activeMenuId, setActiveMenuId] = useState<string | null>(null);
+  const sendMenuQuery = (menuId: string, label: string) => {
     if (sendingState !== 'idle' || !conversationId) return;
-    setInputText(query);
-    // Use a short delay so inputText is set before handleSend reads it
-    setTimeout(() => {
-      handleSendDirect(query);
-    }, 50);
+    setActiveMenuId(null);
+    const tempId = `menu-${Date.now()}`;
+    const userMsg: AIMessage = {
+      id: tempId,
+      role: 'user',
+      content: label,
+      card_type: null,
+      card_data: {},
+      chart_data: null,
+      next_action: null,
+      created_at: new Date().toISOString(),
+    };
+    setMessages(prev => [...prev, userMsg]);
+    setSendingState('sending');
+    setTimeout(() => { flatListRef.current?.scrollToEnd({ animated: true }); }, 100);
+    handleMenuQuery(menuId);
+  };
+  const handleMenuQuery = async (menuId: string) => {
+    try {
+      setSendingState('ai_responding');
+      const token = await getToken();
+      if (!token) return;
+      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 25000);
+      const res = await fetch(`${backendUrl}/api/home/ai-query`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ menu_id: menuId, ai_conversation_id: conversationId }),
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+      const data = await res.json();
+      if (data.error) {
+        setMessages(prev => [...prev, {
+          id: `error-${Date.now()}`,
+          role: 'assistant',
+          content: "Could not load this data. Please try again.",
+          card_type: 'query_response',
+          card_data: {},
+          chart_data: null,
+          next_action: null,
+          created_at: new Date().toISOString(),
+        }]);
+        return;
+      }
+      const aiMsg: AIMessage = {
+        id: data.message_id || `ai-${Date.now()}`,
+        role: 'assistant',
+        content: data.response,
+        card_type: data.message_type || 'query_response',
+        card_data: {},
+        chart_data: data.chart_data || null,
+        next_action: data.next_action || null,
+        created_at: new Date().toISOString(),
+      };
+      setMessages(prev => [...prev, aiMsg]);
+      setTimeout(() => { flatListRef.current?.scrollToEnd({ animated: true }); }, 100);
+    } catch (error: any) {
+      if (error.name === 'AbortError') {
+        Alert.alert('Timeout', "This query took too long. Try again.");
+      } else {
+        setMessages(prev => [...prev, {
+          id: `error-${Date.now()}`,
+          role: 'assistant',
+          content: "Something went wrong. Please try again.",
+          card_type: 'query_response',
+          card_data: {},
+          chart_data: null,
+          next_action: null,
+          created_at: new Date().toISOString(),
+        }]);
+      }
+    } finally {
+      setSendingState('idle');
+    }
   };
 
   useEffect(() => {
@@ -103,41 +195,74 @@ export default function AIScreen() {
     try {
       const token = await getToken();
       if (!token) return;
-
       const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 8000);
-
-      const res = await fetch(`${backendUrl}/api/ai/conversation`, {
+      // Step 1: Get existing org AI conversations
+      const listRes = await fetch(`${backendUrl}/api/home/ai-conversations`, {
         headers: { 'Authorization': `Bearer ${token}` },
         signal: controller.signal,
       });
       clearTimeout(timeoutId);
-
-      if (res.status === 401) {
+      if (listRes.status === 401) {
         await authService.clearSession();
         await supabase.auth.signOut();
         setIsAuthenticated(false);
         router.replace('/login');
         return;
       }
-
-      const data = await res.json();
-      setConversationId(data.conversation_id);
-
-      if (data.messages && data.messages.length > 0) {
-        setMessages(data.messages);
-setTimeout(() => {
-  flatListRef.current?.scrollToEnd({ animated: false });
-}, 100);
+      const listData = await listRes.json();
+      let convId: string | null = null;
+      if (listData.conversations && listData.conversations.length > 0) {
+        convId = listData.conversations[0].id;
       } else {
-        // Welcome message (E1 — only static message allowed)
+        // Step 2: No conversation exists — create one
+        const createRes = await fetch(`${backendUrl}/api/home/ai-conversations`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        });
+        const createData = await createRes.json();
+        convId = createData.id || null;
+      }
+      if (!convId) {
+        console.error('[AI] Could not get or create conversation');
+        setLoading(false);
+        return;
+      }
+      setConversationId(convId);
+      // Step 3: Load messages for this conversation
+      const msgRes = await fetch(`${backendUrl}/api/home/ai-messages?ai_conversation_id=${convId}&limit=30`, {
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      const msgData = await msgRes.json();
+      if (msgData.messages && msgData.messages.length > 0) {
+        const mapped = msgData.messages.map((m: any) => ({
+          id: m.id,
+          role: m.role,
+          content: m.content,
+          card_type: m.metadata?.message_type || 'query_response',
+          card_data: {},
+          chart_data: m.metadata?.chart_data || null,
+          next_action: m.metadata?.next_action || null,
+          created_at: m.created_at,
+        }));
+        setMessages(mapped);
+        setTimeout(() => {
+          flatListRef.current?.scrollToEnd({ animated: false });
+        }, 100);
+      } else {
+        // Welcome message
         setMessages([{
           id: 'welcome',
           role: 'assistant',
-          content: "Hi! I'm your business assistant. Ask me anything about your customers, payments, or inventory.",
+          content: "Hi! I'm your business assistant. Tap a category below to get insights about your business.",
           card_type: 'query_response',
           card_data: {},
+          chart_data: null,
+          next_action: null,
           created_at: new Date().toISOString(),
         }]);
       }
@@ -182,28 +307,24 @@ setTimeout(() => {
       setSendingState('ai_responding');
       const token = await getToken();
       if (!token) return;
-
       const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 15000);
-
-      const res = await fetch(`${backendUrl}/api/ai/message`, {
+      const res = await fetch(`${backendUrl}/api/home/ai-query`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ message: text, conversation_id: conversationId }),
+        body: JSON.stringify({ message: text, ai_conversation_id: conversationId }),
         signal: controller.signal,
       });
       clearTimeout(timeoutId);
-
       if (res.status === 429) {
         Alert.alert('Rate Limited', 'Please wait before sending another message.');
         setSendingState('idle');
         return;
       }
-
       if (res.status === 401) {
         await authService.clearSession();
         await supabase.auth.signOut();
@@ -211,33 +332,32 @@ setTimeout(() => {
         router.replace('/login');
         return;
       }
-
       const data = await res.json();
-
       if (data.error) {
         setMessages(prev => [...prev, {
-  id: `error-${Date.now()}`,
-  role: 'assistant',
-  content: "I couldn't find matching data for that. Try asking about payments, summary, or customers.",
-  card_type: 'query_response',
-  card_data: {},
-  created_at: new Date().toISOString(),
-}]);
-setSendingState('idle');
+          id: `error-${Date.now()}`,
+          role: 'assistant',
+          content: "I couldn't process that request. Please try again.",
+          card_type: 'query_response',
+          card_data: {},
+          chart_data: null,
+          next_action: null,
+          created_at: new Date().toISOString(),
+        }]);
         setSendingState('idle');
         return;
       }
-
       const aiMsg: AIMessage = {
         id: data.message_id || `ai-${Date.now()}`,
         role: 'assistant',
-        content: data.response_text,
-        card_type: data.card_type,
-        card_data: data.card_data || {},
+        content: data.response,
+        card_type: data.message_type || 'query_response',
+        card_data: {},
+        chart_data: data.chart_data || null,
+        next_action: data.next_action || null,
         created_at: new Date().toISOString(),
       };
       setMessages(prev => [...prev, aiMsg]);
-
       setTimeout(() => {
         flatListRef.current?.scrollToEnd({ animated: true });
       }, 100);
@@ -246,14 +366,15 @@ setSendingState('idle');
         Alert.alert('Timeout', "AI took too long. Try again.");
       } else {
         setMessages(prev => [...prev, {
-  id: `error-${Date.now()}`,
-  role: 'assistant',
-  content: "I couldn't find matching data for that. Try asking about payments, summary, or customers.",
-  card_type: 'query_response',
-  card_data: {},
-  created_at: new Date().toISOString(),
-}]);
-setSendingState('idle');
+          id: `error-${Date.now()}`,
+          role: 'assistant',
+          content: "Something went wrong. Please try again.",
+          card_type: 'query_response',
+          card_data: {},
+          chart_data: null,
+          next_action: null,
+          created_at: new Date().toISOString(),
+        }]);
       }
     } finally {
       setSendingState('idle');
@@ -425,6 +546,12 @@ setSendingState('idle');
   const renderQueryResponse = (msg: AIMessage) => (
     <View style={styles.aiTextBubble}>
       <Text style={styles.aiTextContent}>{msg.content}</Text>
+      {msg.chart_data && (
+        <VisualizationCard data={msg.chart_data} />
+      )}
+      {msg.next_action?.text && (
+        <Text style={styles.nextActionText}>→ {msg.next_action.text}</Text>
+      )}
       <Text style={styles.cardTimestamp}>{formatTime(msg.created_at)}</Text>
     </View>
   );
@@ -534,22 +661,43 @@ keyboardVerticalOffset={80}
         </View>
       </SafeAreaView>
 
-      {/* Quick pills - horizontal scrollable */}
+      {/* Menu/Submenu dropdown */}
       <View style={styles.pillsContainer}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pillsScroll}>
-          {QUICK_PILLS.map(pill => (
+          {MENU_CATEGORIES.map(cat => (
             <TouchableOpacity
-              key={pill.id}
-              style={styles.pill}
-              onPress={() => sendQuickQuery(pill.query)}
+              key={cat.id}
+              style={[styles.pill, activeMenuId === cat.id && styles.pillActive]}
+              onPress={() => setActiveMenuId(activeMenuId === cat.id ? null : cat.id)}
               disabled={sendingState !== 'idle'}
               activeOpacity={0.7}
             >
-              <Text style={styles.pillIcon}>{pill.icon}</Text>
-              <Text style={styles.pillLabel}>{pill.label}</Text>
+              <Text style={styles.pillLabel}>{cat.label}</Text>
+              <Text style={styles.pillIcon}>{activeMenuId === cat.id ? ' ▲' : ' ▼'}</Text>
             </TouchableOpacity>
           ))}
         </ScrollView>
+        {activeMenuId && (() => {
+          const cat = MENU_CATEGORIES.find(c => c.id === activeMenuId);
+          if (!cat) return null;
+          return (
+            <View style={styles.submenuContainer}>
+              <ScrollView nestedScrollEnabled showsVerticalScrollIndicator={false} style={{ maxHeight: 220 }}>
+                {cat.items.map(item => (
+                  <TouchableOpacity
+                    key={item.id}
+                    style={styles.submenuItem}
+                    onPress={() => sendMenuQuery(item.id, item.label)}
+                    disabled={sendingState !== 'idle'}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.submenuItemText}>{item.label}</Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </View>
+          );
+        })()}
       </View>
 
       {/* Chat area */}
@@ -651,6 +799,10 @@ const styles = StyleSheet.create({
   },
   pillIcon: { fontSize: 14 },
   pillLabel: { fontSize: 13, fontWeight: '500', color: '#1A1A1A' },
+  pillActive: { backgroundColor: '#E8F5E9', borderColor: '#075E54', borderWidth: 1 },
+  submenuContainer: { backgroundColor: '#FFFFFF', borderTopWidth: 1, borderTopColor: '#E0E0E0', paddingVertical: 4, maxHeight: 220, elevation: 3, zIndex: 10 },
+  submenuItem: { paddingVertical: 10, paddingHorizontal: 16, borderBottomWidth: 1, borderBottomColor: '#F5F5F5' },
+  submenuItemText: { fontSize: 14, color: '#1A1A1A' },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -779,6 +931,7 @@ const styles = StyleSheet.create({
     elevation: 1,
   },
   aiTextContent: { fontSize: 14, color: '#333333', lineHeight: 20 },
+  nextActionText: { fontSize: 13, color: '#E65100', marginTop: 8, fontStyle: 'italic' },
 
   // ── User bubble ────────────────────────────────────────
   userBubbleContainer: { alignItems: 'flex-end', marginBottom: 12 },
