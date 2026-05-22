@@ -35,6 +35,7 @@
 // OpenAI client is passed in via dispatchMenuQuery — never instantiated at module level.
 // Use getOpenAI() from ai-routes.js, consistent with all other backend routes.
 
+import { narrate } from './narration.js';
 // ── Currency formatter (global-ready abstraction) ─────────────
 // TODO: add locale-aware number formatting before global expansion
 const CURRENCY_SYMBOLS = {
@@ -64,52 +65,6 @@ const monthStartIST = () => {
   return ist.toISOString().split('T')[0];
 };
 
-// ── Fallback text builder ─────────────────────────────────────
-// Used when GPT narration fails for any reason.
-// Deterministic data always returns — narration is enhancement only.
-const buildFallbackText = (functionKey, data) => {
-  const fallbacks = {
-    collections_today: `Collected ${formatCurrency(data.total, data.currency)} today across ${data.count} payment(s).`,
-    total_outstanding: `Total outstanding is ${formatCurrency(data.total, data.currency)} across ${data.count} customer(s). ${data.overdueCount} invoice(s) overdue.`,
-    top_customers: `Top customer this month: ${data.topName || 'None'} with ${formatCurrency(data.topAmount || 0, data.currency)}.`,
-  };
-  return fallbacks[functionKey] || 'Business data retrieved successfully.';
-};
-
-// ── GPT Narration Layer ───────────────────────────────────────
-// GPT writes 2-3 lines of natural language from pre-computed data only.
-// 8-second AbortController timeout. Falls back gracefully on any failure.
-// SQL truth, charts, and nudges are already built before this runs.
-const NARRATION_PROMPTS = {
-  collections_today: 'You are a business assistant for an MSME trader. Summarize this collections data in 2-3 short lines. Lead with the total collected. Mention the top payer if present. Be specific with numbers. No preamble or greeting.',
-  total_outstanding: 'You are a business assistant for an MSME trader. Summarize this outstanding balance data in 2-3 short lines. Lead with the most urgent insight. No preamble.',
-  top_customers: 'You are a business assistant for an MSME trader. Summarize who the top customers are by revenue in 2-3 short lines. Be specific with numbers. No preamble.',
-};
-
-async function narrateWithGPT(data, functionKey, openai) {
-  const fallback = buildFallbackText(functionKey, data);
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 8000);
-  try {
-    const prompt = NARRATION_PROMPTS[functionKey];
-    if (!prompt) return fallback;
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [
-        { role: 'system', content: prompt },
-        { role: 'user', content: JSON.stringify(data) },
-      ],
-      temperature: 0.1,
-      max_tokens: 150,
-    }, { signal: controller.signal });
-    return completion.choices[0]?.message?.content?.trim() || fallback;
-  } catch (e) {
-    console.warn('[orgAi] narrateWithGPT failed, using fallback. key:', functionKey, 'reason:', e.message);
-    return fallback;
-  } finally {
-    clearTimeout(timeout);
-  }
-}
 
 // ── FUNCTION 1: Collections Today ─────────────────────────────
 export async function collectionsToday(supabase, orgId, orgCurrency, openai) {
@@ -149,9 +104,10 @@ export async function collectionsToday(supabase, orgId, orgCurrency, openai) {
   } : {
     type: 'metric_grid',
     title: 'Collections Today',
+    currency: orgCurrency,
     cards: [
-      { label: 'Total Collected', value: formatCurrency(total, orgCurrency), trend_direction: 'up' },
-      { label: 'Payments Received', value: String(count) },
+      { label: 'Total Collected', value: total, format: 'currency', trend_direction: 'up' },
+      { label: 'Payments Received', value: count, format: 'number' },
       ...(topPayerName ? [{ label: 'Top Payer', value: topPayerName }] : []),
     ],
   };
@@ -159,21 +115,21 @@ export async function collectionsToday(supabase, orgId, orgCurrency, openai) {
   // Step 4: Nudge — rules engine, never GPT
   let next_action = null;
   if (count === 0) {
-    next_action = 'No collections yet today. Send payment reminders to your overdue customers.';
+    next_action = { text: 'No collections yet today. Send payment reminders to your overdue customers.' };
   } else if (total < 10000) {
-    next_action = `Only ${formatCurrency(total, orgCurrency)} collected. Chase your top outstanding customers.`;
+    next_action = { text: `Only ${formatCurrency(total, orgCurrency)} collected. Chase your top outstanding customers.` };
   } else {
-    next_action = "Good collection day. Check tomorrow's pending deliveries.";
+    next_action = { text: "Good collection day. Check tomorrow's pending deliveries." };
   }
 
   // Step 5: GPT narration — always last, never blocks core response
-  const response_text = await narrateWithGPT(
+  const response_text = await narrate(
     { total, count, topPayerName, currency: orgCurrency },
     'collections_today',
     openai
   );
 
-  console.log('[orgAi] collectionsToday ms=' + (Date.now() - start));
+  console.log('[orgAi]', { fn: 'collectionsToday', ms: Date.now() - start, rows: count });
   return { response_text, chart_data, next_action };
 }
 
@@ -243,7 +199,7 @@ export async function totalOutstanding(supabase, orgId, orgCurrency, openai) {
   }
 
   // Step 6: GPT narration
-  const response_text = await narrateWithGPT({
+  const response_text = await narrate({
     total, count, overdueCount, currency: orgCurrency,
     topCustomers: (topCustomers || []).slice(0, 3).map(c => ({
       name: c.name, amount: c.outstanding_balance,
@@ -326,7 +282,7 @@ export async function topCustomers(supabase, orgId, orgCurrency, openai) {
   }
 
   // Step 6: GPT narration
-  const response_text = await narrateWithGPT({
+  const response_text = await narrate({
     ranked: ranked.slice(0, 3),
     grandTotal,
     currency: orgCurrency,

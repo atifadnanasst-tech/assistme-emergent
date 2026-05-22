@@ -1,0 +1,90 @@
+/**
+ * AssistMe — Org AI Narration Engine
+ * Location: /services/ai/orgAi/narration.js
+ * Single narration function for all org AI functions.
+ * Never throws — always returns fallback on any failure.
+ */
+
+const PROMPTS = {
+  collections_today:      'You are a business assistant for an MSME trader. Summarize this collections data in 2-3 short lines. Lead with the total collected. Mention the top payer if present. Be specific with numbers. No preamble.',
+  total_outstanding:      'You are a business assistant for an MSME trader. Summarize this outstanding balance data in 2-3 short lines. Lead with the most urgent insight. No preamble.',
+  top_customers:          'You are a business assistant for an MSME trader. Summarize who the top customers are by revenue in 2-3 short lines. Be specific with numbers. No preamble.',
+  revenue_this_month:     'You are a business assistant for an MSME trader. Summarize this month\'s revenue in 2-3 short lines. Lead with total billed. No preamble.',
+  invoices_due_this_week: 'You are a business assistant for an MSME trader. Summarize invoices due this week in 2-3 lines. Lead with urgency. Name the top customer if present. No preamble.',
+  weekly_trend:           'You are a business assistant for an MSME trader. Summarize the 4-week revenue trend in 2-3 lines. State direction clearly. No preamble.',
+  follow_up_today:        'You are a business assistant for an MSME trader. Summarize which customers need follow-up today in 2-3 lines. Lead with the most important one. No preamble.',
+  risk_alerts:            'You are a business assistant for an MSME trader. Summarize payment risk alerts in 2-3 lines. Be direct. No preamble.',
+  gone_silent:            'You are a business assistant for an MSME trader. Summarize customers who have gone silent in 2-3 lines. No preamble.',
+  top_sellers:            'You are a business assistant for an MSME trader. Summarize top selling products this month in 2-3 lines. No preamble.',
+  low_stock:              'You are a business assistant for an MSME trader. Summarize low stock products in 2-3 lines. Lead with most urgent. No preamble.',
+  slow_moving:            'You are a business assistant for an MSME trader. Summarize slow-moving stock in 2-3 lines. No preamble.',
+  deliveries_today:       'You are a business assistant for an MSME trader. Summarize delivery tasks for today in 2-3 lines. Lead with pending count. No preamble.',
+  expiring_quotes:        'You are a business assistant for an MSME trader. Summarize expiring quotes in 2-3 lines. Lead with most urgent. No preamble.',
+  todays_tasks:           'You are a business assistant for an MSME trader. Summarize today\'s tasks in 2-3 lines. Lead with urgent items. No preamble.',
+  what_i_owe:             'You are a business assistant for an MSME trader. Summarize supplier payables in 2-3 lines. Lead with total owed. No preamble.',
+  overdue_payables:       'You are a business assistant for an MSME trader. Summarize overdue supplier bills in 2-3 lines. Name the top supplier owed. No preamble.',
+  top_supplier:           'You are a business assistant for an MSME trader. Summarize top suppliers by payment this month in 2-3 lines. No preamble.',
+};
+
+const FALLBACKS = {
+  collections_today:      (d) => `Collected ${d.total || 0} today across ${d.count || 0} payment(s).`,
+  total_outstanding:      (d) => `Total outstanding: ${d.total || 0} across ${d.count || 0} customer(s). ${d.overdueCount || 0} invoice(s) overdue.`,
+  top_customers:          (d) => `Top customer this month: ${d.topName || 'None'}.`,
+  revenue_this_month:     (d) => `Billed ${d.total || 0} this month across ${d.count || 0} invoice(s).`,
+  invoices_due_this_week: (d) => `${d.count || 0} invoice(s) due this week totalling ${d.total || 0}.`,
+  weekly_trend:           (d) => `Revenue direction this week: ${d.direction || 'unknown'}.`,
+  follow_up_today:        (d) => `${d.count || 0} customer(s) need follow-up. Top: ${d.topName || 'None'}.`,
+  risk_alerts:            (d) => `${d.count || 0} customer(s) showing payment risk.`,
+  gone_silent:            (d) => `${d.count || 0} customer(s) have not ordered in 60+ days.`,
+  top_sellers:            (d) => `Top seller this month: ${d.topName || 'None'} with ${d.topQty || 0} unit(s) sold.`,
+  low_stock:              (d) => `${d.count || 0} product(s) at or below reorder level.`,
+  slow_moving:            (d) => `${d.count || 0} product(s) have stock but no sales in 30 days.`,
+  deliveries_today:       (d) => `${d.total || 0} delivery task(s) today. ${d.pending || 0} pending.`,
+  expiring_quotes:        (d) => `${d.count || 0} quote(s) expiring soon or already expired.`,
+  todays_tasks:           (d) => `${d.total || 0} task(s) due today. ${d.urgent || 0} urgent.`,
+  what_i_owe:             (d) => `Total payable to suppliers: ${d.total || 0}. ${d.overdueCount || 0} bill(s) overdue.`,
+  overdue_payables:       (d) => `${d.count || 0} supplier(s) have overdue bills. Top: ${d.topName || 'None'}.`,
+  top_supplier:           (d) => `Top supplier this month: ${d.topName || 'None'}.`,
+};
+
+export async function narrate(data, functionKey, openai, options = {}) {
+  const {
+    timeoutMs   = 8000,
+    maxTokens   = 150,
+    temperature = 0.1,
+  } = options;
+
+  const fallbackFn = FALLBACKS[functionKey];
+  const fallback = fallbackFn ? fallbackFn(data) : 'Business data retrieved successfully.';
+
+  const payload = JSON.stringify(data);
+  if (payload.length > 4000) {
+    console.warn('[orgAi]', { fn: functionKey, reason: 'payload_too_large', bytes: payload.length });
+    return fallback;
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const prompt = PROMPTS[functionKey];
+    if (!prompt) return fallback;
+
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        { role: 'system', content: prompt },
+        { role: 'user', content: payload },
+      ],
+      temperature,
+      max_tokens: maxTokens,
+    }, { signal: controller.signal });
+
+    return completion.choices[0]?.message?.content?.trim() || fallback;
+  } catch (e) {
+    console.warn('[orgAi] narrate fallback used. key:', functionKey, 'reason:', e.message);
+    return fallback;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
