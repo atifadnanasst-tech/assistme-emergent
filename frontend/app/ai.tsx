@@ -193,12 +193,15 @@ export default function AIScreen() {
 
   const loadConversation = async () => {
     try {
+      console.log('[ORG-AI] loadConversation invoked');
       const token = await getToken();
+      console.log('[ORG-AI] token result:', !!token);
       if (!token) return;
       const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 8000);
       // Step 1: Get existing org AI conversations
+      console.log('[ORG-AI] about to fetch conversations');
       const listRes = await fetch(`${backendUrl}/api/home/ai-conversations`, {
         headers: { 'Authorization': `Bearer ${token}` },
         signal: controller.signal,
@@ -267,6 +270,7 @@ export default function AIScreen() {
         }]);
       }
     } catch (error: any) {
+      console.error('[ORG-AI] loadConversation error:', error);
       if (error.name !== 'AbortError') {
         console.error('Load AI conversation error:', error);
       }
