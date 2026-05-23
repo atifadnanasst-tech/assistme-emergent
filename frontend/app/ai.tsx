@@ -843,7 +843,7 @@ const styles = StyleSheet.create({
   menuBackdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 5 },
   // TODO: replace hardcoded top offset with measured header/layout constant
   // heuristic offset below pills row — adjust if header height changes
-  submenuOverlay: { position: 'absolute', top: 148, width: 220, backgroundColor: '#FFFFFF', zIndex: 10, elevation: 8, maxHeight: 220, borderRadius: 12, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.15, shadowRadius: 8 },
+  submenuOverlay: { position: 'absolute', top: 148, width: 220, backgroundColor: '#FFFFFF', zIndex: 30, elevation: 30, maxHeight: 220, borderRadius: 12, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.15, shadowRadius: 8 },
   submenuItem: { paddingVertical: 10, paddingHorizontal: 16, borderBottomWidth: 1, borderBottomColor: '#F5F5F5' },
   submenuItemText: { fontSize: 14, color: '#1A1A1A' },
   header: {
