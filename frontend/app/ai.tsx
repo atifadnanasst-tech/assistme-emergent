@@ -54,33 +54,33 @@ export default function AIScreen() {
 
   // TODO: consolidate handleMenuQuery + handleSendDirect into shared sendAiRequest helper
   const MENU_CATEGORIES = [
-    { id: 'finance', label: 'Finance', items: [
-      { id: 'collections_today', label: 'Collections Today' },
-      { id: 'total_outstanding', label: 'Total Outstanding' },
-      { id: 'revenue_this_month', label: 'Revenue This Month' },
-      { id: 'invoices_due_this_week', label: 'Invoices Due This Week' },
-      { id: 'weekly_trend', label: 'Weekly Trend' },
+    { id: 'finance', label: '💰 Finance', items: [
+      { id: 'collections_today', label: '📥 Collections Today' },
+      { id: 'total_outstanding', label: '🔴 Total Outstanding' },
+      { id: 'revenue_this_month', label: '📊 Revenue This Month' },
+      { id: 'invoices_due_this_week', label: '📋 Invoices Due This Week' },
+      { id: 'weekly_trend', label: '📈 Weekly Trend' },
     ]},
-    { id: 'customers', label: 'Customers', items: [
-      { id: 'top_customers', label: 'Top Customers' },
-      { id: 'follow_up_today', label: 'Follow Up Today' },
-      { id: 'risk_alerts', label: 'Risk Alerts' },
-      { id: 'gone_silent', label: 'Gone Silent' },
+    { id: 'customers', label: '👥 Customers', items: [
+      { id: 'top_customers', label: '🏆 Top Customers' },
+      { id: 'follow_up_today', label: '📞 Follow Up Today' },
+      { id: 'risk_alerts', label: '⚠️ Risk Alerts' },
+      { id: 'gone_silent', label: '🔇 Gone Silent' },
     ]},
-    { id: 'products', label: 'Products', items: [
-      { id: 'top_sellers', label: 'Top Sellers' },
-      { id: 'low_stock', label: 'Low Stock' },
-      { id: 'slow_moving', label: 'Slow Moving' },
+    { id: 'products', label: '📦 Products', items: [
+      { id: 'top_sellers', label: '⭐ Top Sellers' },
+      { id: 'low_stock', label: '🔴 Low Stock' },
+      { id: 'slow_moving', label: '🐌 Slow Moving' },
     ]},
-    { id: 'ops', label: 'Ops', items: [
-      { id: 'deliveries_today', label: 'Deliveries Today' },
-      { id: 'expiring_quotes', label: 'Expiring Quotes' },
-      { id: 'todays_tasks', label: "Today's Tasks" },
+    { id: 'ops', label: '⚙️ Ops', items: [
+      { id: 'deliveries_today', label: '🚚 Deliveries Today' },
+      { id: 'expiring_quotes', label: '📄 Expiring Quotes' },
+      { id: 'todays_tasks', label: "✅ Today's Tasks" },
     ]},
-    { id: 'suppliers', label: 'Suppliers', items: [
-      { id: 'what_i_owe', label: 'What I Owe' },
-      { id: 'overdue_payables', label: 'Overdue Payables' },
-      { id: 'top_supplier', label: 'Top Supplier' },
+    { id: 'suppliers', label: '🏭 Suppliers', items: [
+      { id: 'what_i_owe', label: '💸 What I Owe' },
+      { id: 'overdue_payables', label: '⏰ Overdue Payables' },
+      { id: 'top_supplier', label: '🥇 Top Supplier' },
     ]},
   ];
   const [activeMenuId, setActiveMenuId] = useState<string | null>(null);
@@ -788,6 +788,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
     gap: 8,
+    alignItems: 'center',
   },
   pill: {
     flexDirection: 'row',
@@ -804,6 +805,8 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.05,
     shadowRadius: 2,
+    alignSelf: 'flex-start',
+    flexShrink: 0,
   },
   pillIcon: { fontSize: 14 },
   pillLabel: { fontSize: 13, fontWeight: '500', color: '#1A1A1A' },
