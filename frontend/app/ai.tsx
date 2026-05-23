@@ -217,6 +217,7 @@ export default function AIScreen() {
         return;
       }
       const listData = await listRes.json();
+      console.log('[ORG-AI] conversations payload:', JSON.stringify(listData));
       let convId: string | null = null;
       if (listData.conversations && listData.conversations.length > 0) {
         convId = listData.conversations[0].id;
@@ -232,6 +233,7 @@ export default function AIScreen() {
         const createData = await createRes.json();
         convId = createData.conversation?.id || null;
       }
+      console.log('[ORG-AI] selected convId:', convId);
       if (!convId) {
         console.error('[AI] Could not get or create conversation');
         setLoading(false);
