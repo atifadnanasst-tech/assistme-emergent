@@ -203,22 +203,17 @@ export default function AIScreen() {
 
   const loadConversation = async () => {
     try {
-      console.log('[ORG-AI] loadConversation invoked');
       const token = await getToken();
-      console.log('[ORG-AI] token result:', !!token);
       if (!token) return;
       const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
-      console.log('[ORG-AI] backendUrl:', backendUrl);
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 8000);
       // Step 1: Get existing org AI conversations
-      console.log('[ORG-AI] about to fetch conversations');
       const listRes = await fetch(`${backendUrl}/api/home/ai-conversations`, {
         headers: { 'Authorization': `Bearer ${token}` },
         signal: controller.signal,
       });
       clearTimeout(timeoutId);
-      console.log('[ORG-AI] fetch completed, status:', listRes?.status);
       if (listRes.status === 401) {
         await authService.clearSession();
         await supabase.auth.signOut();
@@ -227,7 +222,6 @@ export default function AIScreen() {
         return;
       }
       const listData = await listRes.json();
-      console.log('[ORG-AI] conversations payload:', JSON.stringify(listData));
       let convId: string | null = null;
       if (listData.conversations && listData.conversations.length > 0) {
         convId = listData.conversations[0].id;
@@ -243,7 +237,6 @@ export default function AIScreen() {
         const createData = await createRes.json();
         convId = createData.conversation?.id || null;
       }
-      console.log('[ORG-AI] selected convId:', convId);
       if (!convId) {
         console.error('[AI] Could not get or create conversation');
         setLoading(false);
@@ -275,7 +268,7 @@ export default function AIScreen() {
         setMessages([{
           id: 'welcome',
           role: 'assistant',
-          content: "Hi! I'm your business assistant. Tap a category below to get insights about your business.",
+          content: "Hi! I'm your business assistant. Tap a category above to get insights about your business.",
           card_type: 'query_response',
           card_data: {},
           chart_data: null,
@@ -284,7 +277,6 @@ export default function AIScreen() {
         }]);
       }
     } catch (error: any) {
-      console.error('[ORG-AI] loadConversation error:', error);
       if (error.name !== 'AbortError') {
         console.error('Load AI conversation error:', error);
       }
