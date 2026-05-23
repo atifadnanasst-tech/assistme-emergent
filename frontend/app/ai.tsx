@@ -810,6 +810,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#F5F5F0',
     borderBottomWidth: 1,
     borderBottomColor: '#E0E0E0',
+    zIndex: 20,
   },
   pillsScroll: {
     paddingHorizontal: 12,
