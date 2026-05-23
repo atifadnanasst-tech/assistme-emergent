@@ -208,6 +208,7 @@ export default function AIScreen() {
         signal: controller.signal,
       });
       clearTimeout(timeoutId);
+      console.log('[ORG-AI] fetch completed, status:', listRes?.status);
       if (listRes.status === 401) {
         await authService.clearSession();
         await supabase.auth.signOut();
