@@ -55,11 +55,9 @@ export default function AIScreen() {
 
   // TODO: consolidate handleMenuQuery + handleSendDirect into shared sendAiRequest helper
   // Pure helper — index-based dropdown positioning (no layout measurement needed)
-  const getDropdownLeft = (index: number, totalMenus: number): number => {
-    const DROPDOWN_WIDTH = 220;
-    if (index <= 1) return 12;
-    if (index >= totalMenus - 2) return Math.max(12, screenWidth - DROPDOWN_WIDTH - 12);
-    return Math.max(12, Math.min(index * 90, screenWidth - DROPDOWN_WIDTH - 12));
+  const DROPDOWN_WIDTH = 220;
+  const clampDropdownLeft = (rawLeft: number): number => {
+    return Math.max(12, Math.min(rawLeft, screenWidth - DROPDOWN_WIDTH - 12));
   };
   const MENU_CATEGORIES = [
     { id: 'finance', label: '💰 Finance', items: [
@@ -94,6 +92,8 @@ export default function AIScreen() {
   const [activeMenuId, setActiveMenuId] = useState<string | null>(null);
   const { width: screenWidth } = useWindowDimensions();
   const [activeMenuIndex, setActiveMenuIndex] = useState<number>(0);
+  const pillPositions = useRef<Record<number, number>>({});
+  const [dropdownLeft, setDropdownLeft] = useState<number>(12);
   const sendMenuQuery = (menuId: string, label: string) => {
     if (sendingState !== 'idle' || !conversationId) return;
     setActiveMenuId(null);
@@ -692,9 +692,11 @@ keyboardVerticalOffset={80}
                 } else {
                   setActiveMenuId(cat.id);
                   setActiveMenuIndex(index);
+                  setDropdownLeft(clampDropdownLeft(pillPositions.current[index] || 12));
                 }
               }}
               disabled={sendingState !== 'idle'}
+              onLayout={(e) => { pillPositions.current[index] = e.nativeEvent.layout.x; }}
               activeOpacity={0.7}
             >
               <Text style={styles.pillLabel}>{cat.label} {activeMenuId === cat.id ? '▲' : '▼'}</Text>
@@ -710,7 +712,7 @@ keyboardVerticalOffset={80}
             onPress={() => setActiveMenuId(null)}
             activeOpacity={1}
           />
-          <View style={[styles.submenuOverlay, { left: getDropdownLeft(activeMenuIndex, MENU_CATEGORIES.length) }]}>
+          <View style={[styles.submenuOverlay, { left: dropdownLeft }]}>
             <ScrollView nestedScrollEnabled showsVerticalScrollIndicator={false}>
               {(() => {
                 const cat = MENU_CATEGORIES.find(c => c.id === activeMenuId);
