@@ -198,6 +198,7 @@ export default function AIScreen() {
       console.log('[ORG-AI] token result:', !!token);
       if (!token) return;
       const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+      console.log('[ORG-AI] backendUrl:', backendUrl);
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 8000);
       // Step 1: Get existing org AI conversations
