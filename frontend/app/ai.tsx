@@ -661,7 +661,7 @@ keyboardVerticalOffset={80}
         </View>
       </SafeAreaView>
 
-      {/* Menu/Submenu dropdown */}
+      {/* Category tabs */}
       <View style={styles.pillsContainer}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pillsScroll}>
           {MENU_CATEGORIES.map(cat => (
@@ -672,18 +672,25 @@ keyboardVerticalOffset={80}
               disabled={sendingState !== 'idle'}
               activeOpacity={0.7}
             >
-              <Text style={styles.pillLabel}>{cat.label}</Text>
-              <Text style={styles.pillIcon}>{activeMenuId === cat.id ? ' ▲' : ' ▼'}</Text>
+              <Text style={styles.pillLabel}>{cat.label} {activeMenuId === cat.id ? '▲' : '▼'}</Text>
             </TouchableOpacity>
           ))}
         </ScrollView>
-        {activeMenuId && (() => {
-          const cat = MENU_CATEGORIES.find(c => c.id === activeMenuId);
-          if (!cat) return null;
-          return (
-            <View style={styles.submenuContainer}>
-              <ScrollView nestedScrollEnabled showsVerticalScrollIndicator={false} style={{ maxHeight: 220 }}>
-                {cat.items.map(item => (
+      </View>
+      {/* Submenu absolute overlay */}
+      {activeMenuId && (
+        <>
+          <TouchableOpacity
+            style={styles.menuBackdrop}
+            onPress={() => setActiveMenuId(null)}
+            activeOpacity={1}
+          />
+          <View style={styles.submenuOverlay}>
+            <ScrollView nestedScrollEnabled showsVerticalScrollIndicator={false}>
+              {(() => {
+                const cat = MENU_CATEGORIES.find(c => c.id === activeMenuId);
+                if (!cat) return null;
+                return cat.items.map(item => (
                   <TouchableOpacity
                     key={item.id}
                     style={styles.submenuItem}
@@ -693,12 +700,13 @@ keyboardVerticalOffset={80}
                   >
                     <Text style={styles.submenuItemText}>{item.label}</Text>
                   </TouchableOpacity>
-                ))}
-              </ScrollView>
-            </View>
-          );
-        })()}
-      </View>
+                ));
+              })()}
+            </ScrollView>
+          </View>
+        </>
+      )}
+
 
       {/* Chat area */}
       <View style={styles.chatArea}>
@@ -801,6 +809,9 @@ const styles = StyleSheet.create({
   pillLabel: { fontSize: 13, fontWeight: '500', color: '#1A1A1A' },
   pillActive: { backgroundColor: '#E8F5E9', borderColor: '#075E54', borderWidth: 1 },
   submenuContainer: { backgroundColor: '#FFFFFF', borderTopWidth: 1, borderTopColor: '#E0E0E0', paddingVertical: 4, maxHeight: 220, elevation: 3, zIndex: 10 },
+  menuBackdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 5 },
+  // TODO: replace hardcoded top offset with measured header/layout constant
+  submenuOverlay: { position: 'absolute', top: 108, left: 0, right: 0, backgroundColor: '#FFFFFF', zIndex: 10, elevation: 5, maxHeight: 220, borderBottomWidth: 1, borderBottomColor: '#E0E0E0' },
   submenuItem: { paddingVertical: 10, paddingHorizontal: 16, borderBottomWidth: 1, borderBottomColor: '#F5F5F5' },
   submenuItemText: { fontSize: 14, color: '#1A1A1A' },
   header: {
