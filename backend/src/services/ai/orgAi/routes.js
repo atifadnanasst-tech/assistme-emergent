@@ -181,7 +181,7 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
         : (message || '');
 
       // Save user message
-      await supabase
+      const { error: userMsgError } = await supabase
         .from('messages')
         .insert({
           organisation_id: organisationId,
@@ -198,6 +198,7 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
             menu_id: menu_id || null,
           },
         });
+      if (userMsgError) console.error('[orgAi] user message insert failed:', userMsgError.message);
 
       // Dispatch
       let result;
@@ -214,7 +215,7 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
       }
 
       // Save AI response message
-      const { data: savedMsg } = await supabase
+      const { data: savedMsg, error: aiMsgError } = await supabase
         .from('messages')
         .insert({
           organisation_id: organisationId,
@@ -236,12 +237,14 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
         })
         .select('id')
         .single();
+      if (aiMsgError) console.error('[orgAi] AI response insert failed:', aiMsgError.message);
 
       // Update conversation last_message_at only — message_count recalculated later
-      await supabase
+      const { error: convUpdateError } = await supabase
         .from('ai_conversations')
         .update({ last_message_at: new Date().toISOString() })
         .eq('id', ai_conversation_id);
+      if (convUpdateError) console.error('[orgAi] conversation update failed:', convUpdateError.message);
 
       return c.json({
         message_id: savedMsg?.id,

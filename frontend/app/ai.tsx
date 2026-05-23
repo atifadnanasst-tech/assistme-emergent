@@ -12,6 +12,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Keyboard,
+  useWindowDimensions,
   ScrollView,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -53,6 +54,13 @@ export default function AIScreen() {
   const [aiRecording, setAiRecording] = useState<Audio.Recording | null>(null);
 
   // TODO: consolidate handleMenuQuery + handleSendDirect into shared sendAiRequest helper
+  // Pure helper — index-based dropdown positioning (no layout measurement needed)
+  const getDropdownLeft = (index: number, totalMenus: number): number => {
+    const DROPDOWN_WIDTH = 220;
+    if (index <= 1) return 12;
+    if (index >= totalMenus - 2) return Math.max(12, screenWidth - DROPDOWN_WIDTH - 12);
+    return Math.max(12, Math.min(index * 90, screenWidth - DROPDOWN_WIDTH - 12));
+  };
   const MENU_CATEGORIES = [
     { id: 'finance', label: '💰 Finance', items: [
       { id: 'collections_today', label: '📥 Collections Today' },
@@ -84,6 +92,8 @@ export default function AIScreen() {
     ]},
   ];
   const [activeMenuId, setActiveMenuId] = useState<string | null>(null);
+  const { width: screenWidth } = useWindowDimensions();
+  const [activeMenuIndex, setActiveMenuIndex] = useState<number>(0);
   const sendMenuQuery = (menuId: string, label: string) => {
     if (sendingState !== 'idle' || !conversationId) return;
     setActiveMenuId(null);
@@ -672,11 +682,18 @@ keyboardVerticalOffset={80}
       {/* Category tabs */}
       <View style={styles.pillsContainer}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pillsScroll}>
-          {MENU_CATEGORIES.map(cat => (
+          {MENU_CATEGORIES.map((cat, index) => (
             <TouchableOpacity
               key={cat.id}
               style={[styles.pill, activeMenuId === cat.id && styles.pillActive]}
-              onPress={() => setActiveMenuId(activeMenuId === cat.id ? null : cat.id)}
+              onPress={() => {
+                if (activeMenuId === cat.id) {
+                  setActiveMenuId(null);
+                } else {
+                  setActiveMenuId(cat.id);
+                  setActiveMenuIndex(index);
+                }
+              }}
               disabled={sendingState !== 'idle'}
               activeOpacity={0.7}
             >
@@ -693,7 +710,7 @@ keyboardVerticalOffset={80}
             onPress={() => setActiveMenuId(null)}
             activeOpacity={1}
           />
-          <View style={styles.submenuOverlay}>
+          <View style={[styles.submenuOverlay, { left: getDropdownLeft(activeMenuIndex, MENU_CATEGORIES.length) }]}>
             <ScrollView nestedScrollEnabled showsVerticalScrollIndicator={false}>
               {(() => {
                 const cat = MENU_CATEGORIES.find(c => c.id === activeMenuId);
@@ -822,7 +839,8 @@ const styles = StyleSheet.create({
   submenuContainer: { backgroundColor: '#FFFFFF', borderTopWidth: 1, borderTopColor: '#E0E0E0', paddingVertical: 4, maxHeight: 220, elevation: 3, zIndex: 10 },
   menuBackdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 5 },
   // TODO: replace hardcoded top offset with measured header/layout constant
-  submenuOverlay: { position: 'absolute', top: 140, left: 0, right: 0, backgroundColor: '#FFFFFF', zIndex: 10, elevation: 5, maxHeight: 220, borderBottomWidth: 1, borderBottomColor: '#E0E0E0' },
+  // heuristic offset below pills row — adjust if header height changes
+  submenuOverlay: { position: 'absolute', top: 148, width: 220, backgroundColor: '#FFFFFF', zIndex: 10, elevation: 8, maxHeight: 220, borderRadius: 12, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.15, shadowRadius: 8 },
   submenuItem: { paddingVertical: 10, paddingHorizontal: 16, borderBottomWidth: 1, borderBottomColor: '#F5F5F5' },
   submenuItemText: { fontSize: 14, color: '#1A1A1A' },
   header: {
