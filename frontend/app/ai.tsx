@@ -225,7 +225,7 @@ export default function AIScreen() {
           },
         });
         const createData = await createRes.json();
-        convId = createData.id || null;
+        convId = createData.conversation?.id || null;
       }
       if (!convId) {
         console.error('[AI] Could not get or create conversation');
@@ -811,7 +811,7 @@ const styles = StyleSheet.create({
   submenuContainer: { backgroundColor: '#FFFFFF', borderTopWidth: 1, borderTopColor: '#E0E0E0', paddingVertical: 4, maxHeight: 220, elevation: 3, zIndex: 10 },
   menuBackdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 5 },
   // TODO: replace hardcoded top offset with measured header/layout constant
-  submenuOverlay: { position: 'absolute', top: 108, left: 0, right: 0, backgroundColor: '#FFFFFF', zIndex: 10, elevation: 5, maxHeight: 220, borderBottomWidth: 1, borderBottomColor: '#E0E0E0' },
+  submenuOverlay: { position: 'absolute', top: 140, left: 0, right: 0, backgroundColor: '#FFFFFF', zIndex: 10, elevation: 5, maxHeight: 220, borderBottomWidth: 1, borderBottomColor: '#E0E0E0' },
   submenuItem: { paddingVertical: 10, paddingHorizontal: 16, borderBottomWidth: 1, borderBottomColor: '#F5F5F5' },
   submenuItemText: { fontSize: 14, color: '#1A1A1A' },
   header: {
