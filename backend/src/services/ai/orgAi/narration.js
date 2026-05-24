@@ -54,6 +54,47 @@ const LANGUAGE_INSTRUCTIONS = {
   bn: 'Respond in natural professional Bengali.',
   ar: 'Respond in natural professional Arabic.',
 };
+
+// PERSPECTIVE_INVARIANTS: semantic financial direction per function.
+// Prevents language models from flipping creditor/debtor roles across languages.
+// 'receivable' = customers owe the owner (collections, outstanding, invoices due)
+// 'payable'    = owner owes suppliers/vendors (bills, payables, supplier payments)
+// 'neutral'    = no financial direction (tasks, products, deliveries)
+const PERSPECTIVE_INVARIANTS = {
+  receivable: [
+    'You are speaking TO the business owner who is the SELLER/CREDITOR.',
+    'Customers owe money TO the owner. The owner must COLLECT payments from customers.',
+    'Never imply the owner owes money to customers. This direction must not flip in any language.',
+  ].join(' '),
+  payable: [
+    'You are speaking TO the business owner who is the BUYER/DEBTOR in this context.',
+    'The owner OWES money to suppliers/vendors. The owner must PAY these obligations.',
+    'Never imply customers owe the owner in this context. This direction must not flip in any language.',
+  ].join(' '),
+  neutral: '',
+};
+
+// Perspective map — each function declares its financial direction
+const FUNCTION_PERSPECTIVE = {
+  collections_today:      'receivable',
+  total_outstanding:      'receivable',
+  top_customers:          'receivable',
+  revenue_this_month:     'receivable',
+  invoices_due_this_week: 'receivable',
+  weekly_trend:           'receivable',
+  follow_up_today:        'receivable',
+  risk_alerts:            'receivable',
+  gone_silent:            'receivable',
+  top_sellers:            'neutral',
+  low_stock:              'neutral',
+  slow_moving:            'neutral',
+  deliveries_today:       'neutral',
+  expiring_quotes:        'receivable',
+  todays_tasks:           'neutral',
+  what_i_owe:             'payable',
+  overdue_payables:       'payable',
+  top_supplier:           'payable',
+};
 const normalizeLanguage = (lang) => {
   if (!lang) return 'en';
   const base = lang.toLowerCase().split('-')[0].split('_')[0];
@@ -89,7 +130,11 @@ export async function narrate(data, functionKey, openai, options = {}) {
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
-        { role: 'system', content: prompt + (langInstruction ? ' ' + langInstruction : '') },
+        { role: 'system', content: [
+          prompt,
+          PERSPECTIVE_INVARIANTS[FUNCTION_PERSPECTIVE[functionKey] || 'neutral'] || '',
+          langInstruction,
+        ].filter(Boolean).join(' ') },
         { role: 'user', content: payload },
       ],
       temperature,
