@@ -9,7 +9,7 @@
  * {
  *   response_text: string,       — GPT narration (2-3 lines, max 150 tokens)
  *   chart_data: object | null,   — built deterministically by backend, never by GPT
- *   next_action: string | null,  — rules engine nudge, never by GPT
+ *   next_action: { text: string } | null,  — rules engine nudge, never by GPT
  * }
  * message_type: 'ai_response' is injected by dispatchMenuQuery(), not individual functions.
  *
@@ -191,11 +191,11 @@ export async function totalOutstanding(supabase, orgId, orgCurrency, openai) {
   // Step 5: Nudge — rules engine
   let next_action = null;
   if (count === 0) {
-    next_action = 'All accounts clear. Great financial health.';
+    next_action = { text: 'All accounts clear. Great financial health.' };
   } else if (overdueCount > 5) {
-    next_action = `${overdueCount} invoices are overdue. Send bulk reminders now.`;
+    next_action = { text: `${overdueCount} invoices are overdue. Send bulk reminders now.` };
   } else if (topCustomers && topCustomers.length > 0) {
-    next_action = `Call ${topCustomers[0].name} first — ${formatCurrency(topCustomers[0].outstanding_balance, orgCurrency)} outstanding.`;
+    next_action = { text: `Call ${topCustomers[0].name} first — ${formatCurrency(topCustomers[0].outstanding_balance, orgCurrency)} outstanding.` };
   }
 
   // Step 6: GPT narration
@@ -274,11 +274,11 @@ export async function topCustomers(supabase, orgId, orgCurrency, openai) {
   // Step 5: Nudge — concentration uses grandTotal (all org revenue, not just top 5)
   let next_action = null;
   if (ranked.length === 0) {
-    next_action = 'No sales this month yet. Create your first invoice to get started.';
+    next_action = { text: 'No sales this month yet. Create your first invoice to get started.' };
   } else if (grandTotal > 0 && ranked[0].total / grandTotal > 0.5) {
-    next_action = `${ranked[0].name} is over 50% of your revenue. Consider growing other accounts.`;
+    next_action = { text: `${ranked[0].name} is over 50% of your revenue. Consider growing other accounts.` };
   } else {
-    next_action = `Follow up with ${ranked[0]?.name} to maintain the momentum.`;
+    next_action = { text: `Follow up with ${ranked[0]?.name} to maintain the momentum.` };
   }
 
   // Step 6: GPT narration
