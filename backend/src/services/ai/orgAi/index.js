@@ -300,7 +300,7 @@ export async function topCustomers(supabase, orgId, orgCurrency, openai) {
 // When extracting to /engines/financial/, move entire section together.
 
 // ── FUNCTION 4: Revenue This Month ───────────────────────────
-export async function revenueThisMonth(supabase, orgId, orgCurrency, openai) {
+export async function revenueThisMonth(supabase, orgId, orgCurrency, openai, language = 'en') {
   const start = Date.now();
 
   // Step 1: All confirmed invoices this month (IST)
@@ -382,7 +382,7 @@ export async function revenueThisMonth(supabase, orgId, orgCurrency, openai) {
     totalRevenue, invoiceCount, avgInvoiceValue,
     topCustomerName, topCustomerRevenue, topCustomerPct,
     currency: orgCurrency,
-  }, 'revenue_this_month', openai);
+  }, 'revenue_this_month', openai, { language });
 
   console.log('[orgAi]', { fn: 'revenueThisMonth', ms: Date.now() - start, rows: invoiceCount });
   return { response_text, chart_data, next_action };
@@ -391,17 +391,17 @@ export async function revenueThisMonth(supabase, orgId, orgCurrency, openai) {
 // ── Dispatcher ────────────────────────────────────────────────
 // Single entry point for all menu queries.
 // message_type injected here — individual functions do not set it.
-export async function dispatchMenuQuery(menuId, supabase, orgId, orgCurrency, openai) {
+export async function dispatchMenuQuery(menuId, supabase, orgId, orgCurrency, openai, language = 'en') {
   let result;
 
   switch (menuId) {
     // Session A — implemented
-    case 'collections_today':  result = await collectionsToday(supabase, orgId, orgCurrency, openai); break;
-    case 'total_outstanding':  result = await totalOutstanding(supabase, orgId, orgCurrency, openai); break;
-    case 'top_customers':      result = await topCustomers(supabase, orgId, orgCurrency, openai); break;
+    case 'collections_today':  result = await collectionsToday(supabase, orgId, orgCurrency, openai, language); break;
+    case 'total_outstanding':  result = await totalOutstanding(supabase, orgId, orgCurrency, openai, language); break;
+    case 'top_customers':      result = await topCustomers(supabase, orgId, orgCurrency, openai, language); break;
 
     // Session B — Finance
-    case 'revenue_this_month': result = await revenueThisMonth(supabase, orgId, orgCurrency, openai); break;
+    case 'revenue_this_month': result = await revenueThisMonth(supabase, orgId, orgCurrency, openai, language); break;
     case 'invoices_due_this_week':
     case 'weekly_trend':
     // Session B — Customers

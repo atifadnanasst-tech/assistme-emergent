@@ -47,6 +47,19 @@ const FALLBACKS = {
   top_supplier:           (d) => `Top supplier this month: ${d.topName || 'None'}.`,
 };
 
+const LANGUAGE_INSTRUCTIONS = {
+  en: 'Respond in natural professional English.',
+  hi: 'Respond in natural professional Hindi written in Devanagari script.',
+  ur: 'Respond in natural professional Urdu.',
+  bn: 'Respond in natural professional Bengali.',
+  ar: 'Respond in natural professional Arabic.',
+};
+const normalizeLanguage = (lang) => {
+  if (!lang) return 'en';
+  const base = lang.toLowerCase().split('-')[0].split('_')[0];
+  return LANGUAGE_INSTRUCTIONS[base] ? base : 'en';
+};
+
 export async function narrate(data, functionKey, openai, options = {}) {
   const {
     timeoutMs   = 8000,
@@ -63,6 +76,9 @@ export async function narrate(data, functionKey, openai, options = {}) {
     return fallback;
   }
 
+  const language = normalizeLanguage(options.language);
+  const langInstruction = LANGUAGE_INSTRUCTIONS[language] || '';
+
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -73,7 +89,7 @@ export async function narrate(data, functionKey, openai, options = {}) {
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
-        { role: 'system', content: prompt },
+        { role: 'system', content: prompt + (langInstruction ? ' ' + langInstruction : '') },
         { role: 'user', content: payload },
       ],
       temperature,

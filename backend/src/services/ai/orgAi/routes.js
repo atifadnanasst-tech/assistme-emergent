@@ -174,6 +174,7 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
         .maybeSingle();
 
       const orgCurrency = org?.currency || 'INR';
+      const orgLanguage = auth.primaryLanguage || 'en';
 
       // User bubble content — backend owns menu labels, never frontend
       const userContent = menu_id
@@ -204,7 +205,7 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
       let result;
       if (menu_id) {
         const openai = getOpenAI();
-        result = await dispatchMenuQuery(menu_id, supabase, organisationId, orgCurrency, openai);
+        result = await dispatchMenuQuery(menu_id, supabase, organisationId, orgCurrency, openai, orgLanguage);
       } else {
         result = {
           response_text: 'Freeform business queries are coming soon. Use the menu categories above to explore your business data.',
