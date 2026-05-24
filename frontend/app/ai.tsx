@@ -753,6 +753,7 @@ export default function AIScreen() {
   }
 
   return (
+    <>
     <KeyboardAvoidingView
       style={styles.flex1}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -908,6 +909,7 @@ keyboardVerticalOffset={80}
       onClose={closeActionModal}
       onSimulatedConfirm={handleSimulatedConfirm}
     />
+    </>
   );
 }
 
