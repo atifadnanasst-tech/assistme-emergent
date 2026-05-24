@@ -23,7 +23,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import { authService } from '../lib/auth';
 import VisualizationCard from '../components/charts/VisualizationCard';
-import ActionExecutionModal, { ActionData, ActionEntity } from '../components/ActionExecutionModal';
+import ActionExecutionModal, { ActionData, ActionEntity } from './components/ActionExecutionModal';
 
 interface AIMessage {
   id: string;
