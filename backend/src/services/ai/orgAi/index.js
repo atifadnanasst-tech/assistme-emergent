@@ -442,7 +442,9 @@ export async function invoicesDueThisWeek(supabase, orgId, orgCurrency, openai, 
     const base = new Date(today + 'T00:00:00');
     const daysUntilDue = Math.round((due - base) / 86400000);
     return {
+      invoice_id: inv.id,
       invoice_number: inv.invoice_number,
+      customer_id: inv.customer_id,
       customer_name: customerMap[inv.customer_id] || 'Unknown',
       amount_due: Number(inv.amount_due),
       due_date: inv.due_date,
@@ -468,17 +470,65 @@ export async function invoicesDueThisWeek(supabase, orgId, orgCurrency, openai, 
     highlight: `${count} invoice(s) — ${formatCurrency(totalDue, orgCurrency)} total`,
   };
 
-  // Step 5: Nudge — rules engine
+  // Step 5: Typed next_action — rules engine
+  // Contract: { text, type, execution_mode, entities[], prefill }
+  // type = business intent (not transport/UI layer)
+  // entities[] supports single and bulk execution paths
+  // prefill: per-customer for single; null for bulk (execution layer generates individualized messages)
+  // TODO: migrate prefill to { template_key, variables } for multilingual/multi-channel (Phase 2)
   const dueToday = ranked.filter(r => r.days_until_due === 0);
   const dueTodayTotal = dueToday.reduce((s, r) => s + r.amount_due, 0);
   let next_action = null;
+
   if (count === 0) {
-    next_action = { text: "No invoices due this week. You're clear." };
+    // No collections expected this week — push pipeline creation
+    next_action = {
+      text: "No invoices due this week. Strong week to create new quotes and grow the pipeline.",
+      type: 'create_quote',
+      execution_mode: null,
+      entities: [],
+      prefill: null,
+    };
   } else if (dueToday.length > 0) {
-    next_action = { text: `${dueToday.length} invoice(s) due TODAY totalling ${formatCurrency(dueTodayTotal, orgCurrency)}. Follow up immediately.` };
+    // Urgent — invoices due today
+    const urgentEntities = dueToday.map(r => ({
+      customer_id: r.customer_id,
+      customer_name: r.customer_name,
+      invoice_id: r.invoice_id,
+      invoice_number: r.invoice_number,
+      amount: r.amount_due,
+    }));
+    const topUrgent = dueToday[0];
+    next_action = {
+      text: `${dueToday.length} invoice(s) due TODAY totalling ${formatCurrency(dueTodayTotal, orgCurrency)}. Follow up immediately.`,
+      type: 'send_reminder',
+      execution_mode: dueToday.length > 1 ? 'bulk' : 'single',
+      entities: urgentEntities,
+      prefill: dueToday.length === 1 ? {
+        message: `Dear ${topUrgent.customer_name}, your invoice ${topUrgent.invoice_number} of ${formatCurrency(topUrgent.amount_due, orgCurrency)} was due today. Kindly arrange payment at your earliest.`,
+        language: language || 'en',
+      } : null,
+    };
   } else {
+    // Due later this week — send advance reminder
     const next = ranked[0];
-    next_action = { text: `Next invoice due in ${next.days_until_due} day(s) from ${next.customer_name} — ${formatCurrency(next.amount_due, orgCurrency)}.` };
+    const allEntities = ranked.map(r => ({
+      customer_id: r.customer_id,
+      customer_name: r.customer_name,
+      invoice_id: r.invoice_id,
+      invoice_number: r.invoice_number,
+      amount: r.amount_due,
+    }));
+    next_action = {
+      text: `Next invoice due in ${next.days_until_due} day(s) from ${next.customer_name} — ${formatCurrency(next.amount_due, orgCurrency)}.`,
+      type: 'send_reminder',
+      execution_mode: ranked.length > 1 ? 'bulk' : 'single',
+      entities: allEntities,
+      prefill: ranked.length === 1 ? {
+        message: `Dear ${next.customer_name}, a gentle reminder that your invoice ${next.invoice_number} of ${formatCurrency(next.amount_due, orgCurrency)} is due in ${next.days_until_due} day(s). Please arrange payment in advance.`,
+        language: language || 'en',
+      } : null,
+    };
   }
 
   // Step 6: GPT narration — frozen computed truth only
