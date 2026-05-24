@@ -67,7 +67,7 @@ const monthStartIST = () => {
 
 
 // ── FUNCTION 1: Collections Today ─────────────────────────────
-export async function collectionsToday(supabase, orgId, orgCurrency, openai) {
+export async function collectionsToday(supabase, orgId, orgCurrency, openai, language = 'en') {
   const start = Date.now();
 
   // Step 1: Payments today (IST date)
@@ -126,7 +126,8 @@ export async function collectionsToday(supabase, orgId, orgCurrency, openai) {
   const response_text = await narrate(
     { total, count, topPayerName, currency: orgCurrency },
     'collections_today',
-    openai
+    openai,
+    { language }
   );
 
   console.log('[orgAi]', { fn: 'collectionsToday', ms: Date.now() - start, rows: count });
@@ -134,7 +135,7 @@ export async function collectionsToday(supabase, orgId, orgCurrency, openai) {
 }
 
 // ── FUNCTION 2: Total Outstanding ─────────────────────────────
-export async function totalOutstanding(supabase, orgId, orgCurrency, openai) {
+export async function totalOutstanding(supabase, orgId, orgCurrency, openai, language = 'en') {
   const start = Date.now();
 
   // Step 1: Top 5 customers by outstanding (for chart display)
@@ -204,14 +205,14 @@ export async function totalOutstanding(supabase, orgId, orgCurrency, openai) {
     topCustomers: (topCustomers || []).slice(0, 3).map(c => ({
       name: c.name, amount: c.outstanding_balance,
     })),
-  }, 'total_outstanding', openai);
+  }, 'total_outstanding', openai, { language });
 
   console.log('[orgAi] totalOutstanding ms=' + (Date.now() - start));
   return { response_text, chart_data, next_action };
 }
 
 // ── FUNCTION 3: Top Customers ─────────────────────────────────
-export async function topCustomers(supabase, orgId, orgCurrency, openai) {
+export async function topCustomers(supabase, orgId, orgCurrency, openai, language = 'en') {
   const start = Date.now();
 
   // Step 1: All invoices this month
@@ -288,7 +289,7 @@ export async function topCustomers(supabase, orgId, orgCurrency, openai) {
     currency: orgCurrency,
     topName: ranked[0]?.name,
     topAmount: ranked[0]?.total,
-  }, 'top_customers', openai);
+  }, 'top_customers', openai, { language });
 
   console.log('[orgAi] topCustomers ms=' + (Date.now() - start));
   return { response_text, chart_data, next_action };
