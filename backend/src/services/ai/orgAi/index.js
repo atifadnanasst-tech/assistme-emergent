@@ -294,6 +294,100 @@ export async function topCustomers(supabase, orgId, orgCurrency, openai) {
   return { response_text, chart_data, next_action };
 }
 
+
+// ── FINANCIAL PRIMITIVES ──────────────────────────────────────
+// Section marker — all functions below are financial intelligence primitives.
+// When extracting to /engines/financial/, move entire section together.
+
+// ── FUNCTION 4: Revenue This Month ───────────────────────────
+export async function revenueThisMonth(supabase, orgId, orgCurrency, openai) {
+  const start = Date.now();
+
+  // Step 1: All confirmed invoices this month (IST)
+  // getRevenueSummary({ rangeStart, rangeEnd }) — thin wrapper below for future range support
+  const rangeStart = monthStartIST();
+
+  const { data: invoices, error: invErr } = await supabase
+    .from('invoices')
+    .select('customer_id, total_amount')
+    .eq('organisation_id', orgId)
+    .eq('is_historical', false)
+    .gte('issue_date', rangeStart)
+    .not('status', 'in', '("draft","cancelled")')
+    .gt('total_amount', 0)
+    .is('deleted_at', null);
+
+  if (invErr) console.warn('[orgAi] revenueThisMonth invoices error:', invErr.message);
+
+  const rows = invoices || [];
+
+  // Step 2: Aggregate — deterministic JS arithmetic, never SQL aggregation
+  const totalRevenue = rows.reduce((s, inv) => s + Number(inv.total_amount || 0), 0);
+  const invoiceCount = rows.length;
+  const avgInvoiceValue = invoiceCount === 0 ? 0 : Math.round((totalRevenue / invoiceCount) * 100) / 100;
+
+  // Step 3: Top customer by revenue this month
+  const customerTotals = {};
+  for (const inv of rows) {
+    if (!customerTotals[inv.customer_id]) customerTotals[inv.customer_id] = 0;
+    customerTotals[inv.customer_id] += Number(inv.total_amount || 0);
+  }
+
+  let topCustomerId = null;
+  let topCustomerRevenue = 0;
+  let topCustomerPct = 0;
+  let topCustomerName = null;
+
+  for (const [id, rev] of Object.entries(customerTotals)) {
+    if (rev > topCustomerRevenue) { topCustomerRevenue = rev; topCustomerId = id; }
+  }
+
+  if (topCustomerId && totalRevenue > 0) {
+    topCustomerPct = Math.round((topCustomerRevenue / totalRevenue) * 100);
+    const { data: cust } = await supabase
+      .from('customers').select('name')
+      .eq('id', topCustomerId).eq('organisation_id', orgId).maybeSingle();
+    topCustomerName = cust?.name || null;
+  }
+
+  // Step 4: Chart — deterministic
+  const chart_data = invoiceCount === 0 ? {
+    type: 'insight',
+    title: 'Revenue This Month',
+    text: 'No invoices recorded this month yet.',
+    level: 'info',
+  } : {
+    type: 'metric_grid',
+    title: 'Revenue This Month',
+    currency: orgCurrency,
+    cards: [
+      { label: 'Total Revenue', value: totalRevenue, format: 'currency', trend_direction: 'up' },
+      { label: 'Invoices Raised', value: invoiceCount, format: 'number' },
+      { label: 'Avg Invoice Value', value: avgInvoiceValue, format: 'currency' },
+    ],
+  };
+
+  // Step 5: Nudge — deterministic rules engine, percentages computed above (never by GPT)
+  let next_action = null;
+  if (invoiceCount === 0) {
+    next_action = { text: 'No invoices this month yet. Create your first invoice to get started.' };
+  } else if (topCustomerName && topCustomerPct > 50) {
+    next_action = { text: `${topCustomerName} contributed ${topCustomerPct}% of this month's revenue (${formatCurrency(topCustomerRevenue, orgCurrency)}). Consider reducing concentration risk.` };
+  } else {
+    next_action = { text: `${formatCurrency(totalRevenue, orgCurrency)} billed across ${invoiceCount} invoice${invoiceCount !== 1 ? 's' : ''} this month. Keep the momentum going.` };
+  }
+
+  // Step 6: GPT narration — receives frozen computed truth, never raw rows
+  const response_text = await narrate({
+    totalRevenue, invoiceCount, avgInvoiceValue,
+    topCustomerName, topCustomerRevenue, topCustomerPct,
+    currency: orgCurrency,
+  }, 'revenue_this_month', openai);
+
+  console.log('[orgAi]', { fn: 'revenueThisMonth', ms: Date.now() - start, rows: invoiceCount });
+  return { response_text, chart_data, next_action };
+}
+
 // ── Dispatcher ────────────────────────────────────────────────
 // Single entry point for all menu queries.
 // message_type injected here — individual functions do not set it.
@@ -307,7 +401,7 @@ export async function dispatchMenuQuery(menuId, supabase, orgId, orgCurrency, op
     case 'top_customers':      result = await topCustomers(supabase, orgId, orgCurrency, openai); break;
 
     // Session B — Finance
-    case 'revenue_this_month':
+    case 'revenue_this_month': result = await revenueThisMonth(supabase, orgId, orgCurrency, openai); break;
     case 'invoices_due_this_week':
     case 'weekly_trend':
     // Session B — Customers
