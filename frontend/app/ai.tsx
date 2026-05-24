@@ -115,7 +115,6 @@ export default function AIScreen() {
     };
     setMessages(prev => [userMsg, ...prev]); // inverted: prepend = visually bottom
     setSendingState('sending');
-    setTimeout(() => { flatListRef.current?.scrollToEnd({ animated: true }); }, 100);
     handleMenuQuery(menuId);
   };
   const handleMenuQuery = async (menuId: string) => {
@@ -147,7 +146,7 @@ export default function AIScreen() {
           chart_data: null,
           next_action: null,
           created_at: new Date().toISOString(),
-        }]);
+        }, ...prev]);
         return;
       }
       const aiMsg: AIMessage = {
@@ -161,7 +160,6 @@ export default function AIScreen() {
         created_at: new Date().toISOString(),
       };
       setMessages(prev => [aiMsg, ...prev]); // inverted: prepend = visually bottom
-      setTimeout(() => { flatListRef.current?.scrollToEnd({ animated: true }); }, 100);
     } catch (error: any) {
       if (error.name === 'AbortError') {
         Alert.alert('Timeout', "This query took too long. Try again.");
@@ -370,10 +368,6 @@ export default function AIScreen() {
     setMessages(prev => [userMsg, ...prev]); // inverted: prepend = visually bottom
     setSendingState('sending');
 
-    setTimeout(() => {
-      flatListRef.current?.scrollToEnd({ animated: true });
-    }, 100);
-
     try {
       setSendingState('ai_responding');
       const token = await getToken();
@@ -429,9 +423,6 @@ export default function AIScreen() {
         created_at: new Date().toISOString(),
       };
       setMessages(prev => [aiMsg, ...prev]); // inverted: prepend = visually bottom
-      setTimeout(() => {
-        flatListRef.current?.scrollToEnd({ animated: true });
-      }, 100);
     } catch (error: any) {
       if (error.name === 'AbortError') {
         Alert.alert('Timeout', "AI took too long. Try again.");
