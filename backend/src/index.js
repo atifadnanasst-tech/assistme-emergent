@@ -7,6 +7,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { registerAIRoutes, getOpenAI } from './ai-routes.js';
 import { registerOrgAiRoutes } from './services/ai/orgAi/routes.js';
+import { recordPayment } from './services/business/recordPayment.js';
 import { extractVisualization } from './services/ai/visualizationParser.js';
 import PDFDocument from 'pdfkit';
 
@@ -2829,30 +2830,69 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
           }
 
           case 'record_payment': {
+            let payResult = { status: 'failed', events: [], error: 'invalid_amount' };
             if (params.amount && params.amount > 0) {
-              // Find latest unpaid invoice for this customer
-              const { data: inv } = await supabase
-                .from('invoices').select('id, total_amount, amount_paid')
-                .eq('organisation_id', organisationId).eq('customer_id', customerId)
-                .neq('status', 'paid').order('created_at', { ascending: false }).limit(1).maybeSingle();
-              if (inv) {
-                const newPaid = (inv.amount_paid || 0) + params.amount;
-                const newStatus = newPaid >= (inv.total_amount || 0) ? 'paid' : 'partial';
-                await supabase.from('invoices').update({ amount_paid: newPaid, status: newStatus })
-                  .eq('id', inv.id).eq('organisation_id', organisationId);
-                const newBalance = Math.max(0, (customer.outstanding_balance || 0) - params.amount);
-                await supabase.from('customers').update({ outstanding_balance: newBalance })
-                  .eq('id', customerId).eq('organisation_id', organisationId);
-                // entity_memory
-                try {
-                  await supabase.from('entity_memory').insert({
-                    organisation_id: organisationId, entity_type: 'customer', entity_id: customerId,
-                    memory_key: 'last_payment_amount', memory_value: params.amount.toString(), confidence: 1.0,
-                  });
-                } catch {}
+              const istNow = () => {
+                const now = new Date();
+                return new Date(now.getTime() + (5.5 * 60 * 60 * 1000)).toISOString().split('T')[0];
+              };
+              const paymentDate = params.payment_date || istNow();
+              const paymentMethod = params.payment_mode || null;
+
+              payResult = await recordPayment(
+                supabase, organisationId, customerId,
+                params.amount, paymentDate, paymentMethod, null
+              );
+
+              const payEvents = payResult.events || [];
+              const recorded = payEvents.filter(e => e.type === 'payment_recorded');
+              const remindersResolved = payEvents.find(e => e.type === 'reminders_resolved');
+              const unlinkedReminders = payEvents.find(e => e.type === 'unlinked_reminders_pending');
+              const reminderSuggestion = payEvents.find(e => e.type === 'reminder_suggestion');
+
+              let ackText = '';
+              if (payResult.status === 'success' && recorded.length > 0) {
+                const ackLines = recorded.map(e => {
+                  const base = `✓ ₹${e.amount_applied.toLocaleString('en-IN')} recorded against ${e.invoice_number} on ${e.payment_date}`;
+                  return e.remaining_due > 0.01
+                    ? `${base} — ₹${e.remaining_due.toLocaleString('en-IN')} still pending`
+                    : `${base} — fully paid`;
+                });
+                if (remindersResolved) ackLines.push(`✓ ${remindersResolved.count} payment reminder(s) marked complete`);
+                if (unlinkedReminders) ackLines.push(`⚠️ ${unlinkedReminders.message}`);
+                if (reminderSuggestion) {
+                  ackLines.push(`₹${reminderSuggestion.remaining_due.toLocaleString('en-IN')} still pending. Set a reminder for ${reminderSuggestion.suggested_date} (${reminderSuggestion.suggested_days} days, based on ${customer.name}’s payment pattern)?`);
+                }
+                ackText = ackLines.join('\n');
+              } else if (payResult.status === 'partial_success') {
+                ackText = `⚠️ Payment partially recorded. Some invoices updated but reconciliation needs review. Reference: ${payResult.operation_id}`;
+                console.warn('[Spark record_payment] partial_success op:', payResult.operation_id, 'error:', payResult.error);
+              } else {
+                ackText = `⚠️ Payment could not be recorded. ${payResult.error === 'no_unpaid_invoices' ? 'No unpaid invoices found for ' + customer.name + '.' : 'Please try again or record manually.'}`;
+                console.warn('[Spark record_payment] failed op:', payResult.operation_id, 'error:', payResult.error);
               }
-              // Write bank_transactions if bank account name provided
-              if (params.bank_account_name) {
+
+              if (ackText) {
+                const { data: ackConv } = await supabase
+                  .from('conversations').select('id')
+                  .eq('organisation_id', organisationId).eq('entity_type', 'customer')
+                  .eq('entity_id', customerId).eq('status', 'active').maybeSingle();
+                if (ackConv) {
+                  await supabase.from('messages').insert({
+                    organisation_id: organisationId, conversation_id: ackConv.id,
+                    role: 'system', content: ackText,
+                    metadata: {
+                      sender_type: 'system', visibility: 'owner_only',
+                      message_type: 'system_alert', read_by_owner: true,
+                      preview_text: `Payment recorded for ${customer.name}`,
+                      operation_id: payResult.operation_id,
+                    },
+                    tokens_input: 0, tokens_output: 0,
+                  });
+                }
+              }
+
+              if (payResult.status === 'success' && params.bank_account_name && recorded.length > 0) {
                 try {
                   const { data: bankAcc } = await supabase
                     .from('bank_accounts').select('id')
@@ -2867,10 +2907,12 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
                       amount: params.amount,
                       currency: 'INR',
                       description: `Payment from ${customer.name}`,
-                      reference: inv.id,
-                      transaction_date: new Date().toISOString().split('T')[0],
-                      reference_type: 'invoice',
-                      reference_id: inv.id,
+                      transaction_date: paymentDate,
+                      reference: recorded.length === 1
+                        ? recorded[0].invoice_number
+                        : `MULTI-${payResult.operation_id.slice(0, 8)}`,
+                      reference_type: recorded.length === 1 ? 'invoice' : 'multi_invoice_payment',
+                      reference_id: recorded.length === 1 ? recorded[0].invoice_id : null,
                     });
                   }
                 } catch (btErr) {
@@ -2878,7 +2920,11 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
                 }
               }
             }
-            executed.push(actionId);
+            if (payResult.status === 'success' || payResult.status === 'partial_success') {
+              executed.push(actionId);
+            } else {
+              failed.push(actionId);
+            }
             break;
           }
 
