@@ -69,15 +69,15 @@ export default function ActionExecutionModal({ visible, action, onClose, onSimul
   const handleWhatsApp = (entity: ActionEntity) => {
     const rawPhone = entity.customer_phone || '';
     const normalized = rawPhone.replace(/\D/g, '');
-    const phone = normalized.startsWith('91') ? normalized : \`91\${normalized}\`;
+    const phone = normalized.startsWith('91') ? normalized : `91${normalized}`;
     const msgText = isBulk
-      ? (action.prefill?.message || editedMessage || '').replace(/Dear [^,]+/, \`Dear \${entity.customer_name}\`)
+      ? (action.prefill?.message || editedMessage || '').replace(/Dear [^,]+/, `Dear ${entity.customer_name}`)
       : editedMessage || action.prefill?.message || '';
     const message = encodeURIComponent(msgText);
     if (!normalized) {
-      Linking.openURL(\`https://wa.me/?text=\${message}\`);
+      Linking.openURL(`https://wa.me/?text=${message}`);
     } else {
-      Linking.openURL(\`https://wa.me/\${phone}?text=\${message}\`);
+      Linking.openURL(`https://wa.me/${phone}?text=${message}`);
     }
   };
 
@@ -100,7 +100,7 @@ export default function ActionExecutionModal({ visible, action, onClose, onSimul
 
   const title = isBulk
     ? \`Send Reminders to \${action.entities.length} Customer\${action.entities.length > 1 ? 's' : ''}\`
-    : \`Send Reminder to \${action.entities[0]?.customer_name}\`;
+    : `Send Reminder to ${action.entities[0]?.customer_name}`;
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
@@ -115,7 +115,7 @@ export default function ActionExecutionModal({ visible, action, onClose, onSimul
               const key = entity.customer_id || entity.customer_name;
               const checked = checkedIds.has(key);
               const entityMsg = isBulk
-                ? (action.prefill?.message || '').replace(/Dear [^,]+/, \`Dear \${entity.customer_name}\`)
+                ? (action.prefill?.message || '').replace(/Dear [^,]+/, `Dear ${entity.customer_name}`)
                 : editedMessage || action.prefill?.message || '';
               return (
                 <View key={i} style={styles.entityRow}>
@@ -165,7 +165,7 @@ export default function ActionExecutionModal({ visible, action, onClose, onSimul
           >
             <Text style={styles.confirmBtnText}>
               {sending ? 'Sending...' : isBulk
-                ? \`\u2713 Send to \${checkedEntities.length} Selected (Simulated)\`
+                ? `\u2713 Send to ${checkedEntities.length} Selected (Simulated)`
                 : '\u2713 Send in App (Simulated)'}
             </Text>
           </TouchableOpacity>
