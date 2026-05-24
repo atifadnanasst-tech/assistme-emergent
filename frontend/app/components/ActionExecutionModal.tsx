@@ -99,7 +99,7 @@ export default function ActionExecutionModal({ visible, action, onClose, onSimul
   };
 
   const title = isBulk
-    ? \`Send Reminders to \${action.entities.length} Customer\${action.entities.length > 1 ? 's' : ''}\`
+    ? `Send Reminders to ${action.entities.length} Customer${action.entities.length > 1 ? 's' : ''}`
     : `Send Reminder to ${action.entities[0]?.customer_name}`;
 
   return (
