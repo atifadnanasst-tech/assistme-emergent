@@ -23,6 +23,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import { authService } from '../lib/auth';
 import VisualizationCard from '../components/charts/VisualizationCard';
+import ActionExecutionModal, { ActionData, ActionEntity } from '../components/ActionExecutionModal';
 
 interface AIMessage {
   id: string;
@@ -31,7 +32,7 @@ interface AIMessage {
   card_type: string | null;
   card_data: Record<string, any>;
   chart_data: Record<string, any> | null;
-  next_action: { text: string } | null;
+  next_action: ActionData | null;
   created_at: string;
 }
 
@@ -55,6 +56,8 @@ export default function AIScreen() {
   const [inputText, setInputText] = useState('');
   const [executingActions, setExecutingActions] = useState<Set<string>>(new Set());
   const [sentReminders, setSentReminders] = useState<Set<string>>(new Set());
+  const [actionModalVisible, setActionModalVisible] = useState(false);
+  const [actionModalData, setActionModalData] = useState<ActionData | null>(null);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [aiRecording, setAiRecording] = useState<Audio.Recording | null>(null);
 
@@ -344,6 +347,35 @@ export default function AIScreen() {
     }
   };
 
+  const openActionModal = (action: ActionData) => {
+    setActionModalData(action);
+    setActionModalVisible(true);
+  };
+
+  const closeActionModal = () => {
+    setActionModalVisible(false);
+    setActionModalData(null);
+  };
+
+  const handleSimulatedConfirm = (checkedEntities: ActionEntity[], message: string) => {
+    const names = checkedEntities.map(e => e.customer_name);
+    const nameStr = names.length === 1
+      ? names[0]
+      : names.slice(0, -1).join(', ') + ' & ' + names[names.length - 1];
+    const confirmMsg: AIMessage = {
+      id: `sim-${Date.now()}`,
+      role: 'assistant',
+      content: `✓ Simulated: Reminder sent to ${nameStr}. Real sending will be wired in the next pipeline phase.`,
+      card_type: 'system_event',
+      card_data: {},
+      chart_data: null,
+      next_action: null,
+      created_at: new Date().toISOString(),
+    };
+    setMessages((prev: any) => [confirmMsg, ...prev]);
+    closeActionModal();
+  };
+
   const handleSend = async () => {
     const text = inputText.trim();
     if (!text || sendingState !== 'idle' || !conversationId) return;
@@ -605,18 +637,35 @@ export default function AIScreen() {
     </View>
   );
 
-  const renderQueryResponse = (msg: AIMessage) => (
-    <View style={styles.aiTextBubble}>
-      <Text style={styles.aiTextContent}>{msg.content}</Text>
-      {msg.chart_data && (
-        <VisualizationCard data={msg.chart_data} />
-      )}
-      {msg.next_action?.text && (
-        <Text style={styles.nextActionText}>→ {msg.next_action.text}</Text>
-      )}
-      <Text style={styles.cardTimestamp}>{formatTime(msg.created_at)}</Text>
-    </View>
-  );
+  const renderQueryResponse = (msg: AIMessage) => {
+    const na = msg.next_action;
+    const hasAction = na && na.type && na.type !== 'none' && na.entities && na.entities.length > 0;
+    const isBulk = na?.execution_mode === 'bulk';
+    return (
+      <View style={styles.aiTextBubble}>
+        <Text style={styles.aiTextContent}>{msg.content}</Text>
+        {msg.chart_data && (
+          <VisualizationCard data={msg.chart_data} />
+        )}
+        {na?.text && (
+          <Text style={styles.nextActionText}>→ {na.text}</Text>
+        )}
+        {hasAction && (
+          <TouchableOpacity
+            style={styles.actionTriggerBtn}
+            onPress={() => openActionModal(na!)}
+          >
+            <Text style={styles.actionTriggerBtnText}>
+              {isBulk
+                ? `📨 Send Reminders to All (${na!.entities.length})`
+                : `📨 Send Reminder to ${na!.entities[0]?.customer_name}`}
+            </Text>
+          </TouchableOpacity>
+        )}
+        <Text style={styles.cardTimestamp}>{formatTime(msg.created_at)}</Text>
+      </View>
+    );
+  };
 
   const renderUserMessage = (msg: AIMessage) => (
     <View style={styles.userBubbleContainer}>
@@ -852,6 +901,13 @@ keyboardVerticalOffset={80}
         )}
       </View>
     </KeyboardAvoidingView>
+
+    <ActionExecutionModal
+      visible={actionModalVisible}
+      action={actionModalData}
+      onClose={closeActionModal}
+      onSimulatedConfirm={handleSimulatedConfirm}
+    />
   );
 }
 
@@ -1028,6 +1084,8 @@ const styles = StyleSheet.create({
   },
   aiTextContent: { fontSize: 14, color: '#333333', lineHeight: 20 },
   nextActionText: { fontSize: 13, color: '#E65100', marginTop: 8, fontStyle: 'italic' },
+  actionTriggerBtn: { backgroundColor: '#075E54', borderRadius: 8, paddingVertical: 10, alignItems: 'center', marginTop: 10 },
+  actionTriggerBtnText: { color: '#FFF', fontSize: 13, fontWeight: '700' },
 
   // ── User bubble ────────────────────────────────────────
   userBubbleContainer: { alignItems: 'flex-end', marginBottom: 12 },

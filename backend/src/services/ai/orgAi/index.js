@@ -429,10 +429,10 @@ export async function invoicesDueThisWeek(supabase, orgId, orgCurrency, openai, 
     const customerIds = [...new Set(rows.map(r => r.customer_id).filter(Boolean))];
     const { data: customers } = await supabase
       .from('customers')
-      .select('id, name')
+      .select('id, name, phone')
       .in('id', customerIds)
       .eq('organisation_id', orgId);
-    for (const c of customers || []) customerMap[c.id] = c.name;
+    for (const c of customers || []) customerMap[c.id] = { name: c.name, phone: c.phone || null };
   }
 
   // Step 3: Build ranked list with deterministic days_until_due
@@ -445,7 +445,8 @@ export async function invoicesDueThisWeek(supabase, orgId, orgCurrency, openai, 
       invoice_id: inv.id,
       invoice_number: inv.invoice_number,
       customer_id: inv.customer_id,
-      customer_name: customerMap[inv.customer_id] || 'Unknown',
+      customer_name: customerMap[inv.customer_id]?.name || 'Unknown',
+      customer_phone: customerMap[inv.customer_id]?.phone || null,
       amount_due: Number(inv.amount_due),
       due_date: inv.due_date,
       days_until_due: daysUntilDue,
@@ -494,6 +495,7 @@ export async function invoicesDueThisWeek(supabase, orgId, orgCurrency, openai, 
     const urgentEntities = dueToday.map(r => ({
       customer_id: r.customer_id,
       customer_name: r.customer_name,
+      customer_phone: r.customer_phone,
       invoice_id: r.invoice_id,
       invoice_number: r.invoice_number,
       amount: r.amount_due,
@@ -515,6 +517,7 @@ export async function invoicesDueThisWeek(supabase, orgId, orgCurrency, openai, 
     const allEntities = ranked.map(r => ({
       customer_id: r.customer_id,
       customer_name: r.customer_name,
+      customer_phone: r.customer_phone,
       invoice_id: r.invoice_id,
       invoice_number: r.invoice_number,
       amount: r.amount_due,
