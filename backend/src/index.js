@@ -1939,7 +1939,7 @@ Action rules:
 - schedule_delivery: one action, set delivery_date.
 - update_delivery_status: use when owner says maal pahunch gaya, delivered, delivery complete. Set status=completed.
 - set_reminder: one action, set due_date.
-- record_payment: extract amount AND bank_account_name if owner mentions a bank name. Extract payment_mode if mentioned.
+- record_payment: extract amount AND bank_account_name if owner mentions a bank name. Extract payment_mode if mentioned. Extract payment_date if owner mentions when payment was received (kal/yesterday = previous day, aaj/today = current date, parso/day before yesterday, weekday references like Monday/last Friday/pichle hafte, or specific dates = YYYY-MM-DD). Default null if not mentioned — backend will use today's date.
 - goods_returned: use when owner says maal wapis aaya, return, goods returned. Extract items and reason.
 - record_expense: use when owner says kharcha hua, expense, paid for. Extract amount, category, description.
 - invoice_type: set Bill of Supply if owner says bina GST, without GST, composition. Default is Tax Invoice.
