@@ -166,8 +166,11 @@ export async function totalOutstanding(supabase, orgId, orgCurrency, openai, lan
     .from('invoices')
     .select('id')
     .eq('organisation_id', orgId)
+    .eq('is_historical', false)
     .in('status', ['sent', 'viewed', 'partial', 'overdue'])
-    .lt('due_date', todayIST());
+    .lt('due_date', todayIST())
+    .gt('amount_due', 0)
+    .is('deleted_at', null);
 
   const overdueCount = (overdueInvoices || []).length;
 
@@ -389,6 +392,105 @@ export async function revenueThisMonth(supabase, orgId, orgCurrency, openai, lan
   return { response_text, chart_data, next_action };
 }
 
+
+// ── FUNCTION 5: Invoices Due This Week ───────────────────────
+export async function invoicesDueThisWeek(supabase, orgId, orgCurrency, openai, language = 'en') {
+  const start = Date.now();
+
+  const today = todayIST();
+  // Derive weekEnd from IST-normalized today — keeps timezone semantics consistent
+  const weekEndDate = new Date(today);
+  weekEndDate.setDate(weekEndDate.getDate() + 7);
+  const weekEnd = weekEndDate.toISOString().split('T')[0];
+
+  // Step 1: Invoices due within next 7 days
+  const { data: invoices, error: invErr } = await supabase
+    .from('invoices')
+    .select('id, invoice_number, customer_id, amount_due, due_date')
+    .eq('organisation_id', orgId)
+    .eq('is_historical', false)
+    .in('status', ['sent', 'viewed', 'partial', 'overdue'])
+    .gte('due_date', today)
+    .lte('due_date', weekEnd)
+    .not('due_date', 'is', null)
+    .gt('amount_due', 0)
+    .is('deleted_at', null)
+    .order('due_date', { ascending: true });
+
+  if (invErr) console.warn('[orgAi] invoicesDueThisWeek error:', invErr.message);
+
+  const rows = invoices || [];
+  const count = rows.length;
+  const totalDue = rows.reduce((s, inv) => s + Number(inv.amount_due || 0), 0);
+
+  // Step 2: Resolve customer names — filter null customer_id defensively
+  let customerMap = {};
+  if (count > 0) {
+    const customerIds = [...new Set(rows.map(r => r.customer_id).filter(Boolean))];
+    const { data: customers } = await supabase
+      .from('customers')
+      .select('id, name')
+      .in('id', customerIds)
+      .eq('organisation_id', orgId);
+    for (const c of customers || []) customerMap[c.id] = c.name;
+  }
+
+  // Step 3: Build ranked list with deterministic days_until_due
+  const ranked = rows.map(inv => {
+    // Explicit T00:00:00 prevents timezone/UTC parsing drift
+    const due = new Date(inv.due_date + 'T00:00:00');
+    const base = new Date(today + 'T00:00:00');
+    const daysUntilDue = Math.round((due - base) / 86400000);
+    return {
+      invoice_number: inv.invoice_number,
+      customer_name: customerMap[inv.customer_id] || 'Unknown',
+      amount_due: Number(inv.amount_due),
+      due_date: inv.due_date,
+      days_until_due: daysUntilDue,
+    };
+  });
+
+  // Step 4: Chart — deterministic
+  const chart_data = count === 0 ? {
+    type: 'insight',
+    title: 'Invoices Due This Week',
+    text: "No invoices due this week. You're clear.",
+    level: 'info',
+  } : {
+    type: 'ranked_list',
+    title: 'Invoices Due This Week',
+    currency: orgCurrency,
+    series: ranked.map(r => ({
+      label: `${r.customer_name} — ${r.invoice_number}`,
+      value: r.amount_due,
+      sublabel: r.days_until_due === 0 ? 'Due TODAY' : `Due in ${r.days_until_due} day(s)`,
+    })),
+    highlight: `${count} invoice(s) — ${formatCurrency(totalDue, orgCurrency)} total`,
+  };
+
+  // Step 5: Nudge — rules engine
+  const dueToday = ranked.filter(r => r.days_until_due === 0);
+  const dueTodayTotal = dueToday.reduce((s, r) => s + r.amount_due, 0);
+  let next_action = null;
+  if (count === 0) {
+    next_action = { text: "No invoices due this week. You're clear." };
+  } else if (dueToday.length > 0) {
+    next_action = { text: `${dueToday.length} invoice(s) due TODAY totalling ${formatCurrency(dueTodayTotal, orgCurrency)}. Follow up immediately.` };
+  } else {
+    const next = ranked[0];
+    next_action = { text: `Next invoice due in ${next.days_until_due} day(s) from ${next.customer_name} — ${formatCurrency(next.amount_due, orgCurrency)}.` };
+  }
+
+  // Step 6: GPT narration — frozen computed truth only
+  const response_text = await narrate({
+    count, totalDue, ranked: ranked.slice(0, 3), currency: orgCurrency,
+    dueTodayCount: dueToday.length,
+  }, 'invoices_due_this_week', openai, { language });
+
+  console.log('[orgAi]', { fn: 'invoicesDueThisWeek', ms: Date.now() - start, rows: count });
+  return { response_text, chart_data, next_action };
+}
+
 // ── Dispatcher ────────────────────────────────────────────────
 // Single entry point for all menu queries.
 // message_type injected here — individual functions do not set it.
@@ -403,7 +505,7 @@ export async function dispatchMenuQuery(menuId, supabase, orgId, orgCurrency, op
 
     // Session B — Finance
     case 'revenue_this_month': result = await revenueThisMonth(supabase, orgId, orgCurrency, openai, language); break;
-    case 'invoices_due_this_week':
+    case 'invoices_due_this_week': result = await invoicesDueThisWeek(supabase, orgId, orgCurrency, openai, language); break;
     case 'weekly_trend':
     // Session B — Customers
     case 'follow_up_today':

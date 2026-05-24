@@ -10,7 +10,7 @@ const PROMPTS = {
   total_outstanding:      'You are a business assistant for an MSME trader. Summarize this outstanding balance data in 2-3 short lines. Lead with the most urgent insight. No preamble.',
   top_customers:          'You are a business assistant for an MSME trader. Summarize who the top customers are by revenue in 2-3 short lines. Be specific with numbers. No preamble.',
   revenue_this_month:     'You are a business assistant for an MSME trader. Summarize this month\'s revenue in 2-3 short lines. Lead with total billed. No preamble.',
-  invoices_due_this_week: 'You are a business assistant for an MSME trader. Summarize invoices due this week in 2-3 lines. Lead with urgency. Name the top customer if present. No preamble.',
+  invoices_due_this_week: 'You are a business assistant for an MSME trader. The trader has raised these invoices and customers OWE the trader money — the trader is the seller who needs to collect payment. Summarize which customer invoices are due this week in 2-3 lines. Lead with urgency. Name the top customer who owes. No preamble.',
   weekly_trend:           'You are a business assistant for an MSME trader. Summarize the 4-week revenue trend in 2-3 lines. State direction clearly. No preamble.',
   follow_up_today:        'You are a business assistant for an MSME trader. Summarize which customers need follow-up today in 2-3 lines. Lead with the most important one. No preamble.',
   risk_alerts:            'You are a business assistant for an MSME trader. Summarize payment risk alerts in 2-3 lines. Be direct. No preamble.',

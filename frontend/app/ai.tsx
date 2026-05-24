@@ -113,7 +113,7 @@ export default function AIScreen() {
       next_action: null,
       created_at: new Date().toISOString(),
     };
-    setMessages(prev => [...prev, userMsg]);
+    setMessages(prev => [userMsg, ...prev]); // inverted: prepend = visually bottom
     setSendingState('sending');
     setTimeout(() => { flatListRef.current?.scrollToEnd({ animated: true }); }, 100);
     handleMenuQuery(menuId);
@@ -138,7 +138,7 @@ export default function AIScreen() {
       clearTimeout(timeoutId);
       const data = await res.json();
       if (data.error) {
-        setMessages(prev => [...prev, {
+        setMessages(prev => [{
           id: `error-${Date.now()}`,
           role: 'assistant',
           content: "Could not load this data. Please try again.",
@@ -160,13 +160,13 @@ export default function AIScreen() {
         next_action: data.next_action || null,
         created_at: new Date().toISOString(),
       };
-      setMessages(prev => [...prev, aiMsg]);
+      setMessages(prev => [aiMsg, ...prev]); // inverted: prepend = visually bottom
       setTimeout(() => { flatListRef.current?.scrollToEnd({ animated: true }); }, 100);
     } catch (error: any) {
       if (error.name === 'AbortError') {
         Alert.alert('Timeout', "This query took too long. Try again.");
       } else {
-        setMessages(prev => [...prev, {
+        setMessages(prev => [{
           id: `error-${Date.now()}`,
           role: 'assistant',
           content: "Something went wrong. Please try again.",
@@ -367,7 +367,7 @@ export default function AIScreen() {
       card_data: {},
       created_at: new Date().toISOString(),
     };
-    setMessages(prev => [...prev, userMsg]);
+    setMessages(prev => [userMsg, ...prev]); // inverted: prepend = visually bottom
     setSendingState('sending');
 
     setTimeout(() => {
@@ -405,7 +405,7 @@ export default function AIScreen() {
       }
       const data = await res.json();
       if (data.error) {
-        setMessages(prev => [...prev, {
+        setMessages(prev => [{
           id: `error-${Date.now()}`,
           role: 'assistant',
           content: "I couldn't process that request. Please try again.",
@@ -428,7 +428,7 @@ export default function AIScreen() {
         next_action: data.next_action || null,
         created_at: new Date().toISOString(),
       };
-      setMessages(prev => [...prev, aiMsg]);
+      setMessages(prev => [aiMsg, ...prev]); // inverted: prepend = visually bottom
       setTimeout(() => {
         flatListRef.current?.scrollToEnd({ animated: true });
       }, 100);
@@ -436,7 +436,7 @@ export default function AIScreen() {
       if (error.name === 'AbortError') {
         Alert.alert('Timeout', "AI took too long. Try again.");
       } else {
-        setMessages(prev => [...prev, {
+        setMessages(prev => [{
           id: `error-${Date.now()}`,
           role: 'assistant',
           content: "Something went wrong. Please try again.",
