@@ -16,7 +16,7 @@ import {
   ScrollView,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Audio } from 'expo-av';
 import { useAuth } from '../contexts/AuthContext';
@@ -185,9 +185,11 @@ export default function AIScreen() {
     return () => { s1.remove(); s2.remove(); };
   }, []);
 
-  useEffect(() => {
-    loadConversation();
-  }, []);
+  useFocusEffect(
+    useCallback(() => {
+      loadConversation();
+    }, [])
+  );
 
   const getToken = async () => {
     const token = await authService.getAccessToken();
