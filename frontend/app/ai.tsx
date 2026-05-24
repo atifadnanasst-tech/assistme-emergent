@@ -261,10 +261,9 @@ export default function AIScreen() {
           next_action: m.metadata?.next_action || null,
           created_at: m.created_at,
         }));
-        setMessages(mapped.reverse());
-        setTimeout(() => {
-          flatListRef.current?.scrollToEnd({ animated: false });
-        }, 400);
+        // DESC order from backend + inverted FlatList = natural bottom anchoring (canonical chat pattern)
+        // Same architecture as customer chat. No scrollToEnd needed — inverted handles viewport.
+        setMessages(mapped);
       } else {
         // Welcome message
         setMessages([{
@@ -737,8 +736,10 @@ keyboardVerticalOffset={80}
           renderItem={renderMessage}
           keyExtractor={item => item.id}
           contentContainerStyle={[styles.chatContent, { paddingBottom: 120 }]}
-          onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: false })}
-onLayout={() => flatListRef.current?.scrollToEnd({ animated: false })}
+          // inverted={true}: WhatsApp-style bottom anchoring. Newest message at index 0 (visually bottom).
+          // Eliminates scrollToEnd timing dependencies. Aligns with customer chat architecture.
+          // TODO: extract shared chat config to /shared/chat/ when pagination is added.
+          inverted={true}
           showsVerticalScrollIndicator={false}
         />
 
