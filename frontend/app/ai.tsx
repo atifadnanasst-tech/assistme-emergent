@@ -42,6 +42,11 @@ export default function AIScreen() {
   const { setIsAuthenticated } = useAuth();
   const flatListRef = useRef<FlatList>(null);
   const insets = useSafeAreaInsets();
+  // Pagination state — same pattern as customer chat (WhatsApp-style cursor pagination)
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [oldestTimestamp, setOldestTimestamp] = useState<string | null>(null);
+  const loadingOlderRef = useRef(false);
 
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<AIMessage[]>([]);
@@ -263,7 +268,10 @@ export default function AIScreen() {
         }));
         // DESC order from backend + inverted FlatList = natural bottom anchoring (canonical chat pattern)
         // Same architecture as customer chat. No scrollToEnd needed — inverted handles viewport.
+        // TODO: extract normalizeOrgAiMessage to /shared/chat/normalize.ts
         setMessages(mapped);
+        setHasMore(msgData.has_more || false);
+        if (mapped.length > 0) setOldestTimestamp(mapped[mapped.length - 1].created_at);
       } else {
         // Welcome message
         setMessages([{
@@ -283,6 +291,58 @@ export default function AIScreen() {
       }
     } finally {
       setLoading(false);
+    }
+  };
+
+  // ── normalizeOrgAiMessage — canonical message shape ─────────
+  // TODO: extract to /shared/chat/normalize.ts alongside customer chat normalization
+  const normalizeOrgAiMessage = (m: any) => ({
+    id: m.id,
+    role: m.role,
+    content: m.content,
+    card_type: m.metadata?.message_type || 'query_response',
+    card_data: {},
+    chart_data: m.metadata?.chart_data || null,
+    next_action: m.metadata?.next_action || null,
+    created_at: m.created_at,
+  });
+
+  // ── Load older messages (WhatsApp-style cursor pagination) ───
+  // Same pattern as customer chat loadOlderMessages.
+  // inverted FlatList: appending older msgs to array = appearing above visually. Correct.
+  const loadOlderMessages = async () => {
+    if (!hasMore || loadingOlderRef.current || !oldestTimestamp || !conversationId) return;
+    loadingOlderRef.current = true;
+    setLoadingOlder(true);
+    try {
+      const token = await getToken();
+      if (!token) return;
+      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+      const res = await fetch(
+        `${backendUrl}/api/home/ai-messages?ai_conversation_id=${conversationId}&before=${encodeURIComponent(oldestTimestamp)}`,
+        { headers: { 'Authorization': `Bearer ${token}` } }
+      );
+      if (!res.ok) return;
+      const data = await res.json();
+      const older = data.messages || [];
+      if (older.length > 0) {
+        setMessages(prev => {
+          const existingIds = new Set(prev.map((m: any) => m.id));
+          const uniqueOlder = older
+            .filter((m: any) => !existingIds.has(m.id))
+            .map(normalizeOrgAiMessage);
+          return [...prev, ...uniqueOlder];
+        });
+        setOldestTimestamp(older[older.length - 1].created_at);
+        setHasMore(data.has_more || false);
+      } else {
+        setHasMore(false);
+      }
+    } catch (err) {
+      console.error('loadOlderMessages error:', err);
+    } finally {
+      loadingOlderRef.current = false;
+      setLoadingOlder(false);
     }
   };
 
@@ -741,6 +801,13 @@ keyboardVerticalOffset={80}
           // TODO: extract shared chat config to /shared/chat/ when pagination is added.
           inverted={true}
           showsVerticalScrollIndicator={false}
+          onEndReached={() => {
+            if (hasMore && !loadingOlderRef.current) loadOlderMessages();
+          }}
+          onEndReachedThreshold={0.5}
+          ListFooterComponent={loadingOlder ? (
+            <ActivityIndicator size="small" color="#075E54" style={{ marginVertical: 8 }} />
+          ) : null}
         />
 
         {/* Typing indicator */}

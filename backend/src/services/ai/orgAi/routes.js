@@ -123,16 +123,27 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
 
       if (!convCheck) return c.json({ error: 'conversation_not_found' }, 403);
 
-      const { data: msgs, error } = await supabase
+      // Cursor-based pagination — same pattern as customer chat
+      const before = c.req.query('before');
+      const LIMIT = 30;
+
+      let query = supabase
         .from('messages')
         .select('id, role, content, canonical_text, input_modality, metadata, created_at, ai_conversation_id')
         .eq('organisation_id', organisationId)
         .eq('ai_conversation_id', aiConversationId)
         .order('created_at', { ascending: false })
-        .limit(30);
+        .limit(LIMIT + 1);
+
+      if (before) query = query.lt('created_at', before);
+
+      const { data: msgs, error } = await query;
 
       if (error) throw error;
-      return c.json({ messages: msgs || [] });
+      const all = msgs || [];
+      const has_more = all.length > LIMIT;
+      const messages = has_more ? all.slice(0, LIMIT) : all;
+      return c.json({ messages, has_more });
     } catch (error) {
       console.error('GET /api/home/ai-messages error:', error);
       return c.json({ error: 'server_error' }, 500);
