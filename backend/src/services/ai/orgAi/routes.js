@@ -126,7 +126,7 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
         .select('id, role, content, canonical_text, input_modality, metadata, created_at, ai_conversation_id')
         .eq('organisation_id', organisationId)
         .eq('ai_conversation_id', aiConversationId)
-        .order('created_at', { ascending: true })
+        .order('created_at', { ascending: false })
         .limit(30);
 
       if (error) throw error;

@@ -261,7 +261,7 @@ export default function AIScreen() {
           next_action: m.metadata?.next_action || null,
           created_at: m.created_at,
         }));
-        setMessages(mapped);
+        setMessages(mapped.reverse());
         setTimeout(() => {
           flatListRef.current?.scrollToEnd({ animated: false });
         }, 100);
