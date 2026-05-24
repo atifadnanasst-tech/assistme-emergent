@@ -26,25 +26,27 @@ import { dispatchMenuQuery } from './index.js';
 // Backend owns these — never trust frontend-supplied labels.
 // Used for: input validation + chat history user bubble content + AI context continuity.
 // Any menu_id not in this map is rejected with 400.
+// TODO: future refactor — centralize into shared menu registry { id, icon, label }
+// Emoji-prefixed to ensure hydration parity with optimistic UI bubbles
 const MENU_LABELS = {
-  collections_today:      'Collections Today',
-  total_outstanding:      'Total Outstanding',
-  top_customers:          'Top Customers',
-  revenue_this_month:     'Revenue This Month',
-  invoices_due_this_week: 'Invoices Due This Week',
-  weekly_trend:           'Weekly Trend',
-  follow_up_today:        'Follow Up Today',
-  risk_alerts:            'Risk Alerts',
-  gone_silent:            'Gone Silent',
-  top_sellers:            'Top Sellers',
-  low_stock:              'Low Stock',
-  slow_moving:            'Slow Moving',
-  deliveries_today:       'Deliveries Today',
-  expiring_quotes:        'Expiring Quotes',
-  todays_tasks:           "Today's Tasks",
-  what_i_owe:             'What I Owe Suppliers',
-  overdue_payables:       'Overdue Payables',
-  top_supplier:           'Top Supplier',
+  collections_today:      '📥 Collections Today',
+  total_outstanding:      '🔴 Total Outstanding',
+  top_customers:          '🏆 Top Customers',
+  revenue_this_month:     '📊 Revenue This Month',
+  invoices_due_this_week: '📋 Invoices Due This Week',
+  weekly_trend:           '📈 Weekly Trend',
+  follow_up_today:        '📞 Follow Up Today',
+  risk_alerts:            '⚠️ Risk Alerts',
+  gone_silent:            '🔇 Gone Silent',
+  top_sellers:            '⭐ Top Sellers',
+  low_stock:              '🔴 Low Stock',
+  slow_moving:            '🐌 Slow Moving',
+  deliveries_today:       '🚚 Deliveries Today',
+  expiring_quotes:        '📄 Expiring Quotes',
+  todays_tasks:           "✅ Today's Tasks",
+  what_i_owe:             '💸 What I Owe Suppliers',
+  overdue_payables:       '⏰ Overdue Payables',
+  top_supplier:           '🥇 Top Supplier',
 };
 
 export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) {

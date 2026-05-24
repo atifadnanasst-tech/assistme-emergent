@@ -264,7 +264,7 @@ export default function AIScreen() {
         setMessages(mapped.reverse());
         setTimeout(() => {
           flatListRef.current?.scrollToEnd({ animated: false });
-        }, 100);
+        }, 400);
       } else {
         // Welcome message
         setMessages([{
