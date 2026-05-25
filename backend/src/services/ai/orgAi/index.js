@@ -543,7 +543,7 @@ export async function invoicesDueThisWeek(supabase, orgId, orgCurrency, openai, 
     });
     const uniqueLaterCustomers = allEntities.length;
     next_action = {
-      text: `Next invoice due in ${next.days_until_due} day(s) from ${next.customer_name} — ${formatCurrency(next.amount_due, orgCurrency)}.`,
+      text: `Next invoice due in ${allEntities[0].invoices?.[0]?.days || ranked[0].days_until_due} day(s) from ${allEntities[0].customer_name} — ${formatCurrency(allEntities[0].amount, orgCurrency)}.`,
       type: 'send_reminder',
       execution_mode: uniqueLaterCustomers > 1 ? 'bulk' : 'single',
       entities: allEntities,

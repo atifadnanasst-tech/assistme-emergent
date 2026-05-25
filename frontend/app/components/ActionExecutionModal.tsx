@@ -70,9 +70,10 @@ export default function ActionExecutionModal({ visible, action, onClose, onSimul
     const rawPhone = entity.customer_phone || '';
     const normalized = rawPhone.replace(/\D/g, '');
     const phone = normalized.startsWith('91') ? normalized : `91${normalized}`;
-    const msgText = isBulk
-      ? (action.prefill?.message || editedMessage || '').replace(/Dear [^,]+/, `Dear ${entity.customer_name}`)
-      : editedMessage || action.prefill?.message || '';
+    // Each entity carries its own pre-composed message (customer-grouped, invoice-specific)
+    // Single: use edited message or prefill. Bulk: use entity.message directly (per-customer)
+    const msgText = (entity as any).message
+      || (isBulk ? '' : (editedMessage || action.prefill?.message || ''));
     const message = encodeURIComponent(msgText);
     if (!normalized) {
       Linking.openURL(`https://wa.me/?text=${message}`);
