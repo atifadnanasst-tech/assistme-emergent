@@ -491,47 +491,67 @@ export async function invoicesDueThisWeek(supabase, orgId, orgCurrency, openai, 
       prefill: null,
     };
   } else if (dueToday.length > 0) {
-    // Urgent — invoices due today
-    const urgentEntities = dueToday.map(r => ({
-      customer_id: r.customer_id,
-      customer_name: r.customer_name,
-      customer_phone: r.customer_phone,
-      invoice_id: r.invoice_id,
-      invoice_number: r.invoice_number,
-      amount: r.amount_due,
-    }));
-    const topUrgent = dueToday[0];
+    // Group by customer — one entity per customer, one combined message
+    const todayByCustomer = {};
+    for (const r of dueToday) {
+      if (!todayByCustomer[r.customer_id]) {
+        todayByCustomer[r.customer_id] = { customer_id: r.customer_id, customer_name: r.customer_name, customer_phone: r.customer_phone, invoices: [] };
+      }
+      todayByCustomer[r.customer_id].invoices.push({ invoice_id: r.invoice_id, invoice_number: r.invoice_number, amount: r.amount_due });
+    }
+    const urgentEntities = Object.values(todayByCustomer).map(c => {
+      const invoiceList = c.invoices.map(i => `${i.invoice_number} (${formatCurrency(i.amount, orgCurrency)})`).join(', ');
+      const totalAmt = c.invoices.reduce((s, i) => s + i.amount, 0);
+      return {
+        customer_id: c.customer_id, customer_name: c.customer_name, customer_phone: c.customer_phone,
+        invoice_id: c.invoices[0].invoice_id,
+        invoice_number: c.invoices.map(i => i.invoice_number).join(', '),
+        amount: totalAmt,
+        message: `${c.customer_name}, the following invoice(s) were due today: ${invoiceList}. Kindly arrange payment at your earliest.`,
+      };
+    });
+    const uniqueTodayCustomers = urgentEntities.length;
     next_action = {
       text: `${dueToday.length} invoice(s) due TODAY totalling ${formatCurrency(dueTodayTotal, orgCurrency)}. Follow up immediately.`,
       type: 'send_reminder',
-      execution_mode: dueToday.length > 1 ? 'bulk' : 'single',
+      execution_mode: uniqueTodayCustomers > 1 ? 'bulk' : 'single',
       entities: urgentEntities,
-      prefill: dueToday.length === 1 ? {
-        message: `Assalamu Alaikum ${topUrgent.customer_name},\n\nThis is a gentle reminder that your invoice *${topUrgent.invoice_number}* of *${formatCurrency(topUrgent.amount_due, orgCurrency)}* was due today.\n\nKindly arrange payment at your earliest convenience.\n\nThank you 🙏`,
+      prefill: uniqueTodayCustomers === 1 ? {
+        message: urgentEntities[0].message,
         language: language || 'en',
       } : null,
     };
   } else {
-    // Due later this week — send advance reminder
-    const next = ranked[0];
-    const allEntities = ranked.map(r => ({
-      customer_id: r.customer_id,
-      customer_name: r.customer_name,
-      customer_phone: r.customer_phone,
-      invoice_id: r.invoice_id,
-      invoice_number: r.invoice_number,
-      amount: r.amount_due,
-    }));
+    // Due later this week — group by customer, one combined message
+    const laterByCustomer = {};
+    for (const r of ranked) {
+      if (!laterByCustomer[r.customer_id]) {
+        laterByCustomer[r.customer_id] = { customer_id: r.customer_id, customer_name: r.customer_name, customer_phone: r.customer_phone, invoices: [], days_until_due: r.days_until_due };
+      }
+      laterByCustomer[r.customer_id].invoices.push({ invoice_id: r.invoice_id, invoice_number: r.invoice_number, amount: r.amount_due, days: r.days_until_due });
+    }
+    const allEntities = Object.values(laterByCustomer).map(c => {
+      const invoiceList = c.invoices.map(i => `${i.invoice_number} (${formatCurrency(i.amount, orgCurrency)}, due in ${i.days} day(s))`).join(', ');
+      const totalAmt = c.invoices.reduce((s, i) => s + i.amount, 0);
+      return {
+        customer_id: c.customer_id, customer_name: c.customer_name, customer_phone: c.customer_phone,
+        invoice_id: c.invoices[0].invoice_id,
+        invoice_number: c.invoices.map(i => i.invoice_number).join(', '),
+        amount: totalAmt,
+        message: `${c.customer_name}, reminder: ${invoiceList}. Please arrange payment in advance.`,
+      };
+    });
+    const uniqueLaterCustomers = allEntities.length;
     next_action = {
       text: `Next invoice due in ${next.days_until_due} day(s) from ${next.customer_name} — ${formatCurrency(next.amount_due, orgCurrency)}.`,
       type: 'send_reminder',
-      execution_mode: ranked.length > 1 ? 'bulk' : 'single',
+      execution_mode: uniqueLaterCustomers > 1 ? 'bulk' : 'single',
       entities: allEntities,
-      prefill: ranked.length === 1 ? {
-        message: `Assalamu Alaikum ${next.customer_name},\n\nThis is a gentle reminder that your invoice *${next.invoice_number}* of *${formatCurrency(next.amount_due, orgCurrency)}* is due in *${next.days_until_due} day(s)*.\n\nKindly arrange payment in advance to avoid any inconvenience.\n\nThank you 🙏`,
+      prefill: uniqueLaterCustomers === 1 ? {
+        message: allEntities[0].message,
         language: language || 'en',
       } : null,
-    };
+    }
   }
 
   // Step 6: GPT narration — frozen computed truth only
