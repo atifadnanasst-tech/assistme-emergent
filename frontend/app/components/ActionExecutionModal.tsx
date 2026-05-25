@@ -131,12 +131,12 @@ export default function ActionExecutionModal({ visible, action, onClose, onSimul
                   <View style={{ flex: 1, marginLeft: isBulk ? 10 : 0 }}>
                     <Text style={styles.entityName}>{entity.customer_name}</Text>
                     <Text style={styles.entityDetail}>
-                      {entity.invoice_number} · \u20b9{entity.amount?.toLocaleString('en-IN')}
+                      {entity.invoice_number} · ₹{entity.amount?.toLocaleString('en-IN')}
                     </Text>
                     <Text style={styles.entityMessage} numberOfLines={2}>{entityMsg}</Text>
                   </View>
                   <TouchableOpacity style={styles.waBtn} onPress={() => handleWhatsApp(entity)}>
-                    <Text style={styles.waBtnText}>\ud83d\udcac</Text>
+                    <Ionicons name="logo-whatsapp" size={20} color="#FFF" />
                   </TouchableOpacity>
                 </View>
               );

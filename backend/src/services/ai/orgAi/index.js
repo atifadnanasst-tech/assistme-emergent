@@ -507,7 +507,7 @@ export async function invoicesDueThisWeek(supabase, orgId, orgCurrency, openai, 
       execution_mode: dueToday.length > 1 ? 'bulk' : 'single',
       entities: urgentEntities,
       prefill: dueToday.length === 1 ? {
-        message: `Dear ${topUrgent.customer_name}, your invoice ${topUrgent.invoice_number} of ${formatCurrency(topUrgent.amount_due, orgCurrency)} was due today. Kindly arrange payment at your earliest.`,
+        message: `Assalamu Alaikum ${topUrgent.customer_name},\n\nThis is a gentle reminder that your invoice *${topUrgent.invoice_number}* of *${formatCurrency(topUrgent.amount_due, orgCurrency)}* was due today.\n\nKindly arrange payment at your earliest convenience.\n\nThank you 🙏`,
         language: language || 'en',
       } : null,
     };
@@ -528,7 +528,7 @@ export async function invoicesDueThisWeek(supabase, orgId, orgCurrency, openai, 
       execution_mode: ranked.length > 1 ? 'bulk' : 'single',
       entities: allEntities,
       prefill: ranked.length === 1 ? {
-        message: `Dear ${next.customer_name}, a gentle reminder that your invoice ${next.invoice_number} of ${formatCurrency(next.amount_due, orgCurrency)} is due in ${next.days_until_due} day(s). Please arrange payment in advance.`,
+        message: `Assalamu Alaikum ${next.customer_name},\n\nThis is a gentle reminder that your invoice *${next.invoice_number}* of *${formatCurrency(next.amount_due, orgCurrency)}* is due in *${next.days_until_due} day(s)*.\n\nKindly arrange payment in advance to avoid any inconvenience.\n\nThank you 🙏`,
         language: language || 'en',
       } : null,
     };
