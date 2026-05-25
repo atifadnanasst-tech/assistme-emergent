@@ -112,19 +112,115 @@ export async function collectionsToday(supabase, orgId, orgCurrency, openai, lan
     ],
   };
 
-  // Step 4: Nudge — rules engine, never GPT
-  let next_action = null;
-  if (count === 0) {
-    next_action = { text: 'No collections yet today. Send payment reminders to your overdue customers.' };
-  } else if (total < 10000) {
-    next_action = { text: `Only ${formatCurrency(total, orgCurrency)} collected. Chase your top outstanding customers.` };
-  } else {
-    next_action = { text: "Good collection day. Check tomorrow's pending deliveries." };
+  // Step 4: 7-day average — deterministic threshold, not hardcoded
+  const sevenDaysAgo = new Date(new Date(todayIST() + 'T00:00:00').getTime() - 7 * 86400000).toISOString().split('T')[0];
+  const { data: last7Payments } = await supabase
+    .from('payments').select('amount')
+    .eq('organisation_id', orgId).eq('is_historical', false)
+    .gte('payment_date', sevenDaysAgo).lt('payment_date', todayIST()).is('deleted_at', null);
+  const last7Total = (last7Payments || []).reduce((s, p) => s + Number(p.amount || 0), 0);
+  const avgLast7 = last7Total / 7;
+  const isStrongDay = total >= 1000 && (avgLast7 === 0 || total >= avgLast7 * 0.7);
+
+  // Step 5: Top outstanding customers — for recovery/chase modes
+  const { data: topOutstanding } = await supabase
+    .from('customers').select('id, name, phone, outstanding_balance')
+    .eq('organisation_id', orgId).eq('status', 'active')
+    .is('deleted_at', null).gt('outstanding_balance', 0)
+    .order('outstanding_balance', { ascending: false }).limit(3);
+  const outstandingEntities = (topOutstanding || []).map(c => ({
+    customer_id: c.id, customer_name: c.name, customer_phone: c.phone || null,
+    invoice_id: null, invoice_number: '', amount: c.outstanding_balance,
+    message: `${c.name}, this is a reminder that your account has an outstanding balance of ${formatCurrency(c.outstanding_balance, orgCurrency)}. Kindly arrange payment today.`,
+  }));
+
+  // Step 6: Dormant customers — for strong/growth mode reactivation only
+  let dormantEntities = [];
+  if (isStrongDay) {
+    const fourteenDaysAgo = new Date(new Date(todayIST() + 'T00:00:00').getTime() - 14 * 86400000).toISOString().split('T')[0];
+    const { data: recentInvs } = await supabase
+      .from('invoices').select('customer_id')
+      .eq('organisation_id', orgId).eq('is_historical', false)
+      .gte('issue_date', fourteenDaysAgo).is('deleted_at', null);
+    const recentIds = new Set((recentInvs || []).map(i => i.customer_id));
+    const { data: olderInvs } = await supabase
+      .from('invoices').select('customer_id, total_amount')
+      .eq('organisation_id', orgId).eq('is_historical', false)
+      .gte('issue_date', sevenDaysAgo).lt('issue_date', fourteenDaysAgo).is('deleted_at', null);
+    const dormantMap = {};
+    for (const inv of olderInvs || []) {
+      if (!recentIds.has(inv.customer_id)) {
+        if (!dormantMap[inv.customer_id]) dormantMap[inv.customer_id] = { customer_id: inv.customer_id, total: 0 };
+        dormantMap[inv.customer_id].total += Number(inv.total_amount || 0);
+      }
+    }
+    const dormantIds = Object.keys(dormantMap);
+    if (dormantIds.length > 0) {
+      const { data: custData } = await supabase
+        .from('customers').select('id, name, phone').in('id', dormantIds).eq('organisation_id', orgId);
+      for (const c of custData || []) {
+        if (dormantMap[c.id]) { dormantMap[c.id].customer_name = c.name; dormantMap[c.id].customer_phone = c.phone || null; }
+      }
+      dormantEntities = Object.values(dormantMap)
+        .filter(c => c.customer_name).sort((a, b) => b.total - a.total).slice(0, 3)
+        .map(c => ({
+          customer_id: c.customer_id, customer_name: c.customer_name, customer_phone: c.customer_phone,
+          invoice_id: null, invoice_number: '', amount: c.total,
+          message: `${c.customer_name}, we noticed you haven't placed an order recently. Would love to reconnect and discuss your next order.`,
+        }));
+    }
   }
 
-  // Step 5: GPT narration — always last, never blocks core response
+  // Step 7: Typed next_action — state-driven operating modes
+  const totalOutstandingAmt = outstandingEntities.reduce((s, e) => s + e.amount, 0);
+  let next_action = null;
+  if (count === 0) {
+    next_action = {
+      text: outstandingEntities.length > 0
+        ? `No collections yet today. ${formatCurrency(totalOutstandingAmt, orgCurrency)} outstanding across ${outstandingEntities.length} customer${outstandingEntities.length > 1 ? 's' : ''} — start chasing now.`
+        : 'No collections yet today. No outstanding balances — create new invoices to build pipeline.',
+      type: 'send_reminder',
+      execution_mode: outstandingEntities.length > 1 ? 'bulk' : outstandingEntities.length === 1 ? 'single' : null,
+      entities: outstandingEntities,
+      prefill: outstandingEntities.length === 1 ? {
+        message: `${outstandingEntities[0].customer_name}, this is a reminder that your account has an outstanding balance of ${formatCurrency(outstandingEntities[0].amount, orgCurrency)}. Kindly arrange payment today.`,
+        language: language || 'en',
+      } : null,
+    };
+  } else if (!isStrongDay) {
+    next_action = {
+      text: outstandingEntities.length > 0
+        ? `${formatCurrency(total, orgCurrency)} collected — below daily average. ${outstandingEntities[0].customer_name} has ${formatCurrency(outstandingEntities[0].amount, orgCurrency)} outstanding. Follow up now.`
+        : `${formatCurrency(total, orgCurrency)} collected — below daily average. Push for more collections today.`,
+      type: 'send_reminder',
+      execution_mode: outstandingEntities.length > 1 ? 'bulk' : outstandingEntities.length === 1 ? 'single' : null,
+      entities: outstandingEntities,
+      prefill: outstandingEntities.length === 1 ? {
+        message: `${outstandingEntities[0].customer_name}, this is a reminder that your account has an outstanding balance of ${formatCurrency(outstandingEntities[0].amount, orgCurrency)}. Kindly arrange payment today.`,
+        language: language || 'en',
+      } : null,
+    };
+  } else {
+    const growthEntities = dormantEntities.length > 0 ? dormantEntities : outstandingEntities;
+    const othersCount = growthEntities.length - 1;
+    const othersStr = othersCount > 0 ? ` and ${othersCount} other${othersCount > 1 ? 's' : ''}` : '';
+    next_action = {
+      text: dormantEntities.length > 0
+        ? `Strong day — ${formatCurrency(total, orgCurrency)} collected. ${dormantEntities[0].customer_name}${othersStr} haven't reordered recently — reach out now to expand revenue.`
+        : `Strong day — ${formatCurrency(total, orgCurrency)} collected. Keep momentum — push outstanding customers to close the day even stronger.`,
+      type: dormantEntities.length > 0 ? 'reactivate_customer' : 'send_reminder',
+      execution_mode: growthEntities.length > 1 ? 'bulk' : growthEntities.length === 1 ? 'single' : null,
+      entities: growthEntities,
+      prefill: growthEntities.length === 1 ? {
+        message: growthEntities[0].message || `${growthEntities[0].customer_name}, we haven't heard from you in a while. Would love to reconnect.`,
+        language: language || 'en',
+      } : null,
+    };
+  }
+
+  // Step 8: GPT narration — always last, never blocks core response
   const response_text = await narrate(
-    { total, count, topPayerName, currency: orgCurrency },
+    { total, count, topPayerName, currency: orgCurrency, avgLast7: Math.round(avgLast7) },
     'collections_today',
     openai,
     { language }
