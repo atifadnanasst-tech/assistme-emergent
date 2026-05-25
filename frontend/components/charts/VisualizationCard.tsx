@@ -13,6 +13,7 @@
  *   ranked_list  — top-N items with progress bars
  *   risk_list    — items with risk severity + days late
  *   insight      — single highlighted observation
+ *   bar          — vertical bar chart for time-series (weekly trend)
  *
  * To add a new type:
  *   1. Add type string to SUPPORTED_TYPES in visualizationParser.js
@@ -132,7 +133,54 @@ const RankedListCard = ({ data }: { data: any }) => {
   );
 };
 
-// ── RiskListCard ──────────────────────────────────────────────
+// ── BarChartCard ─────────────────────────────────────────────
+// Vertical bar chart for time-series data (weekly trend etc.)
+// Pure React Native Views — no SVG, no external libraries
+// Centralized in VisualizationCard — accessible from all surfaces
+const BarChartCard = ({ data }: { data: any }) => {
+  const series = data.series || [];
+  if (series.length === 0) return null;
+  const maxValue = Math.max(...series.map((s: any) => s.value || 0), 1);
+  const BAR_MAX_HEIGHT = 80;
+  const trendColor = data.highlight?.startsWith('Up') ? COLORS.success
+    : data.highlight?.startsWith('Down') ? COLORS.danger
+    : COLORS.muted;
+
+  return (
+    <View style={styles.card}>
+      {data.title && <Text style={styles.cardTitle}>{data.title}</Text>}
+      <View style={{ flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-around', height: BAR_MAX_HEIGHT + 28, marginTop: 8 }}>
+        {series.map((item: any, idx: number) => {
+          const barH = maxValue > 0 ? Math.max(Math.round((item.value / maxValue) * BAR_MAX_HEIGHT), item.value > 0 ? 4 : 0) : 0;
+          const isLast = idx === series.length - 1;
+          return (
+            <View key={idx} style={{ alignItems: 'center', flex: 1 }}>
+              <Text style={{ fontSize: 8, color: COLORS.muted, marginBottom: 2 }}>
+                {item.value > 0 ? formatINR(item.value) : ''}
+              </Text>
+              <View style={{
+                height: barH, width: 18,
+                backgroundColor: isLast ? COLORS.primary : '#B2DFDB',
+                borderRadius: 3,
+                minHeight: item.value > 0 ? 4 : 0,
+              }} />
+              <Text style={{ fontSize: 9, color: isLast ? COLORS.primary : COLORS.muted, marginTop: 4, fontWeight: isLast ? '700' : '400' }}>
+                {item.label}
+              </Text>
+            </View>
+          );
+        })}
+      </View>
+      {data.highlight && (
+        <View style={[styles.highlightBox, { borderLeftColor: trendColor }]}>
+          <Text style={[styles.highlightText, { color: trendColor }]}>{data.highlight}</Text>
+        </View>
+      )}
+    </View>
+  );
+};
+
+// ── RiskListCard ───────────────────────────────────────────────
 const RiskListCard = ({ data }: { data: any }) => {
   const series = data.series || [];
   if (series.length === 0) return null;
@@ -193,6 +241,8 @@ export default function VisualizationCard({ data }: VisualizationCardProps) {
         return <RiskListCard data={data} />;
       case 'insight':
         return <InsightCard data={data} />;
+      case 'bar':
+        return <BarChartCard data={data} />;
       default:
         console.warn('[VisualizationCard] Unknown type received:', data.type);
         return null;

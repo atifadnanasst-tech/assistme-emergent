@@ -564,6 +564,158 @@ export async function invoicesDueThisWeek(supabase, orgId, orgCurrency, openai, 
   return { response_text, chart_data, next_action };
 }
 
+// ── FUNCTION 6: Weekly Trend ───────────────────────────────────────
+// 3 deterministic queries: payment trend + product momentum + dormant customers
+// GPT narrates only. issue_date used as commercial truth. Monday-start weeks.
+export async function weeklyTrend(supabase, orgId, orgCurrency, openai, language = 'en') {
+  const start = Date.now();
+  const today = todayIST();
+  const sixWeeksAgo = new Date(new Date(today + 'T00:00:00').getTime() - 42 * 86400000).toISOString().split('T')[0];
+  const fourteenDaysAgo = new Date(new Date(today + 'T00:00:00').getTime() - 14 * 86400000).toISOString().split('T')[0];
+  const thirtyDaysAgo = new Date(new Date(today + 'T00:00:00').getTime() - 30 * 86400000).toISOString().split('T')[0];
+
+  // Query 1: 6-week payment trend
+  const { data: payments, error: payErr } = await supabase
+    .from('payments')
+    .select('amount, payment_date')
+    .eq('organisation_id', orgId)
+    .eq('is_historical', false)
+    .gte('payment_date', sixWeeksAgo)
+    .is('deleted_at', null)
+    .order('payment_date', { ascending: true });
+  if (payErr) console.warn('[orgAi] weeklyTrend payments error:', payErr.message);
+
+  // Monday-start week grouping (Indian business standard)
+  const weeklyTotals = {};
+  for (const p of payments || []) {
+    const d = new Date(p.payment_date + 'T00:00:00');
+    const daysToMonday = d.getDay() === 0 ? 6 : d.getDay() - 1;
+    const weekStart = new Date(d);
+    weekStart.setDate(d.getDate() - daysToMonday);
+    const weekKey = weekStart.toISOString().split('T')[0];
+    weeklyTotals[weekKey] = (weeklyTotals[weekKey] || 0) + Number(p.amount || 0);
+  }
+  const weeks = Object.keys(weeklyTotals).sort();
+  const weekSeries = weeks.map(w => ({ week: w, total: weeklyTotals[w] }));
+  const thisWeekTotal = weekSeries[weekSeries.length - 1]?.total || 0;
+  const lastWeekTotal = weekSeries[weekSeries.length - 2]?.total || 0;
+  let direction = 'flat', changePct = 0;
+  if (lastWeekTotal > 0) {
+    changePct = Math.round(((thisWeekTotal - lastWeekTotal) / lastWeekTotal) * 100);
+    direction = changePct > 5 ? 'up' : changePct < -5 ? 'down' : 'flat';
+  } else if (thisWeekTotal > 0) { direction = 'up'; changePct = 100; }
+
+  // Query 2: Top moving products (use issue_date as commercial truth)
+  const { data: recentInvoices } = await supabase
+    .from('invoices')
+    .select('id')
+    .eq('organisation_id', orgId)
+    .eq('is_historical', false)
+    .gte('issue_date', thirtyDaysAgo)
+    .is('deleted_at', null);
+  const recentInvIds = (recentInvoices || []).map(i => i.id);
+  let topProducts = [];
+  if (recentInvIds.length > 0) {
+    const { data: items } = await supabase
+      .from('invoice_items')
+      .select('product_id, line_total, description')
+      .eq('organisation_id', orgId)
+      .in('invoice_id', recentInvIds)
+      .is('deleted_at', null);
+    const productTotals = {};
+    for (const item of items || []) {
+      const key = item.product_id || item.description;
+      if (!productTotals[key]) productTotals[key] = { product_id: item.product_id, name: item.description, total: 0 };
+      productTotals[key].total += Number(item.line_total || 0);
+    }
+    const productIds = Object.values(productTotals).map(p => p.product_id).filter(Boolean);
+    if (productIds.length > 0) {
+      const { data: prods } = await supabase.from('products').select('id, name').in('id', productIds).eq('organisation_id', orgId);
+      for (const prod of prods || []) { if (productTotals[prod.id]) productTotals[prod.id].name = prod.name; }
+    }
+    topProducts = Object.values(productTotals).sort((a, b) => b.total - a.total).slice(0, 3);
+  }
+
+  // Query 3: Dormant customers — bought 14-42 days ago, not since (use issue_date)
+  const { data: recentActiveInvs } = await supabase
+    .from('invoices').select('customer_id')
+    .eq('organisation_id', orgId).eq('is_historical', false)
+    .gte('issue_date', fourteenDaysAgo).is('deleted_at', null);
+  const recentCustomerIds = new Set((recentActiveInvs || []).map(i => i.customer_id));
+
+  const { data: olderInvs } = await supabase
+    .from('invoices').select('customer_id, total_amount')
+    .eq('organisation_id', orgId).eq('is_historical', false)
+    .gte('issue_date', sixWeeksAgo).lt('issue_date', fourteenDaysAgo).is('deleted_at', null);
+  const dormantMap = {};
+  for (const inv of olderInvs || []) {
+    if (!recentCustomerIds.has(inv.customer_id)) {
+      if (!dormantMap[inv.customer_id]) dormantMap[inv.customer_id] = { customer_id: inv.customer_id, total: 0 };
+      dormantMap[inv.customer_id].total += Number(inv.total_amount || 0);
+    }
+  }
+  let dormantCustomers = [];
+  const dormantIds = Object.keys(dormantMap);
+  if (dormantIds.length > 0) {
+    const { data: custData } = await supabase.from('customers').select('id, name, phone').in('id', dormantIds).eq('organisation_id', orgId);
+    for (const c of custData || []) { if (dormantMap[c.id]) { dormantMap[c.id].customer_name = c.name; dormantMap[c.id].customer_phone = c.phone || null; } }
+    dormantCustomers = Object.values(dormantMap).filter(c => c.customer_name).sort((a, b) => b.total - a.total).slice(0, 3);
+  }
+
+  // Chart
+  const chart_data = {
+    type: 'bar', title: 'Weekly Collections Trend', currency: orgCurrency,
+    series: weekSeries.map((w, i) => ({ label: `Wk ${i + 1}`, value: w.total, sublabel: w.week })),
+    highlight: direction === 'up' ? `Up ${changePct}% vs last week` : direction === 'down' ? `Down ${Math.abs(changePct)}% vs last week` : 'Flat vs last week',
+  };
+
+  // Typed next_action — always action-oriented, never complacent
+  const topProduct = topProducts[0];
+  const targetEntities = dormantCustomers.map(c => ({
+    customer_id: c.customer_id, customer_name: c.customer_name, customer_phone: c.customer_phone,
+    invoice_id: null, invoice_number: '', amount: c.total,
+    message: topProduct
+      ? `${c.customer_name}, ${topProduct.name} is moving well right now. Would love to discuss your next order.`
+      : `${c.customer_name}, we haven't heard from you in a while. Would love to reconnect and discuss your next order.`,
+  }));
+  const othersCount = targetEntities.length - 1;
+  const othersStr = othersCount > 0 ? ` and ${othersCount} other${othersCount > 1 ? 's' : ''}` : '';
+
+  let actionText;
+  if (direction === 'up') {
+    actionText = targetEntities.length > 0
+      ? `Up ${changePct}% vs last week. ${targetEntities[0].customer_name}${othersStr} haven't reordered recently — reach out while momentum is high.`
+      : `Up ${changePct}% vs last week — push to close remaining outstanding before month end.`;
+  } else if (direction === 'down') {
+    actionText = targetEntities.length > 0
+      ? `Down ${Math.abs(changePct)}% vs last week. ${targetEntities[0].customer_name}${othersStr} haven't reordered — reconnect now to recover momentum.`
+      : `Down ${Math.abs(changePct)}% vs last week. Focus on outstanding customers to recover this week's numbers.`;
+  } else {
+    actionText = targetEntities.length > 0
+      ? `Collections flat. ${targetEntities[0].customer_name}${othersStr} are overdue for a reorder — reach out now.`
+      : `Collections flat this week. Push your outstanding customers to accelerate numbers.`;
+  }
+
+  const next_action = {
+    text: actionText,
+    type: targetEntities.length > 0 ? 'reactivate_customer' : 'send_reminder',
+    execution_mode: targetEntities.length > 1 ? 'bulk' : targetEntities.length === 1 ? 'single' : null,
+    entities: targetEntities,
+    prefill: targetEntities.length === 1 ? { message: targetEntities[0].message, language: language || 'en' } : null,
+  };
+
+  const response_text = await narrate({
+    direction, changePct, thisWeekTotal, lastWeekTotal, weeksOfData: weekSeries.length,
+    topProducts: topProducts.map(p => ({ name: p.name, total: p.total })),
+    dormantCount: dormantCustomers.length, dormantNames: dormantCustomers.map(c => c.customer_name),
+    currency: orgCurrency,
+  }, 'weekly_trend', openai, { language });
+
+  console.log('[orgAi]', { fn: 'weeklyTrend', ms: Date.now() - start, weeks: weekSeries.length, dormant: dormantCustomers.length });
+  return { response_text, chart_data, next_action };
+}
+
+
 // ── Dispatcher ────────────────────────────────────────────────
 // Single entry point for all menu queries.
 // message_type injected here — individual functions do not set it.
@@ -579,7 +731,7 @@ export async function dispatchMenuQuery(menuId, supabase, orgId, orgCurrency, op
     // Session B — Finance
     case 'revenue_this_month': result = await revenueThisMonth(supabase, orgId, orgCurrency, openai, language); break;
     case 'invoices_due_this_week': result = await invoicesDueThisWeek(supabase, orgId, orgCurrency, openai, language); break;
-    case 'weekly_trend':
+    case 'weekly_trend': result = await weeklyTrend(supabase, orgId, orgCurrency, openai, language); break;
     // Session B — Customers
     case 'follow_up_today':
     case 'risk_alerts':
