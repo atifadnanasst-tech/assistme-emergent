@@ -70,10 +70,15 @@ export default function ActionExecutionModal({ visible, action, onClose, onSimul
     const rawPhone = entity.customer_phone || '';
     const normalized = rawPhone.replace(/\D/g, '');
     const phone = normalized.startsWith('91') ? normalized : `91${normalized}`;
-    // Each entity carries its own pre-composed message (customer-grouped, invoice-specific)
-    // Single: use edited message or prefill. Bulk: use entity.message directly (per-customer)
-    const msgText = (entity as any).message
-      || (isBulk ? '' : (editedMessage || action.prefill?.message || ''));
+    // Clean separation: entities = business data only, communication content from prefill or generated
+    // Single: use edited message or prefill.message (owner can customize before sending)
+    // Bulk: generate contextual message from entity fields at render time
+    const generatedMsg = entity.invoice_number
+      ? `${entity.customer_name}, reminder: outstanding balance includes invoice(s) ${entity.invoice_number} totalling ₹${entity.amount?.toLocaleString('en-IN')}. Kindly arrange payment at your earliest.`
+      : `${entity.customer_name}, this is a reminder regarding your outstanding balance of ₹${entity.amount?.toLocaleString('en-IN')}. Kindly arrange payment at your earliest convenience.`;
+    const msgText = isBulk
+      ? generatedMsg
+      : (editedMessage || action.prefill?.message || generatedMsg);
     const message = encodeURIComponent(msgText);
     if (!normalized) {
       Linking.openURL(`https://wa.me/?text=${message}`);

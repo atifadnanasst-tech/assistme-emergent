@@ -237,7 +237,7 @@ export async function totalOutstanding(supabase, orgId, orgCurrency, openai, lan
   // Step 1: Top 5 customers by outstanding (for chart display)
   const { data: topCustomers, error: custErr } = await supabase
     .from('customers')
-    .select('id, name, outstanding_balance')
+    .select('id, name, phone, outstanding_balance')
     .eq('organisation_id', orgId)
     .eq('status', 'active')
     .gt('outstanding_balance', 0)
@@ -288,14 +288,43 @@ export async function totalOutstanding(supabase, orgId, orgCurrency, openai, lan
     level: total > 100000 ? 'warning' : 'info',
   };
 
-  // Step 5: Nudge — rules engine
+  // Step 5: Typed next_action — state-driven, entities = pure business data
+  // Reuses topCustomers already fetched — no extra DB queries
+  const outstandingEntities = (topCustomers || []).map(c => ({
+    customer_id: c.id, customer_name: c.name, customer_phone: c.phone || null,
+    invoice_id: null, invoice_number: '', amount: Number(c.outstanding_balance || 0),
+  }));
+  const othersCount = outstandingEntities.length - 1;
+  const othersStr = othersCount > 0 ? ` and ${othersCount} other${othersCount > 1 ? 's' : ''}` : '';
+
   let next_action = null;
   if (count === 0) {
-    next_action = { text: 'All accounts clear. Great financial health.' };
-  } else if (overdueCount > 5) {
-    next_action = { text: `${overdueCount} invoices are overdue. Send bulk reminders now.` };
-  } else if (topCustomers && topCustomers.length > 0) {
-    next_action = { text: `Call ${topCustomers[0].name} first — ${formatCurrency(topCustomers[0].outstanding_balance, orgCurrency)} outstanding.` };
+    next_action = {
+      text: "All accounts clear. No outstanding receivables — create new quotes to build tomorrow's pipeline.",
+      type: 'create_quote', execution_mode: null, entities: [], prefill: null,
+    };
+  } else if (overdueCount > 0) {
+    next_action = {
+      text: `${overdueCount} invoice${overdueCount !== 1 ? 's' : ''} overdue. ${outstandingEntities[0]?.customer_name}${othersStr} — send reminders immediately.`,
+      type: 'send_reminder',
+      execution_mode: outstandingEntities.length > 1 ? 'bulk' : 'single',
+      entities: outstandingEntities,
+      prefill: outstandingEntities.length === 1 ? {
+        message: `${outstandingEntities[0].customer_name}, your account has an outstanding balance of ${formatCurrency(outstandingEntities[0].amount, orgCurrency)} which is now overdue. Kindly arrange payment immediately.`,
+        language: language || 'en',
+      } : null,
+    };
+  } else {
+    next_action = {
+      text: `${formatCurrency(total, orgCurrency)} outstanding across ${count} customer${count !== 1 ? 's' : ''}. ${outstandingEntities[0]?.customer_name} owes ${formatCurrency(outstandingEntities[0]?.amount || 0, orgCurrency)} — send a reminder before it becomes overdue.`,
+      type: 'send_reminder',
+      execution_mode: outstandingEntities.length > 1 ? 'bulk' : 'single',
+      entities: outstandingEntities,
+      prefill: outstandingEntities.length === 1 ? {
+        message: `${outstandingEntities[0].customer_name}, this is a reminder that your account has an outstanding balance of ${formatCurrency(outstandingEntities[0].amount, orgCurrency)}. Kindly arrange payment at your earliest convenience.`,
+        language: language || 'en',
+      } : null,
+    };
   }
 
   // Step 6: GPT narration
@@ -305,7 +334,6 @@ export async function totalOutstanding(supabase, orgId, orgCurrency, openai, lan
       name: c.name, amount: c.outstanding_balance,
     })),
   }, 'total_outstanding', openai, { language });
-
   console.log('[orgAi] totalOutstanding ms=' + (Date.now() - start));
   return { response_text, chart_data, next_action };
 }
