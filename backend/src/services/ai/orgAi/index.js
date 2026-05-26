@@ -368,16 +368,18 @@ export async function topCustomers(supabase, orgId, orgCurrency, openai, languag
     .slice(0, 5)
     .map(([id]) => id);
 
-  // Step 3: Fetch names for top 5 only (separate query)
+  // Step 3: Fetch names + phone for top 5 only (separate query)
   let ranked = [];
   if (topIds.length > 0) {
     const { data: custNames } = await supabase
       .from('customers')
-      .select('id, name')
+      .select('id, name, phone')
       .in('id', topIds);
 
     ranked = topIds.map(id => ({
+      id,
       name: custNames?.find(c => c.id === id)?.name || 'Unknown',
+      phone: custNames?.find(c => c.id === id)?.phone || null,
       total: customerTotals[id],
     }));
   }
@@ -399,14 +401,81 @@ export async function topCustomers(supabase, orgId, orgCurrency, openai, languag
     level: 'info',
   };
 
-  // Step 5: Nudge — concentration uses grandTotal (all org revenue, not just top 5)
+  // Step 5: Typed next_action — relationship intelligence surface
+  // Entities = pure business data, message generated at render time
+  // Fallback always populated to ensure button renders
+  // TODO: add 5-7 day cooldown filter via entity_memory.last_reminded_at when write side is wired
+
+  // Build top customer entities from ranked list
+  const topEntities = ranked.map(c => ({
+    customer_id: c.id, customer_name: c.name, customer_phone: c.phone || null,
+    invoice_id: null, invoice_number: '', amount: c.total,
+  }));
+
+  // Fallback: outstanding customers if ranked is empty
+  let fallbackEntities = [];
+  if (topEntities.length === 0) {
+    const { data: fallbackCusts } = await supabase
+      .from('customers').select('id, name, phone, outstanding_balance')
+      .eq('organisation_id', orgId).eq('status', 'active')
+      .is('deleted_at', null).gt('outstanding_balance', 0)
+      .order('outstanding_balance', { ascending: false }).limit(3);
+    fallbackEntities = (fallbackCusts || []).map(c => ({
+      customer_id: c.id, customer_name: c.name, customer_phone: c.phone || null,
+      invoice_id: null, invoice_number: '', amount: Number(c.outstanding_balance || 0),
+    }));
+  }
+
   let next_action = null;
   if (ranked.length === 0) {
-    next_action = { text: 'No sales this month yet. Create your first invoice to get started.' };
+    // RECOVERY MODE — no sales, reactivate with fallback outstanding customers
+    const recoveryEntities = fallbackEntities;
+    const rOthers = recoveryEntities.length - 1;
+    const rOthersStr = rOthers > 0 ? ` and ${rOthers} other${rOthers > 1 ? 's' : ''}` : '';
+    next_action = {
+      text: recoveryEntities.length > 0
+        ? `No sales this month yet. ${recoveryEntities[0].customer_name}${rOthersStr} have outstanding balances — reconnect and create fresh invoices.`
+        : 'No sales this month yet. Create your first invoice to get started.',
+      type: 'reactivate_customer',
+      execution_mode: recoveryEntities.length > 1 ? 'bulk' : recoveryEntities.length === 1 ? 'single' : null,
+      entities: recoveryEntities,
+      prefill: recoveryEntities.length === 1 ? {
+        message: `${recoveryEntities[0].customer_name}, hope all is well. We would love to reconnect and discuss your next order.`,
+        language: language || 'en',
+      } : null,
+    };
   } else if (grandTotal > 0 && ranked[0].total / grandTotal > 0.5) {
-    next_action = { text: `${ranked[0].name} is over 50% of your revenue. Consider growing other accounts.` };
+    // CONCENTRATION RISK — diversify, target other top buyers
+    const diversifyEntities = topEntities.slice(1, 4); // exclude top customer, target others
+    const dOthers = diversifyEntities.length - 1;
+    const dOthersStr = dOthers > 0 ? ` and ${dOthers} other${dOthers > 1 ? 's' : ''}` : '';
+    next_action = {
+      text: diversifyEntities.length > 0
+        ? `${ranked[0].name} is ${Math.round((ranked[0].total / grandTotal) * 100)}% of revenue — concentration risk. Reach out to ${diversifyEntities[0].customer_name}${dOthersStr} to grow other accounts.`
+        : `${ranked[0].name} is ${Math.round((ranked[0].total / grandTotal) * 100)}% of revenue. Diversify by creating invoices for other customers this week.`,
+      type: 'reactivate_customer',
+      execution_mode: diversifyEntities.length > 1 ? 'bulk' : diversifyEntities.length === 1 ? 'single' : null,
+      entities: diversifyEntities.length > 0 ? diversifyEntities : topEntities,
+      prefill: diversifyEntities.length === 1 ? {
+        message: `${diversifyEntities[0].customer_name}, hope all is well. We would love to discuss your next order — shall we put together a fresh quote?`,
+        language: language || 'en',
+      } : null,
+    };
   } else {
-    next_action = { text: `Follow up with ${ranked[0]?.name} to maintain the momentum.` };
+    // HEALTHY SPREAD — deepen top relationships + push momentum
+    const momentumEntities = topEntities.slice(0, 3);
+    const mOthers = momentumEntities.length - 1;
+    const mOthersStr = mOthers > 0 ? ` and ${mOthers} other${mOthers > 1 ? 's' : ''}` : '';
+    next_action = {
+      text: `${ranked[0].name} leads this month with ${formatCurrency(ranked[0].total, orgCurrency)}. Follow up with ${momentumEntities[0].customer_name}${mOthersStr} to deepen momentum and explore larger orders.`,
+      type: 'reactivate_customer',
+      execution_mode: momentumEntities.length > 1 ? 'bulk' : 'single',
+      entities: momentumEntities,
+      prefill: momentumEntities.length === 1 ? {
+        message: `${momentumEntities[0].customer_name}, great working with you this month. We would love to explore how we can support you further — any upcoming orders we can help with?`,
+        language: language || 'en',
+      } : null,
+    };
   }
 
   // Step 6: GPT narration
