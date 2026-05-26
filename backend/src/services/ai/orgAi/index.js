@@ -553,15 +553,28 @@ export async function revenueThisMonth(supabase, orgId, orgCurrency, openai, lan
       } : null,
     };
   } else if (topCustomerName && topCustomerPct > 50) {
+    // Concentration risk — diversify. Use lapsed buyers or fall back to outstanding customers
+    const { data: divCusts } = lapsedEntities.length === 0 ? await supabase
+      .from('customers').select('id, name, phone, outstanding_balance')
+      .eq('organisation_id', orgId).eq('status', 'active')
+      .is('deleted_at', null).gt('outstanding_balance', 0)
+      .order('outstanding_balance', { ascending: false }).limit(3)
+      : { data: null };
+    const divEntities = lapsedEntities.length > 0 ? lapsedEntities : (divCusts || []).map(c => ({
+      customer_id: c.id, customer_name: c.name, customer_phone: c.phone || null,
+      invoice_id: null, invoice_number: '', amount: Number(c.outstanding_balance || 0),
+    }));
+    const divOthersCount = divEntities.length - 1;
+    const divOthersStr = divOthersCount > 0 ? ` and ${divOthersCount} other${divOthersCount > 1 ? 's' : ''}` : '';
     next_action = {
-      text: lapsedEntities.length > 0
-        ? `${topCustomerName} is contributing ${topCustomerPct}% of revenue this month. ${lapsedEntities[0].customer_name}${othersStr} bought recently but haven't ordered this month — diversify now.`
+      text: divEntities.length > 0
+        ? `${topCustomerName} is contributing ${topCustomerPct}% of revenue. ${divEntities[0].customer_name}${divOthersStr} — reach out now to diversify your revenue base.`
         : `${topCustomerName} is contributing ${topCustomerPct}% of revenue. Reach out to other customers this week to diversify.`,
       type: 'reactivate_customer',
-      execution_mode: lapsedEntities.length > 1 ? 'bulk' : lapsedEntities.length === 1 ? 'single' : null,
-      entities: lapsedEntities,
-      prefill: lapsedEntities.length === 1 ? {
-        message: `${lapsedEntities[0].customer_name}, hope all is well. We would love to discuss your next order — shall we put together a fresh quote for you?`,
+      execution_mode: divEntities.length > 1 ? 'bulk' : divEntities.length === 1 ? 'single' : null,
+      entities: divEntities,
+      prefill: divEntities.length === 1 ? {
+        message: `${divEntities[0].customer_name}, hope all is well. We would love to discuss your next order — shall we put together a fresh quote for you?`,
         language: language || 'en',
       } : null,
     };
@@ -577,9 +590,27 @@ export async function revenueThisMonth(supabase, orgId, orgCurrency, openai, lan
       } : null,
     };
   } else {
+    // No lapsed buyers found — fall back to top outstanding customers as reactivation targets
+    const { data: fallbackCusts } = await supabase
+      .from('customers').select('id, name, phone, outstanding_balance')
+      .eq('organisation_id', orgId).eq('status', 'active')
+      .is('deleted_at', null).gt('outstanding_balance', 0)
+      .order('outstanding_balance', { ascending: false }).limit(3);
+    const fallbackEntities = (fallbackCusts || []).map(c => ({
+      customer_id: c.id, customer_name: c.name, customer_phone: c.phone || null,
+      invoice_id: null, invoice_number: '', amount: Number(c.outstanding_balance || 0),
+    }));
     next_action = {
-      text: `${formatCurrency(totalRevenue, orgCurrency)} billed across ${invoiceCount} invoice${invoiceCount !== 1 ? 's' : ''} this month. Keep the momentum going.`,
-      type: 'reactivate_customer', execution_mode: null, entities: [], prefill: null,
+      text: fallbackEntities.length > 0
+        ? `${formatCurrency(totalRevenue, orgCurrency)} billed this month. ${fallbackEntities[0].customer_name} has ${formatCurrency(fallbackEntities[0].amount, orgCurrency)} outstanding — collect now to strengthen month-end position.`
+        : `${formatCurrency(totalRevenue, orgCurrency)} billed across ${invoiceCount} invoice${invoiceCount !== 1 ? 's' : ''} this month. Keep the momentum going.`,
+      type: 'send_reminder',
+      execution_mode: fallbackEntities.length > 1 ? 'bulk' : fallbackEntities.length === 1 ? 'single' : null,
+      entities: fallbackEntities,
+      prefill: fallbackEntities.length === 1 ? {
+        message: `${fallbackEntities[0].customer_name}, this is a reminder that your account has an outstanding balance of ${formatCurrency(fallbackEntities[0].amount, orgCurrency)}. Kindly arrange payment at your earliest convenience.`,
+        language: language || 'en',
+      } : null,
     };
   }
 
