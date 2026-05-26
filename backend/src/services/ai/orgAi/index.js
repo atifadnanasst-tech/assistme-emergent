@@ -495,16 +495,95 @@ export async function revenueThisMonth(supabase, orgId, orgCurrency, openai, lan
     ],
   };
 
-  // Step 5: Nudge — deterministic rules engine, percentages computed above (never by GPT)
-  let next_action = null;
-  if (invoiceCount === 0) {
-    next_action = { text: 'No invoices this month yet. Create your first invoice to get started.' };
-  } else if (topCustomerName && topCustomerPct > 50) {
-    next_action = { text: `${topCustomerName} contributed ${topCustomerPct}% of this month's revenue (${formatCurrency(topCustomerRevenue, orgCurrency)}). Consider reducing concentration risk.` };
-  } else {
-    next_action = { text: `${formatCurrency(totalRevenue, orgCurrency)} billed across ${invoiceCount} invoice${invoiceCount !== 1 ? 's' : ''} this month. Keep the momentum going.` };
+  // Step 5: Lapsed buyer query — deterministic pipeline targets
+  // Customers who bought in previous 30-60 day window but NOT this month
+  const thirtyDaysAgo = new Date(new Date(todayIST() + 'T00:00:00').getTime() - 30 * 86400000).toISOString().split('T')[0];
+  const sixtyDaysAgo = new Date(new Date(todayIST() + 'T00:00:00').getTime() - 60 * 86400000).toISOString().split('T')[0];
+
+  const activeThisMonthIds = new Set(rows.map(inv => inv.customer_id));
+
+  const { data: prevInvoices } = await supabase
+    .from('invoices').select('customer_id, total_amount')
+    .eq('organisation_id', orgId).eq('is_historical', false)
+    .gte('issue_date', sixtyDaysAgo).lt('issue_date', rangeStart)
+    .not('status', 'in', '("draft","cancelled")')
+    .gt('total_amount', 0).is('deleted_at', null);
+
+  const lapsedMap = {};
+  for (const inv of prevInvoices || []) {
+    if (!activeThisMonthIds.has(inv.customer_id)) {
+      if (!lapsedMap[inv.customer_id]) lapsedMap[inv.customer_id] = { customer_id: inv.customer_id, total: 0 };
+      lapsedMap[inv.customer_id].total += Number(inv.total_amount || 0);
+    }
   }
 
+  let lapsedEntities = [];
+  const lapsedIds = Object.keys(lapsedMap);
+  if (lapsedIds.length > 0) {
+    const { data: lapsedCusts } = await supabase
+      .from('customers').select('id, name, phone')
+      .in('id', lapsedIds).eq('organisation_id', orgId);
+    for (const c of lapsedCusts || []) {
+      if (lapsedMap[c.id]) { lapsedMap[c.id].customer_name = c.name; lapsedMap[c.id].customer_phone = c.phone || null; }
+    }
+    lapsedEntities = Object.values(lapsedMap)
+      .filter(c => c.customer_name).sort((a, b) => b.total - a.total).slice(0, 5)
+      .map(c => ({
+        customer_id: c.customer_id, customer_name: c.customer_name, customer_phone: c.customer_phone,
+        invoice_id: null, invoice_number: '', amount: c.total,
+      }));
+  }
+
+  // Step 6: Typed next_action — revenue surface = growth/sales domain, never collections
+  const othersCount = lapsedEntities.length - 1;
+  const othersStr = othersCount > 0 ? ` and ${othersCount} other${othersCount > 1 ? 's' : ''}` : '';
+  let next_action = null;
+
+  if (invoiceCount === 0) {
+    next_action = {
+      text: lapsedEntities.length > 0
+        ? `No revenue this month yet. ${lapsedEntities[0].customer_name}${othersStr} bought recently — send them a fresh quote now to kick off the month.`
+        : 'No invoices this month yet. Create your first quote or invoice to get started.',
+      type: 'reactivate_customer',
+      execution_mode: lapsedEntities.length > 1 ? 'bulk' : lapsedEntities.length === 1 ? 'single' : null,
+      entities: lapsedEntities,
+      prefill: lapsedEntities.length === 1 ? {
+        message: `${lapsedEntities[0].customer_name}, hope all is well. We would love to discuss your next order — shall we put together a fresh quote for you?`,
+        language: language || 'en',
+      } : null,
+    };
+  } else if (topCustomerName && topCustomerPct > 50) {
+    next_action = {
+      text: lapsedEntities.length > 0
+        ? `${topCustomerName} is contributing ${topCustomerPct}% of revenue this month. ${lapsedEntities[0].customer_name}${othersStr} bought recently but haven't ordered this month — diversify now.`
+        : `${topCustomerName} is contributing ${topCustomerPct}% of revenue. Reach out to other customers this week to diversify.`,
+      type: 'reactivate_customer',
+      execution_mode: lapsedEntities.length > 1 ? 'bulk' : lapsedEntities.length === 1 ? 'single' : null,
+      entities: lapsedEntities,
+      prefill: lapsedEntities.length === 1 ? {
+        message: `${lapsedEntities[0].customer_name}, hope all is well. We would love to discuss your next order — shall we put together a fresh quote for you?`,
+        language: language || 'en',
+      } : null,
+    };
+  } else if (lapsedEntities.length > 0) {
+    next_action = {
+      text: `${formatCurrency(totalRevenue, orgCurrency)} billed this month. ${lapsedEntities[0].customer_name}${othersStr} bought recently but haven't ordered this month — send fresh quotes to accelerate revenue.`,
+      type: 'reactivate_customer',
+      execution_mode: lapsedEntities.length > 1 ? 'bulk' : 'single',
+      entities: lapsedEntities,
+      prefill: lapsedEntities.length === 1 ? {
+        message: `${lapsedEntities[0].customer_name}, hope all is well. We would love to discuss your next order — shall we put together a fresh quote for you?`,
+        language: language || 'en',
+      } : null,
+    };
+  } else {
+    next_action = {
+      text: `${formatCurrency(totalRevenue, orgCurrency)} billed across ${invoiceCount} invoice${invoiceCount !== 1 ? 's' : ''} this month. Keep the momentum going.`,
+      type: 'reactivate_customer', execution_mode: null, entities: [], prefill: null,
+    };
+  }
+
+  // Step 7: GPT narration — receives frozen computed truth, never raw rows
   // Step 6: GPT narration — receives frozen computed truth, never raw rows
   const response_text = await narrate({
     totalRevenue, invoiceCount, avgInvoiceValue,
