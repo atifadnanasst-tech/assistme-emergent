@@ -1417,6 +1417,76 @@ export async function goneSilent(supabase, orgId, orgCurrency, openai, language 
 }
 
 
+
+// -- FUNCTION 10: Top Sellers
+export async function topSellers(supabase, orgId, orgCurrency, openai, language = 'en') {
+  const start = Date.now();
+  const rangeStart = monthStartIST();
+  const today = todayIST();
+  const sevenDaysAgo = new Date(new Date(today + 'T00:00:00Z').getTime() - 7 * 86400000).toISOString().split('T')[0];
+  const { data: recentOutreach } = await supabase.from('action_log').select('entity_id').eq('organisation_id', orgId).eq('entity_type', 'customer').eq('signal_type', 'product_momentum_outreach').gte('actioned_at', sevenDaysAgo);
+  const cooldownOutreach = new Set((recentOutreach || []).map(r => r.entity_id));
+  const { data: monthInvoices } = await supabase.from('invoices').select('id, customer_id').eq('organisation_id', orgId).eq('is_historical', false).gte('issue_date', rangeStart).not('status', 'in', '("draft","cancelled")').is('deleted_at', null);
+  const invoiceIds = (monthInvoices || []).map(i => i.id);
+  const invoiceCustomerMap = {};
+  for (const inv of monthInvoices || []) invoiceCustomerMap[inv.id] = inv.customer_id;
+  const productTotals = {};
+  if (invoiceIds.length > 0) {
+    const { data: items } = await supabase.from('invoice_items').select('product_id, description, quantity, line_total, invoice_id').eq('organisation_id', orgId).in('invoice_id', invoiceIds).is('deleted_at', null);
+    for (const item of items || []) {
+      const key = item.product_id || ('desc:' + item.description);
+      if (!productTotals[key]) productTotals[key] = { product_id: item.product_id || null, name: item.description, revenue: 0, units_sold: 0, customer_ids: new Set() };
+      productTotals[key].revenue += Number(item.line_total || 0);
+      productTotals[key].units_sold += Number(item.quantity || 0);
+      const custId = invoiceCustomerMap[item.invoice_id];
+      if (custId) productTotals[key].customer_ids.add(custId);
+    }
+  }
+  const linkedProductIds = Object.values(productTotals).map(p => p.product_id).filter(Boolean);
+  if (linkedProductIds.length > 0) {
+    const { data: prodData } = await supabase.from('products').select('id, name, category').in('id', linkedProductIds).eq('organisation_id', orgId);
+    for (const prod of prodData || []) { if (productTotals[prod.id]) productTotals[prod.id].name = prod.name; }
+  }
+  const rankedProducts = Object.values(productTotals)
+    .map(p => ({ product_id: p.product_id, name: p.name, revenue: p.revenue, units_sold: p.units_sold, unique_customer_count: p.customer_ids.size }))
+    .sort((a, b) => b.revenue - a.revenue).slice(0, 5);
+  let reactivationEntities = [];
+  if (rankedProducts.length > 0 && rankedProducts[0].product_id) {
+    const topProductId = rankedProducts[0].product_id;
+    const { data: historicalItems } = await supabase.from('invoice_items').select('invoice_id').eq('organisation_id', orgId).eq('product_id', topProductId).is('deleted_at', null);
+    const historicalInvoiceIds = (historicalItems || []).map(i => i.invoice_id);
+    if (historicalInvoiceIds.length > 0) {
+      const { data: historicalInvs } = await supabase.from('invoices').select('customer_id').eq('organisation_id', orgId).in('id', historicalInvoiceIds).is('deleted_at', null);
+      const allBuyers = new Set((historicalInvs || []).map(i => i.customer_id));
+      const thisMonthBuyerIds = new Set((monthInvoices || []).map(i => i.customer_id));
+      const lapsedBuyerIds = [...allBuyers].filter(id => !thisMonthBuyerIds.has(id) && !cooldownOutreach.has(id));
+      if (lapsedBuyerIds.length > 0) {
+        const { data: lapsedCusts } = await supabase.from('customers').select('id, name, phone').in('id', lapsedBuyerIds).eq('organisation_id', orgId);
+        reactivationEntities = (lapsedCusts || []).slice(0, 5).map(c => ({ customer_id: c.id, customer_name: c.name, customer_phone: c.phone || null, invoice_id: null, invoice_number: '', amount: 0 }));
+      }
+    }
+  }
+  const totalRevenue = rankedProducts.reduce((s, p) => s + p.revenue, 0);
+  const chart_data = rankedProducts.length === 0
+    ? { type: 'insight', title: 'Top Sellers', text: 'No product sales recorded this month.', level: 'info' }
+    : { type: 'ranked_list', title: 'Top Sellers This Month', currency: orgCurrency, series: rankedProducts.map(p => ({ label: p.name, value: p.revenue, sublabel: Math.round(p.units_sold) + ' units' })), highlight: formatCurrency(totalRevenue, orgCurrency) + ' total from ' + rankedProducts.length + ' product' + (rankedProducts.length !== 1 ? 's' : ''), level: 'info' };
+  const topProduct = rankedProducts[0];
+  let next_action = null;
+  if (rankedProducts.length === 0) {
+    next_action = { text: 'No product sales this month.', type: 'create_quote', signal_type: 'product_momentum_outreach', source_surface: 'top_sellers', execution_mode: null, entities: [], prefill: null };
+  } else if (reactivationEntities.length > 0) {
+    const othersCount = reactivationEntities.length - 1;
+    const othersStr = othersCount > 0 ? ' and ' + othersCount + ' other' + (othersCount > 1 ? 's' : '') : '';
+    next_action = { text: topProduct.name + ' is your top product. ' + reactivationEntities[0].customer_name + othersStr + ' bought it before but not this month — reach out now.', type: 'reactivate_customer', signal_type: 'product_momentum_outreach', source_surface: 'top_sellers', execution_mode: reactivationEntities.length > 1 ? 'bulk' : 'single', entities: reactivationEntities, prefill: reactivationEntities.length === 1 ? { message: reactivationEntities[0].customer_name + ', ' + topProduct.name + ' is moving well this month. Would you like to place your next order?', language: language || 'en' } : null };
+  } else {
+    next_action = { text: topProduct.name + ' leads with ' + formatCurrency(topProduct.revenue, orgCurrency) + ' and ' + Math.round(topProduct.units_sold) + ' units. Create new quotes to keep the momentum.', type: 'create_quote', signal_type: 'product_momentum_outreach', source_surface: 'top_sellers', execution_mode: null, entities: [], prefill: null };
+  }
+  const response_text = await narrate({ count: rankedProducts.length, topProductName: topProduct?.name, topProductRevenue: topProduct?.revenue, topProductUnits: topProduct ? Math.round(topProduct.units_sold) : 0, topProductBuyers: topProduct?.unique_customer_count, lapsedBuyerCount: reactivationEntities.length, lapsedBuyerName: reactivationEntities[0]?.customer_name, totalRevenue, currency: orgCurrency }, 'top_sellers', openai, { language });
+  console.log('[orgAi]', { fn: 'topSellers', ms: Date.now() - start, products: rankedProducts.length, lapsedBuyers: reactivationEntities.length });
+  return { response_text, chart_data, next_action };
+}
+
+
 // ── Dispatcher ────────────────────────────────────────────────
 // Single entry point for all menu queries.
 // message_type injected here — individual functions do not set it.
@@ -1438,7 +1508,7 @@ export async function dispatchMenuQuery(menuId, supabase, orgId, orgCurrency, op
     case 'risk_alerts': result = await riskAlerts(supabase, orgId, orgCurrency, openai, language); break;
     case 'gone_silent': result = await goneSilent(supabase, orgId, orgCurrency, openai, language); break;
     // Session B — Products
-    case 'top_sellers':
+    case 'top_sellers': result = await topSellers(supabase, orgId, orgCurrency, openai, language); break;
     case 'low_stock':
     case 'slow_moving':
     // Session B — Ops
