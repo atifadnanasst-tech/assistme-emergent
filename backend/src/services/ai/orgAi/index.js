@@ -1051,6 +1051,105 @@ export async function weeklyTrend(supabase, orgId, orgCurrency, openai, language
 }
 
 
+
+// ── FUNCTION 7: Follow Up Today ────────────────────────────────
+// 3-signal priority waterfall: overdue → due-soon → expiring quotes
+// Cooldown: suppresses customers actioned for same signal within 7 days (via action_log)
+// Narration explains selection criteria naturally — builds owner trust and auditability
+// Future extraction: signal generation, ranking, cooldown, execution → isolated modules
+export async function followUpToday(supabase, orgId, orgCurrency, openai, language = 'en') {
+  const start = Date.now();
+  const today = todayIST();
+  const todayDate = new Date(`${today}T00:00:00Z`);
+  const threeDaysLater = new Date(todayDate.getTime() + 3 * 86400000).toISOString().split('T')[0];
+  const sevenDaysAgo = new Date(todayDate.getTime() - 7 * 86400000).toISOString().split('T')[0];
+  const SIGNAL_PRIORITY = ['follow_up_overdue','follow_up_due_soon','follow_up_quote_expiry'];
+  const exhaustedSignals = [];
+  const { data: recentOverdue } = await supabase.from('action_log').select('entity_id').eq('organisation_id', orgId).eq('entity_type', 'customer').eq('signal_type', 'follow_up_overdue').gte('actioned_at', sevenDaysAgo);
+  const { data: recentDueSoon } = await supabase.from('action_log').select('entity_id').eq('organisation_id', orgId).eq('entity_type', 'customer').eq('signal_type', 'follow_up_due_soon').gte('actioned_at', sevenDaysAgo);
+  const { data: recentQuote } = await supabase.from('action_log').select('entity_id').eq('organisation_id', orgId).eq('entity_type', 'customer').eq('signal_type', 'follow_up_quote_expiry').gte('actioned_at', sevenDaysAgo);
+  const cooldownOverdue = new Set((recentOverdue || []).map(r => r.entity_id));
+  const cooldownDueSoon = new Set((recentDueSoon || []).map(r => r.entity_id));
+  const cooldownQuote = new Set((recentQuote || []).map(r => r.entity_id));
+  const { data: overdueInvs } = await supabase.from('invoices').select('customer_id, amount_due, due_date, invoice_number').eq('organisation_id', orgId).eq('is_historical', false).in('status', ['sent', 'viewed', 'partial', 'overdue']).lt('due_date', today).gt('amount_due', 0).is('deleted_at', null);
+  const overdueByCustomer = {};
+  for (const inv of overdueInvs || []) {
+    if (!overdueByCustomer[inv.customer_id]) overdueByCustomer[inv.customer_id] = { total: 0, invoices: [] };
+    overdueByCustomer[inv.customer_id].total += Number(inv.amount_due || 0);
+    overdueByCustomer[inv.customer_id].invoices.push(inv.invoice_number);
+  }
+  const overdueSuppressedCount = Object.keys(overdueByCustomer).filter(id => cooldownOverdue.has(id)).length;
+  const overdueActive = Object.entries(overdueByCustomer).filter(([id]) => !cooldownOverdue.has(id));
+  if (overdueActive.length === 0 && Object.keys(overdueByCustomer).length > 0) exhaustedSignals.push('follow_up_overdue');
+  const { data: dueSoonInvs } = await supabase.from('invoices').select('customer_id, amount_due, due_date, invoice_number').eq('organisation_id', orgId).eq('is_historical', false).in('status', ['sent', 'viewed', 'partial']).gte('due_date', today).lte('due_date', threeDaysLater).gt('amount_due', 0).is('deleted_at', null);
+  const dueSoonByCustomer = {};
+  for (const inv of dueSoonInvs || []) {
+    if (!dueSoonByCustomer[inv.customer_id]) dueSoonByCustomer[inv.customer_id] = { total: 0, invoices: [], due_date: inv.due_date };
+    dueSoonByCustomer[inv.customer_id].total += Number(inv.amount_due || 0);
+    dueSoonByCustomer[inv.customer_id].invoices.push(inv.invoice_number);
+  }
+  const dueSoonSuppressedCount = Object.keys(dueSoonByCustomer).filter(id => cooldownDueSoon.has(id)).length;
+  const dueSoonActive = Object.entries(dueSoonByCustomer).filter(([id]) => !cooldownDueSoon.has(id));
+  if (dueSoonActive.length === 0 && Object.keys(dueSoonByCustomer).length > 0) exhaustedSignals.push('follow_up_due_soon');
+  const { data: expiringQuotes } = await supabase.from('quotations').select('customer_id, total_amount, expiry_date, quote_number').eq('organisation_id', orgId).in('status', ['sent', 'viewed']).gte('expiry_date', today).lte('expiry_date', threeDaysLater).gt('total_amount', 0).is('deleted_at', null);
+  const quoteByCustomer = {};
+  for (const q of expiringQuotes || []) {
+    if (!quoteByCustomer[q.customer_id]) quoteByCustomer[q.customer_id] = { total: 0, quotes: [], expiry_date: q.expiry_date };
+    quoteByCustomer[q.customer_id].total += Number(q.total_amount || 0);
+    quoteByCustomer[q.customer_id].quotes.push(q.quote_number);
+  }
+  const quoteSuppressedCount = Object.keys(quoteByCustomer).filter(id => cooldownQuote.has(id)).length;
+  const quoteActive = Object.entries(quoteByCustomer).filter(([id]) => !cooldownQuote.has(id));
+  if (quoteActive.length === 0 && Object.keys(quoteByCustomer).length > 0) exhaustedSignals.push('follow_up_quote_expiry');
+  let activeSignal = null, activeEntries = [], suppressedCount = 0, signalType = null;
+  if (overdueActive.length > 0) { activeSignal = 'overdue'; activeEntries = overdueActive; suppressedCount = overdueSuppressedCount; signalType = 'follow_up_overdue'; }
+  else if (dueSoonActive.length > 0) { activeSignal = 'due_soon'; activeEntries = dueSoonActive; suppressedCount = dueSoonSuppressedCount; signalType = 'follow_up_due_soon'; }
+  else if (quoteActive.length > 0) { activeSignal = 'quote_expiry'; activeEntries = quoteActive; suppressedCount = quoteSuppressedCount; signalType = 'follow_up_quote_expiry'; }
+  let followUpEntities = [];
+  if (activeEntries.length > 0) {
+    const customerIds = activeEntries.map(([id]) => id);
+    const { data: custData } = await supabase.from('customers').select('id, name, phone').in('id', customerIds).eq('organisation_id', orgId);
+    const custMap = {};
+    for (const c of custData || []) custMap[c.id] = c;
+    followUpEntities = activeEntries.sort((a, b) => b[1].total - a[1].total).slice(0, 5).map(([id, data]) => ({
+      customer_id: id, customer_name: custMap[id]?.name || 'Unknown', customer_phone: custMap[id]?.phone || null,
+      invoice_id: null, invoice_number: (data.invoices || data.quotes || []).join(', '), amount: data.total,
+    })).filter(e => e.customer_name !== 'Unknown');
+  }
+  const signalLabel = activeSignal === 'overdue' ? 'Overdue Invoices' : activeSignal === 'due_soon' ? 'Due in 3 Days' : activeSignal === 'quote_expiry' ? 'Expiring Quotes' : null;
+  const totalSuppressed = overdueSuppressedCount + dueSoonSuppressedCount + quoteSuppressedCount;
+  const chart_data = followUpEntities.length === 0 ? {
+    type: 'insight', title: 'Follow Up Today',
+    text: totalSuppressed > 0 ? `All ${totalSuppressed} customer(s) were already followed up within the last 7 days. Check back tomorrow.` : 'No follow-up actions needed today. All invoices and quotes are current.',
+    level: 'info',
+  } : {
+    type: 'ranked_list', title: signalLabel || 'Follow Up Today', currency: orgCurrency,
+    series: followUpEntities.map(e => ({ label: e.customer_name, value: e.amount })),
+    highlight: activeSignal === 'overdue' ? `${followUpEntities.length} overdue — act now` : activeSignal === 'due_soon' ? `${followUpEntities.length} due within 3 days` : `${followUpEntities.length} quotes expiring soon`,
+    level: activeSignal === 'overdue' ? 'warning' : 'info',
+  };
+  const othersCount = followUpEntities.length - 1;
+  const othersStr = othersCount > 0 ? ` and ${othersCount} other${othersCount > 1 ? 's' : ''}` : '';
+  let next_action = null;
+  if (followUpEntities.length === 0) {
+    next_action = { text: totalSuppressed > 0 ? `All ${totalSuppressed} follow-up customer(s) were already contacted within the last 7 days. Check back tomorrow.` : 'No follow-ups needed today. All invoices and quotes are current.', type: 'send_reminder', signal_type: signalType, source_surface: 'follow_up_today', execution_mode: null, entities: [], prefill: null };
+  } else {
+    const actionText = activeSignal === 'overdue' ? `${followUpEntities[0].customer_name}${othersStr} ${followUpEntities.length > 1 ? 'have' : 'has'} overdue invoices totalling ${formatCurrency(followUpEntities.reduce((s, e) => s + e.amount, 0), orgCurrency)} — send reminders immediately.` : activeSignal === 'due_soon' ? `${followUpEntities[0].customer_name}${othersStr} ${followUpEntities.length > 1 ? 'have' : 'has'} invoices due within 3 days — follow up now before they slip.` : `${followUpEntities[0].customer_name}${othersStr} ${followUpEntities.length > 1 ? 'have' : 'has'} quotes expiring within 3 days — follow up to protect the pipeline.`;
+    next_action = {
+      text: actionText, type: 'send_reminder', signal_type: signalType, source_surface: 'follow_up_today',
+      execution_mode: followUpEntities.length > 1 ? 'bulk' : 'single', entities: followUpEntities,
+      prefill: followUpEntities.length === 1 ? {
+        message: activeSignal === 'overdue' ? `${followUpEntities[0].customer_name}, your invoice(s) ${followUpEntities[0].invoice_number} totalling ${formatCurrency(followUpEntities[0].amount, orgCurrency)} are overdue. Kindly arrange payment immediately.` : activeSignal === 'due_soon' ? `${followUpEntities[0].customer_name}, a reminder that your invoice(s) ${followUpEntities[0].invoice_number} totalling ${formatCurrency(followUpEntities[0].amount, orgCurrency)} are due within 3 days. Kindly arrange payment in advance.` : `${followUpEntities[0].customer_name}, your quote ${followUpEntities[0].invoice_number} totalling ${formatCurrency(followUpEntities[0].amount, orgCurrency)} is expiring soon. Please let us know if you would like to proceed.`,
+        language: language || 'en',
+      } : null,
+    };
+  }
+  const response_text = await narrate({ activeSignal, signalLabel, count: followUpEntities.length, topName: followUpEntities[0]?.customer_name, topAmount: followUpEntities[0]?.amount, suppressedCount: totalSuppressed, exhaustedSignals, totalOverdue: overdueActive.length, totalDueSoon: dueSoonActive.length, totalQuoteExpiry: quoteActive.length, currency: orgCurrency }, 'follow_up_today', openai, { language });
+  console.log('[orgAi]', { fn: 'followUpToday', ms: Date.now() - start, signal: activeSignal, count: followUpEntities.length, suppressed: totalSuppressed, exhausted: exhaustedSignals });
+  return { response_text, chart_data, next_action };
+}
+
+
 // ── Dispatcher ────────────────────────────────────────────────
 // Single entry point for all menu queries.
 // message_type injected here — individual functions do not set it.
@@ -1068,7 +1167,7 @@ export async function dispatchMenuQuery(menuId, supabase, orgId, orgCurrency, op
     case 'invoices_due_this_week': result = await invoicesDueThisWeek(supabase, orgId, orgCurrency, openai, language); break;
     case 'weekly_trend': result = await weeklyTrend(supabase, orgId, orgCurrency, openai, language); break;
     // Session B — Customers
-    case 'follow_up_today':
+    case 'follow_up_today': result = await followUpToday(supabase, orgId, orgCurrency, openai, language); break;
     case 'risk_alerts':
     case 'gone_silent':
     // Session B — Products
