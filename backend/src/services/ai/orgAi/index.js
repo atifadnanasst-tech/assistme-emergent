@@ -1144,7 +1144,57 @@ export async function followUpToday(supabase, orgId, orgCurrency, openai, langua
       } : null,
     };
   }
-  const response_text = await narrate({ activeSignal, signalLabel, count: followUpEntities.length, topName: followUpEntities[0]?.customer_name, topAmount: followUpEntities[0]?.amount, suppressedCount: totalSuppressed, exhaustedSignals, totalOverdue: overdueActive.length, totalDueSoon: dueSoonActive.length, totalQuoteExpiry: quoteActive.length, currency: orgCurrency }, 'follow_up_today', openai, { language });
+  // FIX B: Fetch suppressed customer names for transparent narration
+  // Owner hears "Ania Adnan was already reminded" not "6 customers suppressed"
+  let suppressedNames = [];
+  const allCooldownIds = [...cooldownOverdue, ...cooldownDueSoon, ...cooldownQuote];
+  const uniqueCooldownIds = [...new Set(allCooldownIds)];
+  if (uniqueCooldownIds.length > 0) {
+    const { data: suppressedCusts } = await supabase
+      .from('customers').select('name')
+      .in('id', uniqueCooldownIds).eq('organisation_id', orgId);
+    suppressedNames = (suppressedCusts || []).map(c => c.name).slice(0, 4);
+  }
+
+  // FIX C: Fallback entities when all signals exhausted — no empty card
+  if (followUpEntities.length === 0 && next_action.entities.length === 0) {
+    const { data: fallbackCusts } = await supabase
+      .from('customers').select('id, name, phone, outstanding_balance')
+      .eq('organisation_id', orgId).eq('status', 'active')
+      .is('deleted_at', null).gt('outstanding_balance', 0)
+      .order('outstanding_balance', { ascending: false }).limit(3);
+    if (fallbackCusts && fallbackCusts.length > 0) {
+      const fallbackEntities = fallbackCusts.map(c => ({
+        customer_id: c.id, customer_name: c.name, customer_phone: c.phone || null,
+        invoice_id: null, invoice_number: '', amount: Number(c.outstanding_balance || 0),
+      }));
+      next_action = {
+        text: suppressedNames.length > 0
+          ? `${suppressedNames.slice(0, 2).join(', ')}${suppressedNames.length > 2 ? ` and ${suppressedNames.length - 2} others` : ''} were recently reminded. While you wait, consider chasing ${fallbackEntities[0].customer_name}'s outstanding balance.`
+          : `No urgent follow-ups today. Consider chasing ${fallbackEntities[0].customer_name}'s outstanding balance of ${formatCurrency(fallbackEntities[0].amount, orgCurrency)}.`,
+        type: 'send_reminder',
+        signal_type: 'proactive_collection',
+        source_surface: 'follow_up_today',
+        execution_mode: fallbackEntities.length > 1 ? 'bulk' : 'single',
+        entities: fallbackEntities,
+        prefill: null,
+      };
+    }
+  }
+
+  const response_text = await narrate({
+    activeSignal, signalLabel,
+    count: followUpEntities.length,
+    topName: followUpEntities[0]?.customer_name,
+    topAmount: followUpEntities[0]?.amount,
+    suppressedCount: totalSuppressed,
+    suppressedNames,
+    exhaustedSignals,
+    totalOverdue: overdueActive.length,
+    totalDueSoon: dueSoonActive.length,
+    totalQuoteExpiry: quoteActive.length,
+    currency: orgCurrency,
+  }, 'follow_up_today', openai, { language });
   console.log('[orgAi]', { fn: 'followUpToday', ms: Date.now() - start, signal: activeSignal, count: followUpEntities.length, suppressed: totalSuppressed, exhausted: exhaustedSignals });
   return { response_text, chart_data, next_action };
 }
