@@ -1287,6 +1287,136 @@ export async function riskAlerts(supabase, orgId, orgCurrency, openai, language 
 }
 
 
+
+// ── FUNCTION 9: Gone Silent ────────────────────────────────────
+// Identifies high-value customers who stopped buying (30-90 day window)
+// NOT collections — this is revenue decay / relationship reactivation
+// Minimum threshold: total >= 1000 to filter noise at scale
+// days_silent + last_order_amount enable rich narration and future scoring
+// action_log tracks reactivation attempts → future churn scoring via repeated silence
+export async function goneSilent(supabase, orgId, orgCurrency, openai, language = 'en') {
+  const start = Date.now();
+  const today = todayIST();
+  const todayDate = new Date(`${today}T00:00:00Z`);
+  const thirtyDaysAgo = new Date(todayDate.getTime() - 30 * 86400000).toISOString().split('T')[0];
+  const ninetyDaysAgo = new Date(todayDate.getTime() - 90 * 86400000).toISOString().split('T')[0];
+  const sevenDaysAgo = new Date(todayDate.getTime() - 7 * 86400000).toISOString().split('T')[0];
+
+  // COOLDOWN — 7-day window, reactivation-specific signal
+  const { data: recentReactivation } = await supabase.from('action_log').select('entity_id')
+    .eq('organisation_id', orgId).eq('entity_type', 'customer')
+    .eq('signal_type', 'gone_silent_reactivation').gte('actioned_at', sevenDaysAgo);
+  const cooldownReactivation = new Set((recentReactivation || []).map(r => r.entity_id));
+
+  // Customers active in last 30 days — exclude (still buying)
+  const { data: recentActiveInvs } = await supabase.from('invoices').select('customer_id')
+    .eq('organisation_id', orgId).eq('is_historical', false)
+    .gte('issue_date', thirtyDaysAgo).is('deleted_at', null);
+  const activeCustomerIds = new Set((recentActiveInvs || []).map(i => i.customer_id));
+
+  // Customers who bought in 30-90 day window — these went silent
+  const { data: silentInvs } = await supabase.from('invoices')
+    .select('customer_id, total_amount, issue_date')
+    .eq('organisation_id', orgId).eq('is_historical', false)
+    .gte('issue_date', ninetyDaysAgo).lt('issue_date', thirtyDaysAgo)
+    .not('status', 'in', '("draft","cancelled")')
+    .gt('total_amount', 0).is('deleted_at', null);
+
+  // Group by customer — compute total value + most recent order
+  const silentByCustomer = {};
+  for (const inv of silentInvs || []) {
+    if (activeCustomerIds.has(inv.customer_id)) continue;
+    if (!silentByCustomer[inv.customer_id]) silentByCustomer[inv.customer_id] = { total: 0, last_issue_date: null, last_order_amount: 0 };
+    silentByCustomer[inv.customer_id].total += Number(inv.total_amount || 0);
+    if (!silentByCustomer[inv.customer_id].last_issue_date || inv.issue_date > silentByCustomer[inv.customer_id].last_issue_date) {
+      silentByCustomer[inv.customer_id].last_issue_date = inv.issue_date;
+      silentByCustomer[inv.customer_id].last_order_amount = Number(inv.total_amount || 0);
+    }
+  }
+
+  // Enrich with customer name + phone
+  const silentIds = Object.keys(silentByCustomer);
+  let custMap = {};
+  if (silentIds.length > 0) {
+    const { data: custData } = await supabase.from('customers').select('id, name, phone')
+      .in('id', silentIds).eq('organisation_id', orgId);
+    for (const c of custData || []) custMap[c.id] = c;
+  }
+
+  // Build entities — minimum threshold 1000 to filter noise
+  // Sort by total historical value (highest lost opportunity first)
+  const silentEntities = Object.entries(silentByCustomer)
+    .filter(([id, data]) => data.total >= 1000 && !cooldownReactivation.has(id) && custMap[id])
+    .map(([id, data]) => {
+      const days_silent = Math.floor((todayDate - new Date(`${data.last_issue_date}T00:00:00Z`)) / 86400000);
+      return {
+        customer_id: id, customer_name: custMap[id].name, customer_phone: custMap[id].phone || null,
+        invoice_id: null, invoice_number: '', amount: data.total,
+        days_silent, last_order_amount: data.last_order_amount,
+      };
+    })
+    .sort((a, b) => b.amount - a.amount)
+    .slice(0, 5);
+
+  const suppressedCount = Object.keys(silentByCustomer).filter(id => cooldownReactivation.has(id)).length;
+  const totalSilent = Object.keys(silentByCustomer).filter(([id, data]) => silentByCustomer[id].total >= 1000).length;
+
+  // Chart
+  const chart_data = silentEntities.length === 0 ? {
+    type: 'insight', title: 'Gone Silent',
+    text: suppressedCount > 0
+      ? `${suppressedCount} silent customer(s) were recently contacted. Check back in a few days.`
+      : 'No recently silent customers. All significant buyers are engaged.',
+    level: 'info',
+  } : {
+    type: 'ranked_list', title: 'Gone Silent', currency: orgCurrency,
+    series: silentEntities.map(e => ({ label: e.customer_name, value: e.amount, sublabel: `${e.days_silent} days silent` })),
+    highlight: `${silentEntities.length} customer${silentEntities.length > 1 ? 's' : ''} inactive 30+ days`,
+    level: 'info',
+  };
+
+  // Typed next_action — warm reactivation, not collections
+  const othersCount = silentEntities.length - 1;
+  const othersStr = othersCount > 0 ? ` and ${othersCount} other${othersCount > 1 ? 's' : ''}` : '';
+  let next_action = null;
+
+  if (silentEntities.length === 0) {
+    next_action = {
+      text: suppressedCount > 0
+        ? `${suppressedCount} silent customer(s) were already reached out to recently. Check back in a few days.`
+        : 'No silent customers to reactivate. All significant buyers are engaged.',
+      type: 'reactivate_customer', signal_type: 'gone_silent_reactivation',
+      source_surface: 'gone_silent', execution_mode: null, entities: [], prefill: null,
+    };
+  } else {
+    const topEntity = silentEntities[0];
+    next_action = {
+      text: `${topEntity.customer_name}${othersStr} ${silentEntities.length > 1 ? 'have' : 'has'} been inactive for ${topEntity.days_silent} days. Last order: ${formatCurrency(topEntity.last_order_amount, orgCurrency)}. Reach out now before the relationship cools further.`,
+      type: 'reactivate_customer', signal_type: 'gone_silent_reactivation',
+      source_surface: 'gone_silent',
+      execution_mode: silentEntities.length > 1 ? 'bulk' : 'single',
+      entities: silentEntities,
+      prefill: silentEntities.length === 1 ? {
+        message: `${topEntity.customer_name}, it has been a while since your last order. We value your business and would love to reconnect — is there anything we can help you with or a new order we can assist you on?`,
+        language: language || 'en',
+      } : null,
+    };
+  }
+
+  const response_text = await narrate({
+    count: silentEntities.length,
+    topName: silentEntities[0]?.customer_name,
+    topDaysSilent: silentEntities[0]?.days_silent,
+    topLastOrderAmount: silentEntities[0]?.last_order_amount,
+    topTotalValue: silentEntities[0]?.amount,
+    suppressedCount, totalSilent, currency: orgCurrency,
+  }, 'gone_silent', openai, { language });
+
+  console.log('[orgAi]', { fn: 'goneSilent', ms: Date.now() - start, count: silentEntities.length, suppressed: suppressedCount });
+  return { response_text, chart_data, next_action };
+}
+
+
 // ── Dispatcher ────────────────────────────────────────────────
 // Single entry point for all menu queries.
 // message_type injected here — individual functions do not set it.
@@ -1306,7 +1436,7 @@ export async function dispatchMenuQuery(menuId, supabase, orgId, orgCurrency, op
     // Session B — Customers
     case 'follow_up_today': result = await followUpToday(supabase, orgId, orgCurrency, openai, language); break;
     case 'risk_alerts': result = await riskAlerts(supabase, orgId, orgCurrency, openai, language); break;
-    case 'gone_silent':
+    case 'gone_silent': result = await goneSilent(supabase, orgId, orgCurrency, openai, language); break;
     // Session B — Products
     case 'top_sellers':
     case 'low_stock':
