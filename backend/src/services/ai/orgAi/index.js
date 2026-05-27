@@ -180,6 +180,8 @@ export async function collectionsToday(supabase, orgId, orgCurrency, openai, lan
         ? `No collections yet today. ${formatCurrency(totalOutstandingAmt, orgCurrency)} outstanding across ${outstandingEntities.length} customer${outstandingEntities.length > 1 ? 's' : ''} — start chasing now.`
         : 'No collections yet today. No outstanding balances — create new invoices to build pipeline.',
       type: 'send_reminder',
+      signal_type: 'revenue_recovery',
+      source_surface: 'collections_today',
       execution_mode: outstandingEntities.length > 1 ? 'bulk' : outstandingEntities.length === 1 ? 'single' : null,
       entities: outstandingEntities,
       prefill: outstandingEntities.length === 1 ? {
@@ -193,6 +195,8 @@ export async function collectionsToday(supabase, orgId, orgCurrency, openai, lan
         ? `${formatCurrency(total, orgCurrency)} collected — below daily average. ${outstandingEntities[0].customer_name} has ${formatCurrency(outstandingEntities[0].amount, orgCurrency)} outstanding. Follow up now.`
         : `${formatCurrency(total, orgCurrency)} collected — below daily average. Push for more collections today.`,
       type: 'send_reminder',
+      signal_type: 'proactive_collection',
+      source_surface: 'collections_today',
       execution_mode: outstandingEntities.length > 1 ? 'bulk' : outstandingEntities.length === 1 ? 'single' : null,
       entities: outstandingEntities,
       prefill: outstandingEntities.length === 1 ? {
@@ -209,6 +213,8 @@ export async function collectionsToday(supabase, orgId, orgCurrency, openai, lan
         ? `Strong day — ${formatCurrency(total, orgCurrency)} collected. ${dormantEntities[0].customer_name}${othersStr} haven't reordered recently — reach out now to expand revenue.`
         : `Strong day — ${formatCurrency(total, orgCurrency)} collected. Keep momentum — push outstanding customers to close the day even stronger.`,
       type: dormantEntities.length > 0 ? 'reactivate_customer' : 'send_reminder',
+      signal_type: 'momentum_expansion',
+      source_surface: 'collections_today',
       execution_mode: growthEntities.length > 1 ? 'bulk' : growthEntities.length === 1 ? 'single' : null,
       entities: growthEntities,
       prefill: growthEntities.length === 1 ? {
@@ -301,12 +307,14 @@ export async function totalOutstanding(supabase, orgId, orgCurrency, openai, lan
   if (count === 0) {
     next_action = {
       text: "All accounts clear. No outstanding receivables — create new quotes to build tomorrow's pipeline.",
-      type: 'create_quote', execution_mode: null, entities: [], prefill: null,
+      type: 'create_quote', signal_type: 'revenue_recovery', source_surface: 'total_outstanding', execution_mode: null, entities: [], prefill: null,
     };
   } else if (overdueCount > 0) {
     next_action = {
       text: `${overdueCount} invoice${overdueCount !== 1 ? 's' : ''} overdue. ${outstandingEntities[0]?.customer_name}${othersStr} — send reminders immediately.`,
       type: 'send_reminder',
+      signal_type: 'overdue_collection',
+      source_surface: 'total_outstanding',
       execution_mode: outstandingEntities.length > 1 ? 'bulk' : 'single',
       entities: outstandingEntities,
       prefill: outstandingEntities.length === 1 ? {
@@ -318,6 +326,8 @@ export async function totalOutstanding(supabase, orgId, orgCurrency, openai, lan
     next_action = {
       text: `${formatCurrency(total, orgCurrency)} outstanding across ${count} customer${count !== 1 ? 's' : ''}. ${outstandingEntities[0]?.customer_name} owes ${formatCurrency(outstandingEntities[0]?.amount || 0, orgCurrency)} — send a reminder before it becomes overdue.`,
       type: 'send_reminder',
+      signal_type: 'proactive_collection',
+      source_surface: 'total_outstanding',
       execution_mode: outstandingEntities.length > 1 ? 'bulk' : 'single',
       entities: outstandingEntities,
       prefill: outstandingEntities.length === 1 ? {
@@ -437,6 +447,8 @@ export async function topCustomers(supabase, orgId, orgCurrency, openai, languag
         ? `No sales this month yet. ${recoveryEntities[0].customer_name}${rOthersStr} have outstanding balances — reconnect and create fresh invoices.`
         : 'No sales this month yet. Create your first invoice to get started.',
       type: 'reactivate_customer',
+      signal_type: 'customer_reactivation',
+      source_surface: 'top_customers',
       execution_mode: recoveryEntities.length > 1 ? 'bulk' : recoveryEntities.length === 1 ? 'single' : null,
       entities: recoveryEntities,
       prefill: recoveryEntities.length === 1 ? {
@@ -454,6 +466,8 @@ export async function topCustomers(supabase, orgId, orgCurrency, openai, languag
         ? `${ranked[0].name} is ${Math.round((ranked[0].total / grandTotal) * 100)}% of revenue — concentration risk. Reach out to ${diversifyEntities[0].customer_name}${dOthersStr} to grow other accounts.`
         : `${ranked[0].name} is ${Math.round((ranked[0].total / grandTotal) * 100)}% of revenue. Diversify by creating invoices for other customers this week.`,
       type: 'reactivate_customer',
+      signal_type: 'concentration_risk',
+      source_surface: 'top_customers',
       execution_mode: diversifyEntities.length > 1 ? 'bulk' : diversifyEntities.length === 1 ? 'single' : null,
       entities: diversifyEntities.length > 0 ? diversifyEntities : topEntities,
       prefill: diversifyEntities.length === 1 ? {
@@ -469,6 +483,8 @@ export async function topCustomers(supabase, orgId, orgCurrency, openai, languag
     next_action = {
       text: `${ranked[0].name} leads this month with ${formatCurrency(ranked[0].total, orgCurrency)}. Follow up with ${momentumEntities[0].customer_name}${mOthersStr} to deepen momentum and explore larger orders.`,
       type: 'reactivate_customer',
+      signal_type: 'momentum_expansion',
+      source_surface: 'top_customers',
       execution_mode: momentumEntities.length > 1 ? 'bulk' : 'single',
       entities: momentumEntities,
       prefill: momentumEntities.length === 1 ? {
@@ -614,6 +630,8 @@ export async function revenueThisMonth(supabase, orgId, orgCurrency, openai, lan
         ? `No revenue this month yet. ${lapsedEntities[0].customer_name}${othersStr} bought recently — send them a fresh quote now to kick off the month.`
         : 'No invoices this month yet. Create your first quote or invoice to get started.',
       type: 'reactivate_customer',
+      signal_type: 'pipeline_growth',
+      source_surface: 'revenue_this_month',
       execution_mode: lapsedEntities.length > 1 ? 'bulk' : lapsedEntities.length === 1 ? 'single' : null,
       entities: lapsedEntities,
       prefill: lapsedEntities.length === 1 ? {
@@ -640,6 +658,8 @@ export async function revenueThisMonth(supabase, orgId, orgCurrency, openai, lan
         ? `${topCustomerName} is contributing ${topCustomerPct}% of revenue. ${divEntities[0].customer_name}${divOthersStr} — reach out now to diversify your revenue base.`
         : `${topCustomerName} is contributing ${topCustomerPct}% of revenue. Reach out to other customers this week to diversify.`,
       type: 'reactivate_customer',
+      signal_type: 'concentration_risk',
+      source_surface: 'revenue_this_month',
       execution_mode: divEntities.length > 1 ? 'bulk' : divEntities.length === 1 ? 'single' : null,
       entities: divEntities,
       prefill: divEntities.length === 1 ? {
@@ -651,6 +671,8 @@ export async function revenueThisMonth(supabase, orgId, orgCurrency, openai, lan
     next_action = {
       text: `${formatCurrency(totalRevenue, orgCurrency)} billed this month. ${lapsedEntities[0].customer_name}${othersStr} bought recently but haven't ordered this month — send fresh quotes to accelerate revenue.`,
       type: 'reactivate_customer',
+      signal_type: 'pipeline_growth',
+      source_surface: 'revenue_this_month',
       execution_mode: lapsedEntities.length > 1 ? 'bulk' : 'single',
       entities: lapsedEntities,
       prefill: lapsedEntities.length === 1 ? {
@@ -674,6 +696,8 @@ export async function revenueThisMonth(supabase, orgId, orgCurrency, openai, lan
         ? `${formatCurrency(totalRevenue, orgCurrency)} billed this month. ${fallbackEntities[0].customer_name} has ${formatCurrency(fallbackEntities[0].amount, orgCurrency)} outstanding — collect now to strengthen month-end position.`
         : `${formatCurrency(totalRevenue, orgCurrency)} billed across ${invoiceCount} invoice${invoiceCount !== 1 ? 's' : ''} this month. Keep the momentum going.`,
       type: 'send_reminder',
+      signal_type: 'proactive_collection',
+      source_surface: 'revenue_this_month',
       execution_mode: fallbackEntities.length > 1 ? 'bulk' : fallbackEntities.length === 1 ? 'single' : null,
       entities: fallbackEntities,
       prefill: fallbackEntities.length === 1 ? {
@@ -789,6 +813,8 @@ export async function invoicesDueThisWeek(supabase, orgId, orgCurrency, openai, 
     next_action = {
       text: "No invoices due this week. Strong week to create new quotes and grow the pipeline.",
       type: 'create_quote',
+      signal_type: 'pipeline_growth',
+      source_surface: 'invoices_due_this_week',
       execution_mode: null,
       entities: [],
       prefill: null,
@@ -817,6 +843,8 @@ export async function invoicesDueThisWeek(supabase, orgId, orgCurrency, openai, 
     next_action = {
       text: `${dueToday.length} invoice(s) due TODAY totalling ${formatCurrency(dueTodayTotal, orgCurrency)}. Follow up immediately.`,
       type: 'send_reminder',
+      signal_type: 'overdue_collection',
+      source_surface: 'invoices_due_this_week',
       execution_mode: uniqueTodayCustomers > 1 ? 'bulk' : 'single',
       entities: urgentEntities,
       prefill: uniqueTodayCustomers === 1 ? {
@@ -848,6 +876,8 @@ export async function invoicesDueThisWeek(supabase, orgId, orgCurrency, openai, 
     next_action = {
       text: `Next invoice due in ${allEntities[0].invoices?.[0]?.days || ranked[0].days_until_due} day(s) from ${allEntities[0].customer_name} — ${formatCurrency(allEntities[0].amount, orgCurrency)}.`,
       type: 'send_reminder',
+      signal_type: 'proactive_collection',
+      source_surface: 'invoices_due_this_week',
       execution_mode: uniqueLaterCustomers > 1 ? 'bulk' : 'single',
       entities: allEntities,
       prefill: uniqueLaterCustomers === 1 ? {
@@ -1002,6 +1032,8 @@ export async function weeklyTrend(supabase, orgId, orgCurrency, openai, language
   const next_action = {
     text: actionText,
     type: targetEntities.length > 0 ? 'reactivate_customer' : 'send_reminder',
+      signal_type: direction === 'up' ? 'momentum_expansion' : direction === 'down' ? 'customer_reactivation' : 'customer_reactivation',
+      source_surface: 'weekly_trend',
     execution_mode: targetEntities.length > 1 ? 'bulk' : targetEntities.length === 1 ? 'single' : null,
     entities: targetEntities,
     prefill: targetEntities.length === 1 ? { message: targetEntities[0].message, language: language || 'en' } : null,
