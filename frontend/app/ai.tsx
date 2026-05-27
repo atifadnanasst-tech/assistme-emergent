@@ -357,11 +357,13 @@ export default function AIScreen() {
     setActionModalData(null);
   };
 
-  const handleSimulatedConfirm = (checkedEntities: ActionEntity[], message: string) => {
+  const handleSimulatedConfirm = async (checkedEntities: ActionEntity[], message: string) => {
     const names = checkedEntities.map(e => e.customer_name);
     const nameStr = names.length === 1
       ? names[0]
       : names.slice(0, -1).join(', ') + ' & ' + names[names.length - 1];
+
+    // Show confirmation message immediately
     const confirmMsg: AIMessage = {
       id: `sim-${Date.now()}`,
       role: 'assistant',
@@ -374,6 +376,33 @@ export default function AIScreen() {
     };
     setMessages((prev: any) => [confirmMsg, ...prev]);
     closeActionModal();
+
+    // Write to action_log via execute-action endpoint (fire and forget)
+    // This powers cooldown filtering and closed-loop analytics
+    try {
+      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.access_token && actionModalData) {
+        fetch(`${backendUrl}/api/home/execute-action`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({
+            action_type: actionModalData.type,
+            signal_type: actionModalData.signal_type || null,
+            source_surface: actionModalData.source_surface || null,
+            channel: 'whatsapp',
+            execution_mode: actionModalData.execution_mode,
+            entities: checkedEntities,
+            message,
+          }),
+        }).catch(err => console.warn('[execute-action] fire-and-forget failed:', err));
+      }
+    } catch (err) {
+      console.warn('[execute-action] session error:', err);
+    }
   };
 
   const handleSend = async () => {

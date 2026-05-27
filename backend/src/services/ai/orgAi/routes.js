@@ -21,6 +21,7 @@
  */
 
 import { dispatchMenuQuery } from './index.js';
+import { randomUUID } from 'crypto';
 
 // ── Server-owned menu labels ──────────────────────────────────
 // Backend owns these — never trust frontend-supplied labels.
@@ -270,6 +271,80 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
 
     } catch (error) {
       console.error('POST /api/home/ai-query error:', error);
+      return c.json({ error: 'server_error' }, 500);
+    }
+  });
+
+  // ── POST /api/home/execute-action ─────────────────────────────
+  // Centralized action execution endpoint — business intent layer
+  // Writes to action_log. Future: WhatsApp send, email, workflows, retries.
+  // org context derived from JWT — never trusted from frontend.
+  app.post('/api/home/execute-action', async (c) => {
+    try {
+      const auth = await authenticateChat(c);
+      if (!auth) return c.json({ error: 'unauthorized' }, 401);
+      const { organisationId, userId } = auth;
+
+      const body = await c.req.json();
+      const {
+        action_type,
+        signal_type = null,
+        source_surface = null,
+        channel = 'whatsapp',
+        execution_mode = null,
+        entities = [],
+        message = null,
+      } = body;
+
+      if (!action_type) return c.json({ error: 'action_type required' }, 400);
+
+      const execution_id = randomUUID();
+
+      if (entities.length > 0) {
+        const rows = entities
+          .map(entity => ({
+            organisation_id: organisationId,
+            entity_type: 'customer',
+            entity_id: entity.customer_id,
+            action_type,
+            signal_type,
+            source_surface,
+            execution_id,
+            channel,
+            status: 'simulated', // Future: sent → delivered → responded → failed lifecycle
+            actor_user_id: userId || null,
+            metadata: {
+              origin: 'org_ai',
+              customer_name: entity.customer_name,
+              amount: entity.amount,
+              invoice_number: entity.invoice_number || null,
+              message: message || null,
+              execution_mode,
+              action_type,
+              signal_type,
+              source_surface,
+            },
+            actioned_at: new Date().toISOString(),
+          }))
+          .filter(r => r.entity_id); // Guard: skip null entity_id rows
+
+        if (rows.length > 0) {
+          const { error: insertError } = await supabase
+            .from('action_log')
+            .insert(rows);
+
+          if (insertError) {
+            console.error('[execute-action] action_log insert error:', insertError.message);
+            return c.json({ error: 'log_failed' }, 500);
+          }
+        }
+      }
+
+      console.log('[execute-action]', { action_type, signal_type, source_surface, entities: entities.length, execution_id });
+      return c.json({ success: true, execution_id, logged: entities.length });
+
+    } catch (error) {
+      console.error('POST /api/home/execute-action error:', error);
       return c.json({ error: 'server_error' }, 500);
     }
   });

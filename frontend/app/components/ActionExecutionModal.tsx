@@ -35,6 +35,8 @@ export interface ActionData {
   execution_mode: 'single' | 'bulk' | null;
   entities: ActionEntity[];
   prefill: { message: string; language: string } | null;
+  signal_type?: string | null;
+  source_surface?: string | null;
 }
 
 interface Props {
