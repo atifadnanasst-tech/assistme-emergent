@@ -1487,6 +1487,105 @@ export async function topSellers(supabase, orgId, orgCurrency, openai, language 
 }
 
 
+
+// -- FUNCTION 11: Low Stock
+// Flags products at or below reorder_point with track_inventory=true
+// Severity = qty/reorder_point ratio (lower = more critical)
+// Entities reuse customer fields for supplier (v1 pragmatic reuse of ActionExecutionModal)
+// TODO: add entity_type:'supplier' when ActionExecutionModal supports non-customer entities
+export async function lowStock(supabase, orgId, orgCurrency, openai, language = 'en') {
+  const start = Date.now();
+  const { data: allInv } = await supabase
+    .from('inventory').select('product_id, quantity, reorder_point, reorder_qty')
+    .eq('organisation_id', orgId).gt('reorder_point', 0).is('deleted_at', null);
+  const lowInvItems = (allInv || []).filter(i => Number(i.quantity) <= Number(i.reorder_point));
+  if (lowInvItems.length === 0) {
+    const response_text = await narrate({ count: 0, topProductName: null, topQty: null, topReorderPoint: null, currency: orgCurrency }, 'low_stock', openai, { language });
+    return {
+      response_text,
+      chart_data: { type: 'insight', title: 'Low Stock', text: 'All products are adequately stocked. No reorder action required.', level: 'info' },
+      next_action: { text: 'All products are adequately stocked. No reorder needed.', type: 'create_purchase_order', signal_type: 'low_stock_reorder', source_surface: 'low_stock', execution_mode: null, entities: [], prefill: null },
+    };
+  }
+  const productIds = lowInvItems.map(i => i.product_id);
+  const { data: products } = await supabase
+    .from('products').select('id, name, category, unit')
+    .in('id', productIds).eq('organisation_id', orgId)
+    .eq('is_active', true).eq('track_inventory', true).is('deleted_at', null);
+  const productMap = {};
+  for (const p of products || []) productMap[p.id] = p;
+  const { data: supplierProducts } = await supabase
+    .from('supplier_products').select('product_id, supplier_id, lead_time_days, min_order_qty, is_preferred')
+    .eq('organisation_id', orgId).in('product_id', productIds).is('deleted_at', null);
+  const supplierByProduct = {};
+  for (const sp of supplierProducts || []) {
+    if (!supplierByProduct[sp.product_id] || sp.is_preferred) supplierByProduct[sp.product_id] = sp;
+  }
+  const supplierIds = [...new Set(Object.values(supplierByProduct).map(sp => sp.supplier_id))];
+  const supplierMap = {};
+  if (supplierIds.length > 0) {
+    const { data: suppliers } = await supabase
+      .from('suppliers').select('id, name, phone')
+      .in('id', supplierIds).eq('organisation_id', orgId);
+    for (const s of suppliers || []) supplierMap[s.id] = s;
+  }
+  const lowStockItems = lowInvItems
+    .filter(i => productMap[i.product_id])
+    .map(i => {
+      const product = productMap[i.product_id];
+      const sp = supplierByProduct[i.product_id];
+      const supplier = sp ? supplierMap[sp.supplier_id] : null;
+      const qty = Number(i.quantity);
+      const reorderPoint = Number(i.reorder_point);
+      const reorderQty = Number(i.reorder_qty) || reorderPoint * 2;
+      return {
+        product_id: i.product_id, product_name: product.name,
+        category: product.category, unit: product.unit,
+        quantity: qty, reorder_point: reorderPoint, reorder_qty: reorderQty,
+        severity: reorderPoint > 0 ? qty / reorderPoint : 0,
+        supplier_id: supplier?.id || null, supplier_name: supplier?.name || null,
+        supplier_phone: supplier?.phone || null, lead_time_days: sp?.lead_time_days || 0,
+      };
+    })
+    .sort((a, b) => a.severity - b.severity)
+    .slice(0, 5);
+  const chart_data = {
+    type: 'ranked_list', title: 'Low Stock Alert', currency: null,
+    series: lowStockItems.map(i => ({ label: i.product_name, value: i.quantity, sublabel: i.quantity + ' ' + i.unit + ' left \u00b7 reorder at ' + i.reorder_point })),
+    highlight: lowStockItems.length + ' product' + (lowStockItems.length !== 1 ? 's' : '') + ' need reordering',
+    level: 'warning',
+  };
+  const supplierEntities = lowStockItems
+    .filter(i => i.supplier_id)
+    .map(i => ({
+      customer_id: i.supplier_id, customer_name: i.supplier_name,
+      customer_phone: i.supplier_phone, invoice_id: null,
+      invoice_number: i.product_name, amount: i.reorder_qty,
+    }));
+  const topItem = lowStockItems[0];
+  const othersCount = lowStockItems.length - 1;
+  const othersStr = othersCount > 0 ? ' and ' + othersCount + ' other' + (othersCount > 1 ? 's' : '') : '';
+  const next_action = {
+    text: topItem.product_name + othersStr + ' ' + (lowStockItems.length > 1 ? 'are' : 'is') + ' below reorder point. ' + (topItem.supplier_name ? 'Contact ' + topItem.supplier_name + ' to reorder.' : 'Place a reorder immediately.'),
+    type: 'create_purchase_order', signal_type: 'low_stock_reorder', source_surface: 'low_stock',
+    execution_mode: supplierEntities.length > 1 ? 'bulk' : supplierEntities.length === 1 ? 'single' : null,
+    entities: supplierEntities,
+    prefill: supplierEntities.length === 1 ? {
+      message: supplierEntities[0].customer_name + ', we need to reorder ' + supplierEntities[0].invoice_number + '. Current stock is critically low. Please confirm availability of ' + supplierEntities[0].amount + ' units.',
+      language: language || 'en',
+    } : null,
+  };
+  const response_text = await narrate({
+    count: lowStockItems.length, topProductName: topItem?.product_name,
+    topQty: topItem?.quantity, topReorderPoint: topItem?.reorder_point,
+    topSupplierName: topItem?.supplier_name, topLeadTime: topItem?.lead_time_days,
+    currency: orgCurrency,
+  }, 'low_stock', openai, { language });
+  console.log('[orgAi]', { fn: 'lowStock', ms: Date.now() - start, count: lowStockItems.length });
+  return { response_text, chart_data, next_action };
+}
+
+
 // ── Dispatcher ────────────────────────────────────────────────
 // Single entry point for all menu queries.
 // message_type injected here — individual functions do not set it.
@@ -1509,7 +1608,7 @@ export async function dispatchMenuQuery(menuId, supabase, orgId, orgCurrency, op
     case 'gone_silent': result = await goneSilent(supabase, orgId, orgCurrency, openai, language); break;
     // Session B — Products
     case 'top_sellers': result = await topSellers(supabase, orgId, orgCurrency, openai, language); break;
-    case 'low_stock':
+    case 'low_stock': result = await lowStock(supabase, orgId, orgCurrency, openai, language); break;
     case 'slow_moving':
     // Session B — Ops
     case 'deliveries_today':
