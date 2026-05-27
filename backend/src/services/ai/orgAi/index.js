@@ -1200,6 +1200,93 @@ export async function followUpToday(supabase, orgId, orgCurrency, openai, langua
 }
 
 
+
+// ── FUNCTION 8: Risk Alerts ────────────────────────────────────
+// 3 structural risk signals: severely overdue + multiple unpaid + credit exceeded
+// Different from followUpToday: severity-based not timing-based
+// risk_level + risk_reason fields enable future UI tiers and escalation workflows
+// TODO: extract buildRiskEntities(), getRiskCooldowns(), buildRiskChart() when > 3 signals
+export async function riskAlerts(supabase, orgId, orgCurrency, openai, language = 'en') {
+  const start = Date.now();
+  const today = todayIST();
+  const todayDate = new Date(`${today}T00:00:00Z`);
+  const thirtyDaysAgo = new Date(todayDate.getTime() - 30 * 86400000).toISOString().split('T')[0];
+  const sevenDaysAgo = new Date(todayDate.getTime() - 7 * 86400000).toISOString().split('T')[0];
+  const { data: recentOverdueRisk } = await supabase.from('action_log').select('entity_id').eq('organisation_id', orgId).eq('entity_type', 'customer').eq('signal_type', 'risk_alert_overdue').gte('actioned_at', sevenDaysAgo);
+  const { data: recentCreditRisk } = await supabase.from('action_log').select('entity_id').eq('organisation_id', orgId).eq('entity_type', 'customer').eq('signal_type', 'risk_alert_credit_exceeded').gte('actioned_at', sevenDaysAgo);
+  const cooldownOverdueRisk = new Set((recentOverdueRisk || []).map(r => r.entity_id));
+  const cooldownCreditRisk = new Set((recentCreditRisk || []).map(r => r.entity_id));
+  const { data: overdueInvs } = await supabase.from('invoices').select('customer_id, amount_due, due_date, invoice_number').eq('organisation_id', orgId).eq('is_historical', false).in('status', ['sent', 'viewed', 'partial', 'overdue']).lt('due_date', thirtyDaysAgo).gt('amount_due', 0).is('deleted_at', null);
+  const severeByCustomer = {};
+  for (const inv of overdueInvs || []) {
+    if (!severeByCustomer[inv.customer_id]) severeByCustomer[inv.customer_id] = { total: 0, invoices: [], max_days_overdue: 0 };
+    const daysOverdue = Math.floor((todayDate - new Date(`${inv.due_date}T00:00:00Z`)) / 86400000);
+    severeByCustomer[inv.customer_id].total += Number(inv.amount_due || 0);
+    severeByCustomer[inv.customer_id].invoices.push(inv.invoice_number);
+    severeByCustomer[inv.customer_id].max_days_overdue = Math.max(severeByCustomer[inv.customer_id].max_days_overdue, daysOverdue);
+  }
+  const { data: allOverdueInvs } = await supabase.from('invoices').select('customer_id, amount_due, invoice_number').eq('organisation_id', orgId).eq('is_historical', false).in('status', ['sent', 'viewed', 'partial', 'overdue']).lt('due_date', today).gt('amount_due', 0).is('deleted_at', null);
+  const multipleByCustomer = {};
+  for (const inv of allOverdueInvs || []) {
+    if (!multipleByCustomer[inv.customer_id]) multipleByCustomer[inv.customer_id] = { total: 0, invoices: [] };
+    multipleByCustomer[inv.customer_id].total += Number(inv.amount_due || 0);
+    multipleByCustomer[inv.customer_id].invoices.push(inv.invoice_number);
+  }
+  const multipleRisk = Object.entries(multipleByCustomer).filter(([id, data]) => data.invoices.length >= 2 && !severeByCustomer[id]);
+  const { data: creditBreached } = await supabase.from('customers').select('id, name, phone, outstanding_balance, credit_limit').eq('organisation_id', orgId).eq('status', 'active').is('deleted_at', null).gt('credit_limit', 0);
+  const creditRisk = (creditBreached || []).filter(c => Number(c.outstanding_balance) > Number(c.credit_limit)).map(c => ({ customer_id: c.id, customer_name: c.name, customer_phone: c.phone || null, outstanding: Number(c.outstanding_balance), limit: Number(c.credit_limit), breach: Number(c.outstanding_balance) - Number(c.credit_limit) }));
+  const allRiskIds = [...new Set([...Object.keys(severeByCustomer), ...multipleRisk.map(([id]) => id)])];
+  let custMap = {};
+  if (allRiskIds.length > 0) {
+    const { data: custData } = await supabase.from('customers').select('id, name, phone').in('id', allRiskIds).eq('organisation_id', orgId);
+    for (const c of custData || []) custMap[c.id] = c;
+  }
+  const riskEntities = [];
+  const addedIds = new Set();
+  for (const [id, data] of Object.entries(severeByCustomer).sort((a, b) => b[1].total - a[1].total)) {
+    if (cooldownOverdueRisk.has(id)) continue;
+    const cust = custMap[id];
+    if (!cust) continue;
+    riskEntities.push({ customer_id: id, customer_name: cust.name, customer_phone: cust.phone || null, invoice_id: null, invoice_number: data.invoices.join(', '), amount: data.total, risk_signal: 'severely_overdue', risk_reason: `${data.max_days_overdue} days overdue`, days_overdue: data.max_days_overdue });
+    addedIds.add(id);
+  }
+  for (const [id, data] of multipleRisk.sort((a, b) => b[1].total - a[1].total)) {
+    if (cooldownOverdueRisk.has(id) || addedIds.has(id)) continue;
+    const cust = custMap[id];
+    if (!cust) continue;
+    riskEntities.push({ customer_id: id, customer_name: cust.name, customer_phone: cust.phone || null, invoice_id: null, invoice_number: data.invoices.join(', '), amount: data.total, risk_signal: 'multiple_overdue', risk_reason: `${data.invoices.length} unpaid invoices`, days_overdue: null });
+    addedIds.add(id);
+  }
+  for (const c of creditRisk.filter(c => !cooldownCreditRisk.has(c.customer_id) && !addedIds.has(c.customer_id)).slice(0, 3)) {
+    riskEntities.push({ customer_id: c.customer_id, customer_name: c.customer_name, customer_phone: c.customer_phone, invoice_id: null, invoice_number: '', amount: c.outstanding, risk_signal: 'credit_exceeded', risk_reason: `Exceeded credit limit by ${formatCurrency(c.breach, orgCurrency)}`, days_overdue: null });
+    addedIds.add(c.customer_id);
+  }
+  const topEntities = riskEntities.slice(0, 5);
+  const hasSevere = Object.keys(severeByCustomer).some(id => !cooldownOverdueRisk.has(id));
+  const hasMultiple = multipleRisk.some(([id]) => !cooldownOverdueRisk.has(id));
+  const hasCreditBreach = creditRisk.some(c => !cooldownCreditRisk.has(c.customer_id));
+  const risk_level = hasSevere ? 'danger' : (hasMultiple || hasCreditBreach) ? 'warning' : 'low';
+  const primarySignal = hasSevere ? 'severely_overdue' : hasMultiple ? 'multiple_overdue' : hasCreditBreach ? 'credit_exceeded' : null;
+  const chartLevel = risk_level === 'danger' ? 'warning' : 'info';
+  const chart_data = topEntities.length === 0 ? { type: 'insight', title: 'Risk Alerts', text: 'No active risk signals. All accounts are within normal parameters.', level: 'info' } : { type: 'ranked_list', title: 'Risk Accounts', currency: orgCurrency, series: topEntities.map(e => ({ label: e.customer_name, value: e.amount, sublabel: e.risk_reason })), highlight: hasSevere ? `${Object.keys(severeByCustomer).length} account(s) 30+ days overdue` : hasMultiple ? `${multipleRisk.length} account(s) with multiple unpaid invoices` : `${creditRisk.length} account(s) over credit limit`, level: chartLevel };
+  const othersCount = topEntities.length - 1;
+  const othersStr = othersCount > 0 ? ` and ${othersCount} other${othersCount > 1 ? 's' : ''}` : '';
+  let next_action = null;
+  if (topEntities.length === 0) {
+    next_action = { text: 'No risk accounts detected. All relationships are within normal parameters.', type: 'send_reminder', signal_type: null, source_surface: 'risk_alerts', risk_level: 'low', execution_mode: null, entities: [], prefill: null };
+  } else {
+    const topEntity = topEntities[0];
+    const daysStr = topEntity.days_overdue ? `${topEntity.days_overdue} days overdue` : topEntity.risk_reason;
+    const actionText = primarySignal === 'severely_overdue' ? `${topEntity.customer_name}${othersStr} ${topEntities.length > 1 ? 'are' : 'is'} ${daysStr} — escalate immediately.` : primarySignal === 'multiple_overdue' ? `${topEntity.customer_name}${othersStr} ${topEntities.length > 1 ? 'have' : 'has'} ${topEntity.risk_reason} — behavioral pattern, not a one-off delay.` : `${topEntity.customer_name}${othersStr} ${topEntities.length > 1 ? 'have' : 'has'} exceeded credit limit — consider pausing new orders.`;
+    const escalationMsg = primarySignal === 'severely_overdue' ? `${topEntity.customer_name}, your invoice(s) ${topEntity.invoice_number} totalling ${formatCurrency(topEntity.amount, orgCurrency)} ${topEntity.days_overdue ? `are ${topEntity.days_overdue} days overdue` : 'are significantly overdue'}. This requires immediate settlement.` : primarySignal === 'multiple_overdue' ? `${topEntity.customer_name}, you have ${topEntity.risk_reason} totalling ${formatCurrency(topEntity.amount, orgCurrency)}. Kindly arrange payment for all outstanding amounts immediately.` : `${topEntity.customer_name}, your outstanding balance of ${formatCurrency(topEntity.amount, orgCurrency)} has exceeded your agreed credit limit. Kindly settle at your earliest to continue our business relationship.`;
+    next_action = { text: actionText, type: 'send_reminder', signal_type: primarySignal === 'credit_exceeded' ? 'risk_alert_credit_exceeded' : 'risk_alert_overdue', source_surface: 'risk_alerts', risk_level, execution_mode: topEntities.length > 1 ? 'bulk' : 'single', entities: topEntities, prefill: topEntities.length === 1 ? { message: escalationMsg, language: language || 'en' } : null };
+  }
+  const response_text = await narrate({ primarySignal, risk_level, count: topEntities.length, topName: topEntities[0]?.customer_name, topAmount: topEntities[0]?.amount, topRiskReason: topEntities[0]?.risk_reason, daysOverdue: topEntities[0]?.days_overdue || null, severeOverdueCount: Object.keys(severeByCustomer).length, multipleOverdueCount: multipleRisk.length, creditBreachCount: creditRisk.length, currency: orgCurrency }, 'risk_alerts', openai, { language });
+  console.log('[orgAi]', { fn: 'riskAlerts', ms: Date.now() - start, risk_level, count: topEntities.length, signal: primarySignal });
+  return { response_text, chart_data, next_action };
+}
+
+
 // ── Dispatcher ────────────────────────────────────────────────
 // Single entry point for all menu queries.
 // message_type injected here — individual functions do not set it.
@@ -1218,7 +1305,7 @@ export async function dispatchMenuQuery(menuId, supabase, orgId, orgCurrency, op
     case 'weekly_trend': result = await weeklyTrend(supabase, orgId, orgCurrency, openai, language); break;
     // Session B — Customers
     case 'follow_up_today': result = await followUpToday(supabase, orgId, orgCurrency, openai, language); break;
-    case 'risk_alerts':
+    case 'risk_alerts': result = await riskAlerts(supabase, orgId, orgCurrency, openai, language); break;
     case 'gone_silent':
     // Session B — Products
     case 'top_sellers':
