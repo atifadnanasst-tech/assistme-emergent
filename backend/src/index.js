@@ -1952,8 +1952,8 @@ Action rules:
 - If intent is truly unclear return empty actions array with confidence_score below 0.50.
 - No markdown. No preamble. JSON only.`;
 
-const FINANCIAL_INTENTS = ['create_invoice', 'create_quote', 'record_payment', 'set_reminder', 'goods_returned', 'record_expense', 'convert_quote_to_invoice'];
-const ALLOWED_INTENTS = ['create_invoice', 'create_quote', 'convert_quote_to_invoice', 'schedule_delivery', 'update_delivery_status', 'set_reminder', 'record_payment', 'goods_returned', 'record_expense', 'query', 'ambiguous'];
+const FINANCIAL_INTENTS = ['create_invoice', 'create_quote', 'record_payment', 'set_reminder', 'goods_returned', 'record_expense', 'convert_quote_to_invoice', 'create_purchase_bill', 'record_supplier_payment'];
+const ALLOWED_INTENTS = ['create_invoice', 'create_quote', 'convert_quote_to_invoice', 'schedule_delivery', 'update_delivery_status', 'set_reminder', 'record_payment', 'goods_returned', 'record_expense', 'create_purchase_bill', 'record_supplier_payment', 'query', 'ambiguous'];
 
 function parseSparkResponse(text) {
   try {
@@ -3241,6 +3241,86 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
             break;
           }
 
+
+          case 'create_purchase_bill': {
+            // CENTRALIZED PRIMITIVE — calls recordPurchaseBill() via API route
+            // Never inline. Follows BUILD-BESIDE-THEN-MIGRATE doctrine.
+            // params.items: [{ product_id, description, quantity, unit_price, tax_rate }]
+            // params.due_date, params.bill_number, params.notes are optional
+            const { recordPurchaseBill } = await import('./services/business/recordPurchaseBill.js');
+            const pbResult = await recordPurchaseBill(supabase, organisationId, customerId, params.items || [], {
+              dueDate: params.due_date || null,
+              billNumber: params.bill_number || null,
+              supplierBillNumber: params.supplier_bill_number || null,
+              notes: params.notes || null,
+            });
+            if (pbResult.status === 'failed') {
+              failed.push(actionId);
+              break;
+            }
+            const { data: pbConv } = await supabase
+              .from('conversations').select('id')
+              .eq('organisation_id', organisationId).eq('entity_type', 'customer')
+              .eq('entity_id', customerId).eq('status', 'active').maybeSingle();
+            if (pbConv) {
+              await supabase.from('messages').insert({
+                organisation_id: organisationId, conversation_id: pbConv.id,
+                role: 'system',
+                content: `✓ Purchase bill ${pbResult.bill_number} recorded — ${pbResult.entity_name} · ₹${(pbResult.total_amount || 0).toLocaleString('en-IN')} due ${pbResult.due_date || ''}`,
+                metadata: { sender_type: 'system', visibility: 'owner_only', message_type: 'system_alert', read_by_owner: true, preview_text: `Purchase bill ${pbResult.bill_number} recorded` },
+                tokens_input: 0, tokens_output: 0,
+              });
+            }
+            executed.push(actionId);
+            break;
+          }
+
+          case 'record_supplier_payment': {
+            // CENTRALIZED PRIMITIVE — calls recordSupplierPayment() via service
+            // Never inline. Mirrors record_payment case pattern exactly.
+            // params.amount: number (required)
+            // params.payment_mode, params.bill_id, params.bank_account_name are optional
+            if (!params.amount || params.amount <= 0) { failed.push(actionId); break; }
+            const { recordSupplierPayment } = await import('./services/business/recordSupplierPayment.js');
+            let bankAccountId = null;
+            if (params.bank_account_name) {
+              try {
+                const { data: bankAcc } = await supabase
+                  .from('bank_accounts').select('id')
+                  .eq('organisation_id', organisationId)
+                  .ilike('name', `%${params.bank_account_name}%`)
+                  .eq('is_active', true).limit(1).maybeSingle();
+                if (bankAcc) bankAccountId = bankAcc.id;
+              } catch {}
+            }
+            const spResult = await recordSupplierPayment(supabase, organisationId, customerId, Number(params.amount), {
+              paymentDate: params.payment_date || null,
+              paymentMethod: params.payment_mode || null,
+              billId: params.bill_id || null,
+              bankAccountId,
+              notes: params.notes || null,
+            });
+            if (spResult.status === 'failed') {
+              failed.push(actionId);
+              break;
+            }
+            const { data: spConv } = await supabase
+              .from('conversations').select('id')
+              .eq('organisation_id', organisationId).eq('entity_type', 'customer')
+              .eq('entity_id', customerId).eq('status', 'active').maybeSingle();
+            if (spConv) {
+              const paidStr = spResult.bills_paid_full?.length > 0 ? ` · ${spResult.bills_paid_full.length} bill(s) fully paid` : '';
+              await supabase.from('messages').insert({
+                organisation_id: organisationId, conversation_id: spConv.id,
+                role: 'system',
+                content: `✓ Payment of ₹${(spResult.total_applied || 0).toLocaleString('en-IN')} recorded to ${spResult.entity_name}${paidStr}`,
+                metadata: { sender_type: 'system', visibility: 'owner_only', message_type: 'system_alert', read_by_owner: true, preview_text: `Payment to ${spResult.entity_name} recorded` },
+                tokens_input: 0, tokens_output: 0,
+              });
+            }
+            executed.push(actionId);
+            break;
+          }
 
           default:
             failed.push(actionId);
