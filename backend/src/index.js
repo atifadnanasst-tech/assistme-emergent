@@ -7,6 +7,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { registerAIRoutes, getOpenAI } from './ai-routes.js';
 import { registerOrgAiRoutes } from './services/ai/orgAi/routes.js';
+import { registerSupplierRoutes } from './services/business/supplierRoutes.js';
 import { recordPayment } from './services/business/recordPayment.js';
 import { extractVisualization } from './services/ai/visualizationParser.js';
 import PDFDocument from 'pdfkit';
@@ -5674,6 +5675,7 @@ export { supabase };
 if (supabase) {
   registerAIRoutes(app, supabase);
   registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI);
+  registerSupplierRoutes(app, supabase, authenticateChat);
   console.log('✅ AI routes registered');
 }
 
