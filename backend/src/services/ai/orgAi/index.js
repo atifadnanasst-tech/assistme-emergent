@@ -1586,6 +1586,311 @@ export async function lowStock(supabase, orgId, orgCurrency, openai, language = 
 }
 
 
+
+// ── whatIOwe ─────────────────────────────────────────────────
+// Total outstanding payables across all entities with purchase bills.
+// Grouped by entity, sorted by oldest due date first.
+// Gives owner their daily "what do I need to pay today" view.
+export async function whatIOwe(supabase, orgId, orgCurrency, openai, language = 'en') {
+  const start = Date.now();
+  const today = todayIST();
+
+  const { data: bills } = await supabase
+    .from('purchase_bills')
+    .select('customer_id, amount_due, total_amount, due_date, status')
+    .eq('organisation_id', orgId)
+    .eq('is_historical', false)
+    .is('deleted_at', null)
+    .not('customer_id', 'is', null)
+    .not('status', 'in', '("paid","cancelled")')
+    .gt('amount_due', 0);
+
+  const allBills = bills || [];
+
+  if (allBills.length === 0) {
+    const response_text = await narrate({ total: 0, count: 0, overdueCount: 0, currency: orgCurrency }, 'what_i_owe', openai, { language });
+    return {
+      response_text,
+      chart_data: { type: 'insight', title: 'What I Owe', text: 'No outstanding payables. All supplier bills are settled.', level: 'info' },
+      next_action: { text: 'No outstanding payables. All supplier bills are settled.', type: 'none', signal_type: 'proactive_collection', source_surface: 'what_i_owe', execution_mode: null, entities: [], prefill: null },
+    };
+  }
+
+  const byEntity = {};
+  for (const bill of allBills) {
+    const cid = bill.customer_id;
+    if (!byEntity[cid]) byEntity[cid] = { amount_due: 0, oldest_due_date: null, bill_count: 0 };
+    byEntity[cid].amount_due = Math.round((byEntity[cid].amount_due + Number(bill.amount_due)) * 100) / 100;
+    byEntity[cid].bill_count++;
+    if (!byEntity[cid].oldest_due_date || (bill.due_date && bill.due_date < byEntity[cid].oldest_due_date)) {
+      byEntity[cid].oldest_due_date = bill.due_date;
+    }
+  }
+
+  const entityIds = Object.keys(byEntity);
+  const { data: customers } = await supabase
+    .from('customers').select('id, name, phone')
+    .in('id', entityIds).eq('organisation_id', orgId);
+  const custMap = {};
+  for (const c of customers || []) custMap[c.id] = c;
+
+  const totalOwed = Object.values(byEntity).reduce((s, e) => s + e.amount_due, 0);
+  const overdueCount = allBills.filter(b => b.due_date && b.due_date < today).length;
+
+  const entries = Object.entries(byEntity)
+    .filter(([id]) => custMap[id])
+    .map(([id, data]) => ({
+      customer_id: id,
+      customer_name: custMap[id].name,
+      customer_phone: custMap[id].phone || null,
+      invoice_id: null, invoice_number: '',
+      amount: data.amount_due,
+      oldest_due_date: data.oldest_due_date,
+      bill_count: data.bill_count,
+    }))
+    .sort((a, b) => {
+      if (!a.oldest_due_date) return 1;
+      if (!b.oldest_due_date) return -1;
+      return a.oldest_due_date.localeCompare(b.oldest_due_date);
+    })
+    .slice(0, 5);
+
+  const chart_data = {
+    type: 'ranked_list', title: 'What I Owe', currency: orgCurrency,
+    series: entries.map(e => ({
+      label: e.customer_name,
+      value: e.amount,
+      sublabel: e.oldest_due_date
+        ? (e.oldest_due_date < today ? `Overdue since ${e.oldest_due_date}` : `Due ${e.oldest_due_date}`)
+        : `${e.bill_count} bill(s)`,
+    })),
+    highlight: `${formatCurrency(Math.round(totalOwed * 100) / 100, orgCurrency)} total payable`,
+    level: overdueCount > 0 ? 'warning' : 'info',
+  };
+
+  const topEntity = entries[0];
+  const othersCount = entries.length - 1;
+  const othersStr = othersCount > 0 ? ` and ${othersCount} other${othersCount > 1 ? 's' : ''}` : '';
+
+  const next_action = {
+    text: `${topEntity.customer_name}${othersStr} — ${formatCurrency(Math.round(totalOwed * 100) / 100, orgCurrency)} total outstanding. ${overdueCount > 0 ? `${overdueCount} bill(s) are overdue.` : ''}`,
+    type: 'record_supplier_payment',
+    signal_type: 'overdue_collection',
+    source_surface: 'what_i_owe',
+    execution_mode: entries.length > 1 ? 'bulk' : 'single',
+    entities: entries,
+    prefill: null,
+  };
+
+  const response_text = await narrate({
+    total: formatCurrency(Math.round(totalOwed * 100) / 100, orgCurrency),
+    count: entries.length,
+    overdueCount,
+    topName: topEntity?.customer_name,
+    currency: orgCurrency,
+  }, 'what_i_owe', openai, { language });
+
+  console.log('[orgAi]', { fn: 'whatIOwe', ms: Date.now() - start, count: entries.length, total: totalOwed });
+  return { response_text, chart_data, next_action };
+}
+
+// ── overduePayables ───────────────────────────────────────────
+// Purchase bills past their due date. Shows who owner is late paying
+// and by how many days — suppliers at risk of cutting off supply.
+export async function overduePayables(supabase, orgId, orgCurrency, openai, language = 'en') {
+  const start = Date.now();
+  const today = todayIST();
+
+  const { data: bills } = await supabase
+    .from('purchase_bills')
+    .select('customer_id, amount_due, total_amount, due_date, bill_number, status')
+    .eq('organisation_id', orgId)
+    .eq('is_historical', false)
+    .is('deleted_at', null)
+    .not('customer_id', 'is', null)
+    .not('status', 'in', '("paid","cancelled")')
+    .gt('amount_due', 0)
+    .lt('due_date', today);
+
+  const overdueBills = bills || [];
+
+  if (overdueBills.length === 0) {
+    const response_text = await narrate({ count: 0, topName: null, currency: orgCurrency }, 'overdue_payables', openai, { language });
+    return {
+      response_text,
+      chart_data: { type: 'insight', title: 'Overdue Payables', text: 'No overdue supplier bills. All payables are within terms.', level: 'info' },
+      next_action: { text: 'No overdue supplier bills. All payables are within terms.', type: 'none', signal_type: 'overdue_collection', source_surface: 'overdue_payables', execution_mode: null, entities: [], prefill: null },
+    };
+  }
+
+  const byEntity = {};
+  const todayDate = new Date(`${today}T00:00:00Z`);
+  for (const bill of overdueBills) {
+    const cid = bill.customer_id;
+    const daysOverdue = bill.due_date
+      ? Math.floor((todayDate - new Date(`${bill.due_date}T00:00:00Z`)) / 86400000)
+      : 0;
+    if (!byEntity[cid]) byEntity[cid] = { amount_due: 0, max_days_overdue: 0, bill_count: 0 };
+    byEntity[cid].amount_due = Math.round((byEntity[cid].amount_due + Number(bill.amount_due)) * 100) / 100;
+    byEntity[cid].bill_count++;
+    if (daysOverdue > byEntity[cid].max_days_overdue) byEntity[cid].max_days_overdue = daysOverdue;
+  }
+
+  const entityIds = Object.keys(byEntity);
+  const { data: customers } = await supabase
+    .from('customers').select('id, name, phone')
+    .in('id', entityIds).eq('organisation_id', orgId);
+  const custMap = {};
+  for (const c of customers || []) custMap[c.id] = c;
+
+  const entries = Object.entries(byEntity)
+    .filter(([id]) => custMap[id])
+    .map(([id, data]) => ({
+      customer_id: id,
+      customer_name: custMap[id].name,
+      customer_phone: custMap[id].phone || null,
+      invoice_id: null, invoice_number: '',
+      amount: data.amount_due,
+      days_overdue: data.max_days_overdue,
+      bill_count: data.bill_count,
+    }))
+    .sort((a, b) => b.days_overdue - a.days_overdue)
+    .slice(0, 5);
+
+  const chart_data = {
+    type: 'risk_list', title: 'Overdue Payables', currency: orgCurrency,
+    series: entries.map(e => ({
+      label: e.customer_name,
+      value: e.amount,
+      sublabel: `${e.days_overdue} days overdue`,
+      risk_level: e.days_overdue > 30 ? 'danger' : 'warning',
+    })),
+    highlight: `${entries.length} supplier${entries.length > 1 ? 's' : ''} with overdue bills`,
+    level: 'warning',
+  };
+
+  const topEntity = entries[0];
+  const othersCount = entries.length - 1;
+  const othersStr = othersCount > 0 ? ` and ${othersCount} other${othersCount > 1 ? 's' : ''}` : '';
+
+  const next_action = {
+    text: `${topEntity.customer_name}${othersStr} — payment overdue by ${topEntity.days_overdue} days. Pay now to protect supply relationships.`,
+    type: 'record_supplier_payment',
+    signal_type: 'overdue_collection',
+    source_surface: 'overdue_payables',
+    execution_mode: entries.length > 1 ? 'bulk' : 'single',
+    entities: entries,
+    prefill: null,
+  };
+
+  const response_text = await narrate({
+    count: entries.length,
+    topName: topEntity?.customer_name,
+    topDaysOverdue: topEntity?.days_overdue,
+    topAmount: formatCurrency(topEntity?.amount, orgCurrency),
+    currency: orgCurrency,
+  }, 'overdue_payables', openai, { language });
+
+  console.log('[orgAi]', { fn: 'overduePayables', ms: Date.now() - start, count: entries.length });
+  return { response_text, chart_data, next_action };
+}
+
+// ── topSupplier ───────────────────────────────────────────────
+// Who the owner buys from most by total purchase value this month.
+// Identifies which supplier relationships are most critical to protect.
+export async function topSupplier(supabase, orgId, orgCurrency, openai, language = 'en') {
+  const start = Date.now();
+  const today = todayIST();
+  const todayDate = new Date(`${today}T00:00:00Z`);
+  const thirtyDaysAgo = new Date(todayDate.getTime() - 30 * 86400000).toISOString().split('T')[0];
+
+  const { data: bills } = await supabase
+    .from('purchase_bills')
+    .select('customer_id, total_amount, issue_date')
+    .eq('organisation_id', orgId)
+    .eq('is_historical', false)
+    .is('deleted_at', null)
+    .not('customer_id', 'is', null)
+    .gte('issue_date', thirtyDaysAgo);
+
+  const allBills = bills || [];
+
+  if (allBills.length === 0) {
+    const response_text = await narrate({ topName: null, currency: orgCurrency }, 'top_supplier', openai, { language });
+    return {
+      response_text,
+      chart_data: { type: 'insight', title: 'Top Supplier', text: 'No purchase bills recorded this month.', level: 'info' },
+      next_action: { text: 'No purchase bills recorded this month.', type: 'none', signal_type: 'low_stock_reorder', source_surface: 'top_supplier', execution_mode: null, entities: [], prefill: null },
+    };
+  }
+
+  const byEntity = {};
+  for (const bill of allBills) {
+    const cid = bill.customer_id;
+    if (!byEntity[cid]) byEntity[cid] = { total: 0, bill_count: 0, last_purchase_date: null };
+    byEntity[cid].total = Math.round((byEntity[cid].total + Number(bill.total_amount)) * 100) / 100;
+    byEntity[cid].bill_count++;
+    if (!byEntity[cid].last_purchase_date || bill.issue_date > byEntity[cid].last_purchase_date) {
+      byEntity[cid].last_purchase_date = bill.issue_date;
+    }
+  }
+
+  const entityIds = Object.keys(byEntity);
+  const { data: customers } = await supabase
+    .from('customers').select('id, name, phone')
+    .in('id', entityIds).eq('organisation_id', orgId);
+  const custMap = {};
+  for (const c of customers || []) custMap[c.id] = c;
+
+  const entries = Object.entries(byEntity)
+    .filter(([id]) => custMap[id])
+    .map(([id, data]) => ({
+      customer_id: id,
+      customer_name: custMap[id].name,
+      customer_phone: custMap[id].phone || null,
+      invoice_id: null, invoice_number: '',
+      amount: data.total,
+      bill_count: data.bill_count,
+      last_purchase_date: data.last_purchase_date,
+    }))
+    .sort((a, b) => b.amount - a.amount)
+    .slice(0, 5);
+
+  const topEntity = entries[0];
+
+  const chart_data = {
+    type: 'ranked_list', title: 'Top Suppliers (30 days)', currency: orgCurrency,
+    series: entries.map(e => ({
+      label: e.customer_name,
+      value: e.amount,
+      sublabel: `${e.bill_count} bill${e.bill_count > 1 ? 's' : ''} · last ${e.last_purchase_date}`,
+    })),
+    highlight: `${entries.length} supplier${entries.length > 1 ? 's' : ''} this month`,
+    level: 'info',
+  };
+
+  const next_action = {
+    text: `${topEntity.customer_name} is your top supplier this month at ${formatCurrency(topEntity.amount, orgCurrency)}.`,
+    type: 'none',
+    signal_type: 'low_stock_reorder',
+    source_surface: 'top_supplier',
+    execution_mode: null,
+    entities: entries,
+    prefill: null,
+  };
+
+  const response_text = await narrate({
+    topName: topEntity?.customer_name,
+    topAmount: formatCurrency(topEntity?.amount, orgCurrency),
+    topBillCount: topEntity?.bill_count,
+    count: entries.length,
+    currency: orgCurrency,
+  }, 'top_supplier', openai, { language });
+
+  console.log('[orgAi]', { fn: 'topSupplier', ms: Date.now() - start, count: entries.length });
+  return { response_text, chart_data, next_action };
+}
+
 // ── Dispatcher ────────────────────────────────────────────────
 // Single entry point for all menu queries.
 // message_type injected here — individual functions do not set it.
@@ -1614,16 +1919,10 @@ export async function dispatchMenuQuery(menuId, supabase, orgId, orgCurrency, op
     case 'deliveries_today':
     case 'expiring_quotes':
     case 'todays_tasks':
-    // Session B — Suppliers
-    case 'what_i_owe':
-    case 'overdue_payables':
-    case 'top_supplier':
-      result = {
-        response_text: 'This feature is coming soon. Use the text input below to ask anything about your business.',
-        chart_data: null,
-        next_action: null,
-      };
-      break;
+    // Session F — Suppliers
+    case 'what_i_owe': result = await whatIOwe(supabase, orgId, orgCurrency, openai, language); break;
+    case 'overdue_payables': result = await overduePayables(supabase, orgId, orgCurrency, openai, language); break;
+    case 'top_supplier': result = await topSupplier(supabase, orgId, orgCurrency, openai, language); break;
 
     default:
       result = {
