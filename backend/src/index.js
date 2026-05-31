@@ -2148,7 +2148,7 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
     if (!customer) return c.json({ error: 'customer_not_found' }, 404);
 
     const body = await c.req.json();
-    const query = body.query?.trim() || (body.forwarded_attachment ? 'Extract product names, quantities and prices from this attachment and create an invoice.' : '');
+    const query = body.query?.trim() || (body.forwarded_attachment ? 'Owner shared an attachment. Determine the appropriate business action from the attachment and conversation context. Default to create_invoice if unclear.' : '');
     const conversationId = body.conversation_id;
     const forwardedAttachment = body.forwarded_attachment || null;
     if (!query) return c.json({ error: 'empty_query' }, 400);
@@ -2309,7 +2309,7 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
         if (forwardedAttachment.caption) attachmentContext += `\nCaption: ${forwardedAttachment.caption}`;
       }
     }
-    const userMessage = `Customer: ${customer.name}\nOwner instruction: ${query}${attachmentContext}\nRecent context: ${recentText}\nCustomer memory: ${customerMemory || 'none'}`;
+    const userMessage = `Entity: ${customer.name}\nOwner instruction: ${query}${attachmentContext}\nRecent context: ${recentText}\nCustomer memory: ${customerMemory || 'none'}`;
     const primaryLanguage = auth.primaryLanguage || 'en';
     const systemContent = SPARK_SYSTEM_PROMPT
       + (globalContext ? `\n\nBusiness context:\n${globalContext}` : '')
