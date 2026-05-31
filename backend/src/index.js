@@ -508,7 +508,9 @@ app.get('/api/home', async (c) => {
     console.log('  - IDs:', customerIds);
     
     let customers = [];
-    
+    let payableMap = {};           // what owner owes each entity (purchase_bills)
+    let payableOverdueSet = new Set(); // entities with overdue purchase bills
+
     if (customerIds.length > 0) {
       const { data: customersData, error: customersError } = await supabase
         .from('customers')
@@ -522,6 +524,27 @@ app.get('/api/home', async (c) => {
 
       if (!customersError && customersData) {
         customers = customersData;
+      }
+
+      // Query 4b: payable_balance + overdue from purchase_bills
+      try {
+        const today = new Date().toISOString().split('T')[0];
+        const { data: pbRows } = await supabase
+          .from('purchase_bills')
+          .select('customer_id, amount_due, due_date')
+          .in('customer_id', customerIds)
+          .eq('organisation_id', organisationId)
+          .eq('is_historical', false)
+          .is('deleted_at', null)
+          .not('status', 'in', '("paid","cancelled")')
+          .gt('amount_due', 0);
+        for (const row of pbRows || []) {
+          const cid = row.customer_id;
+          payableMap[cid] = Math.round(((payableMap[cid] || 0) + Number(row.amount_due)) * 100) / 100;
+          if (row.due_date && row.due_date < today) payableOverdueSet.add(cid);
+        }
+      } catch (pbErr) {
+        console.warn('[HOME] payable query failed (non-fatal):', pbErr.message);
       }
     }
 
@@ -598,6 +621,9 @@ app.get('/api/home', async (c) => {
         }
       }
 
+      // Payable overdue — any purchase bill past due date for this entity?
+      const isPayableOverdue = payableOverdueSet.has(customer.id);
+
       // Count unread messages
       let unreadCount = 0;
       try {
@@ -641,6 +667,10 @@ app.get('/api/home', async (c) => {
         is_overdue: isOverdue,
         unread_count: unreadCount,
         health_score: healthScore,
+        payable_amount: payableMap[customer.id] || null,
+        is_payable_overdue: isPayableOverdue,
+        net_position: Math.round(((customer.outstanding_balance || 0) - (payableMap[customer.id] || 0)) * 100) / 100,
+        net_direction: ((customer.outstanding_balance || 0) - (payableMap[customer.id] || 0)) > 0.01 ? 'receivable' : ((payableMap[customer.id] || 0) - (customer.outstanding_balance || 0)) > 0.01 ? 'payable' : 'settled',
       });
     }
 

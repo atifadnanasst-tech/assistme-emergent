@@ -43,6 +43,10 @@ interface Conversation {
   is_overdue: boolean;
   unread_count: number;
   health_score: number | null;
+  payable_amount: number | null;
+  is_payable_overdue: boolean;
+  net_position: number;
+  net_direction: 'receivable' | 'payable' | 'settled';
 }
 
 interface HomeData {
@@ -347,18 +351,26 @@ export default function HomeScreen() {
             {item.last_message}
           </Text>
           
-          {/* Badges */}
+          {/* Badges — 4 states:
+               receivable + within terms = grey
+               receivable + overdue      = red
+               payable    + within terms = amber
+               payable    + overdue      = dark amber */}
           <View style={styles.badges}>
-            {item.outstanding_amount && item.outstanding_amount > 0 && (
+            {item.net_direction !== 'settled' && Math.abs(item.net_position || 0) > 0 && (
               <View style={[
                 styles.amountBadge,
-                item.is_overdue && styles.amountBadgeOverdue
+                item.net_direction === 'receivable' && item.is_overdue && styles.amountBadgeOverdue,
+                item.net_direction === 'payable' && !item.is_payable_overdue && styles.amountBadgePayable,
+                item.net_direction === 'payable' && item.is_payable_overdue && styles.amountBadgePayableOverdue,
               ]}>
                 <Text style={[
                   styles.amountText,
-                  item.is_overdue && styles.amountTextOverdue
+                  item.net_direction === 'receivable' && item.is_overdue && styles.amountTextOverdue,
+                  item.net_direction === 'payable' && !item.is_payable_overdue && styles.amountTextPayable,
+                  item.net_direction === 'payable' && item.is_payable_overdue && styles.amountTextPayableOverdue,
                 ]}>
-                  ₹{item.outstanding_amount.toLocaleString('en-IN')}
+                  {item.net_direction === 'payable' ? 'You owe ₹' : '₹'}{Math.abs(item.net_position || 0).toLocaleString('en-IN')}
                 </Text>
               </View>
             )}
@@ -514,7 +526,7 @@ export default function HomeScreen() {
         <Ionicons name="add" size={28} color="#FFFFFF" />
       </TouchableOpacity>
 
-      <Text style={{ textAlign: "center", fontSize: 10, color: "#CCC", paddingVertical: 2 }}>v1.3.194</Text>
+      <Text style={{ textAlign: "center", fontSize: 10, color: "#CCC", paddingVertical: 2 }}>v1.3.195</Text>
       {/* Bottom Navigation SafeAreaView */}
       <SafeAreaView style={styles.bottomNavSafeArea} edges={['bottom']}>
         <View style={styles.bottomNav}>
@@ -908,6 +920,12 @@ const styles = StyleSheet.create({
   amountBadgeOverdue: {
     backgroundColor: '#FFF0F0',
   },
+  amountBadgePayable: {
+    backgroundColor: '#FFF8E1',
+  },
+  amountBadgePayableOverdue: {
+    backgroundColor: '#FFF3E0',
+  },
   amountText: {
     fontSize: 12,
     fontWeight: '600',
@@ -915,6 +933,12 @@ const styles = StyleSheet.create({
   },
   amountTextOverdue: {
     color: '#D32F2F',
+  },
+  amountTextPayable: {
+    color: '#F57C00',
+  },
+  amountTextPayableOverdue: {
+    color: '#E65100',
   },
   unreadBadge: {
     backgroundColor: '#25D366',
