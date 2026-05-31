@@ -38,6 +38,9 @@ const CUSTOMER_AI_PILLS_ROW2 = [
 interface CustomerData {
   id: string; name: string; initials: string; avatar_color: string;
   outstanding_balance: number | null; health_score: number | null; status: string; phone?: string;
+  payable_balance: number | null;
+  net_position: number;
+  net_direction: 'receivable' | 'payable' | 'settled';
 }
 interface ChatMessage {
   id: string; role: string; content: string; created_at: string;
@@ -1875,8 +1878,11 @@ export default function CustomerChatScreen() {
 
           <View style={styles.headerInfo}>
             <Text style={styles.headerName} numberOfLines={1}>{customer?.name || 'Customer'}</Text>
-            {customer?.outstanding_balance != null && customer.outstanding_balance > 0 && (
-              <Text style={styles.headerPending}>{formatCurrency(customer.outstanding_balance)} pending</Text>
+            {customer?.net_direction === 'receivable' && customer.net_position > 0 && (
+              <Text style={styles.headerPending}>{formatCurrency(customer.net_position)} pending</Text>
+            )}
+            {customer?.net_direction === 'payable' && customer.payable_balance != null && customer.payable_balance > 0 && (
+              <Text style={[styles.headerPending, { color: '#FFB74D' }]}>{formatCurrency(Math.abs(customer.net_position))} you owe</Text>
             )}
           </View>
 

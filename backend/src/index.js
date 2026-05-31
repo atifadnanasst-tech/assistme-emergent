@@ -1007,6 +1007,28 @@ app.get('/api/chat/:customer_id', async (c) => {
     const outstandingBalance = (customer.outstanding_balance && customer.outstanding_balance > 0)
       ? customer.outstanding_balance : null;
 
+    // Compute payable_balance and net_position for correct chat header display
+    // Net position = receivable (they owe us) - payable (we owe them)
+    // Positive = they owe us, Negative = we owe them
+    let payableBalance = 0;
+    try {
+      const { data: pbRows } = await supabase
+        .from('purchase_bills')
+        .select('amount_due')
+        .eq('organisation_id', organisationId)
+        .eq('customer_id', customerId)
+        .eq('is_historical', false)
+        .is('deleted_at', null)
+        .not('status', 'in', '("paid","cancelled")')
+        .gt('amount_due', 0);
+      payableBalance = (pbRows || []).reduce((s, r) => s + Number(r.amount_due), 0);
+      payableBalance = Math.round(payableBalance * 100) / 100;
+    } catch (pbErr) {
+      console.warn('[CHAT] payable_balance query failed (non-fatal):', pbErr.message);
+    }
+    const netPosition = Math.round(((customer.outstanding_balance || 0) - payableBalance) * 100) / 100;
+    const netDirection = netPosition > 0.01 ? 'receivable' : payableBalance - (customer.outstanding_balance || 0) > 0.01 ? 'payable' : 'settled';
+
     // 2. Fetch or create conversation
     let { data: conversation } = await supabase
       .from('conversations')
@@ -1109,6 +1131,9 @@ app.get('/api/chat/:customer_id', async (c) => {
         initials,
         avatar_color: avatarColor,
         outstanding_balance: outstandingBalance,
+        payable_balance: payableBalance > 0 ? payableBalance : null,
+        net_position: netPosition,
+        net_direction: netDirection,
         health_score: healthScore,
         status: customer.status || 'active',
         phone: customer.phone || null,
