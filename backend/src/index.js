@@ -1937,7 +1937,7 @@ Extract ALL actions from the owner's instruction. Output ONLY this JSON — no o
 {
   "actions": [
     {
-      "action_type": "create_invoice | create_quote | convert_quote_to_invoice | schedule_delivery | update_delivery_status | set_reminder | record_payment | goods_returned | record_expense",
+      "action_type": "create_invoice | create_quote | convert_quote_to_invoice | schedule_delivery | update_delivery_status | set_reminder | record_payment | goods_returned | record_expense | create_purchase_bill | record_supplier_payment",
       "entities": {
         "items": [{"product_name": "string", "quantity": number, "unit_price": number or null, "discount_pct": number}],
         "amount": number or null,
@@ -1973,6 +1973,8 @@ Action rules:
 - record_payment: extract amount AND bank_account_name if owner mentions a bank name. Extract payment_mode if mentioned. Extract payment_date if owner mentions when payment was received (kal/yesterday = previous day, aaj/today = current date, parso/day before yesterday, weekday references like Monday/last Friday/pichle hafte, or specific dates = YYYY-MM-DD). Default null if not mentioned — backend will use today's date.
 - goods_returned: use when owner says maal wapis aaya, return, goods returned. Extract items and reason.
 - record_expense: use when owner says kharcha hua, expense, paid for. Extract amount, category, description.
+- create_purchase_bill: use when owner says maal aya, goods received, purchase bill, maal mila, stock aya, supplier se maal. Extract items with quantity and unit_price into entities.items. Same structure as create_invoice. due_date auto-calculated from payment terms if not specified.
+- record_supplier_payment: use when owner says supplier ko diya, supplier ko payment, paid supplier, outgoing payment to supplier. Extract amount, payment_mode, bank_account_name. Same extraction as record_payment but direction is outgoing.
 - invoice_type: set Bill of Supply if owner says bina GST, without GST, composition. Default is Tax Invoice.
 - freight_taxable: set true only if owner explicitly says freight has GST. Default false.
 - freight notation examples: "freight 50", "freight rupees 50", "freight Rs 50", "freight 50/-", "dhulai 50", "transport 50" — all mean freight=50. Always extract as number only into entities.freight.
