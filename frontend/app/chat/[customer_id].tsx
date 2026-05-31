@@ -2338,7 +2338,7 @@ export default function CustomerChatScreen() {
                   </Text>
 
                   {/* Rich invoice items rendering */}
-                  {(action.action_type === 'create_invoice' || action.action_type === 'create_quote') && action.items?.length > 0 ? (
+                  {(action.action_type === 'create_invoice' || action.action_type === 'create_quote' || action.action_type === 'create_purchase_bill') && action.items?.length > 0 ? (
                     <View>
                       {action.items.map((item: any, idx: number) => {
                         const itemKey = `${action.action_id}-${idx}`;

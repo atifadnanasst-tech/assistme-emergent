@@ -2410,7 +2410,7 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
     for (const action of parsed.actions) {
       const ent = action.entities || {};
 
-      if (action.action_type === 'create_invoice' || action.action_type === 'create_quote' || action.action_type === 'create_purchase_bill') {
+      if (action.action_type === 'create_invoice' || action.action_type === 'create_quote') {
         // Handle items[] array for invoice
         const items = Array.isArray(ent.items) ? ent.items : (ent.product_name ? [{ product_name: ent.product_name, quantity: ent.quantity }] : []);
         const resolvedItems = [];
@@ -2473,6 +2473,36 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
           details: itemLines.join('\n') + (totalStr ? `\nTotal: ${totalStr}` : '') + (ent.due_date ? `\nDue: ${ent.due_date}` : ''),
           parameters: actionParams,
           items: resolvedItems,
+          editable: true,
+        });
+
+      } else if (action.action_type === 'create_purchase_bill') {
+        // CENTRALIZED: prepareTransactionDocument() — equivalence proven May 2026
+        // Invoice and quote paths remain on inline branch above (untouched).
+        const { prepareTransactionDocument } = await import('./services/business/prepareTransactionDocument.js');
+        const rawItems = Array.isArray(ent.items) ? ent.items : (ent.product_name ? [{ product_name: ent.product_name, quantity: ent.quantity, unit_price: ent.unit_price }] : []);
+        const prepared = await prepareTransactionDocument({
+          supabase, organisationId, customerId, customerName: customer.name,
+          actionType: 'create_purchase_bill', rawItems, entities: ent,
+        });
+        const { data: savedAction, error: actionErr } = await supabase
+          .from('ai_actions').insert({
+            organisation_id: organisationId,
+            action_name: prepared.actionName,
+            action_type: 'create_purchase_bill',
+            prompt_template: query,
+            parameters: prepared.actionParams,
+            confidence_score: parsed.confidence_score,
+            status: 'pending',
+          }).select('id').single();
+        if (actionErr) { console.error('Save ai_action (purchase_bill) failed:', actionErr); continue; }
+        if (!draftId) draftId = savedAction.id;
+        responseActions.push({
+          action_id: savedAction.id,
+          action_type: 'create_purchase_bill',
+          details: prepared.details,
+          parameters: prepared.actionParams,
+          items: prepared.resolvedItems,
           editable: true,
         });
 
@@ -3327,6 +3357,16 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
                 metadata: { sender_type: 'system', visibility: 'owner_only', message_type: 'system_alert', read_by_owner: true, preview_text: `Purchase bill ${pbResult.bill_number} recorded` },
                 tokens_input: 0, tokens_output: 0,
               });
+            }
+            // Alias learning — same pattern as create_invoice confirm
+            // Learns vocabulary from owner corrections in the preview sheet
+            // Non-blocking: failure never surfaces to owner
+            try {
+              const { learnVocabularyAliases } = await import('./services/business/prepareTransactionDocument.js');
+              const itemsArr = Array.isArray(params.items) ? params.items : [];
+              await learnVocabularyAliases({ supabase, organisationId, items: itemsArr });
+            } catch (aliasErr) {
+              console.warn('[VOCAB] purchase_bill alias learning failed silently:', aliasErr.message);
             }
             executed.push(actionId);
             break;
