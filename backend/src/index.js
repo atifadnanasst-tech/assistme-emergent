@@ -2385,7 +2385,7 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
     for (const action of parsed.actions) {
       const ent = action.entities || {};
 
-      if (action.action_type === 'create_invoice' || action.action_type === 'create_quote') {
+      if (action.action_type === 'create_invoice' || action.action_type === 'create_quote' || action.action_type === 'create_purchase_bill') {
         // Handle items[] array for invoice
         const items = Array.isArray(ent.items) ? ent.items : (ent.product_name ? [{ product_name: ent.product_name, quantity: ent.quantity }] : []);
         const resolvedItems = [];
