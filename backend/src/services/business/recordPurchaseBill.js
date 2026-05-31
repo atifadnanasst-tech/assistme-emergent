@@ -325,10 +325,14 @@ export async function recordPurchaseBill(supabase, orgId, customerId, items, opt
 
     try {
       for (const item of resolvedItems) {
-        if (!item.product_id || !item.unit_price) continue;
+        if (!item.product_id) continue;
+        // Only update cost_price when owner confirmed a real price (> 0)
+        // Prevents overwriting catalog cost_price with null/zero/AI-guessed values
+        const confirmedPrice = Number(item.unit_price || 0);
+        if (confirmedPrice <= 0) continue;
         await supabase
           .from('products')
-          .update({ cost_price: item.unit_price })
+          .update({ cost_price: confirmedPrice })
           .eq('id', item.product_id)
           .eq('organisation_id', orgId);
       }

@@ -2331,9 +2331,13 @@ export default function CustomerChatScreen() {
                   <Text style={styles.actionName}>
                     {action.action_type === 'create_invoice' ? 'Create Invoice' :
                      action.action_type === 'create_quote' ? 'Create Quote' :
+                     action.action_type === 'create_purchase_bill' ? 'Purchase Bill' :
                      action.action_type === 'schedule_delivery' ? 'Delivery' :
                      action.action_type === 'set_reminder' ? 'Payment Reminder' :
                      action.action_type === 'record_payment' ? 'Record Payment' :
+                     action.action_type === 'record_supplier_payment' ? 'Supplier Payment' :
+                     action.action_type === 'goods_returned' ? 'Goods Returned' :
+                     action.action_type === 'record_expense' ? 'Record Expense' :
                      action.action_type}
                   </Text>
 

@@ -187,9 +187,22 @@ export async function prepareTransactionDocument({
       supabase,
     });
 
-    const unitPrice = useCostPrice
-      ? (resolved?.cost_price || item.unit_price || null)
-      : (resolved?.selling_price || item.unit_price || null);
+    // Price precedence for purchase bills:
+    //   1. Extracted from supplier bill (item.unit_price from GPT/OCR) — always wins
+    //   2. Database cost_price — convenience default when no price extracted
+    //   3. null — blank field shown, owner must enter
+    // Price precedence for invoices/quotes:
+    //   1. Catalog selling_price  2. Extracted price  3. null
+    let unitPrice;
+    if (useCostPrice) {
+      const extractedPrice = (item.unit_price != null && Number(item.unit_price) > 0)
+        ? Number(item.unit_price) : null;
+      const catalogCostPrice = (resolved?.cost_price != null && Number(resolved.cost_price) > 0)
+        ? Number(resolved.cost_price) : null;
+      unitPrice = extractedPrice ?? catalogCostPrice ?? null;
+    } else {
+      unitPrice = resolved?.selling_price || item.unit_price || null;
+    }
 
     const qty = item.quantity || 1;
     const lineTotal = unitPrice ? Math.round(unitPrice * qty * 100) / 100 : null;
