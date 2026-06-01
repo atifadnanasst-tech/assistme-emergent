@@ -84,6 +84,9 @@ export default function CustomerChatScreen() {
   const [sparkWorkflowState, setSparkWorkflowState] = useState<SparkWorkflowState>('idle');
   const [sparkMode, setSparkMode] = useState(false);
   const [sparkProcessing, setSparkProcessing] = useState(false);
+  const [showSparkHint, setShowSparkHint] = useState(false);
+  const [sparkHintDontShow, setSparkHintDontShow] = useState(false);
+  const sparkHintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [sparkInput, setSparkInput] = useState('');
   const [forwardedAttachment, setForwardedAttachment] = useState<{
     type: 'text' | 'image' | 'audio' | 'file';
@@ -2290,7 +2293,17 @@ export default function CustomerChatScreen() {
               </TouchableOpacity>
             ) : (
               <View style={{ position: 'relative' }}>
-                <TouchableOpacity style={styles.sparkFab} onPress={() => { setSparkMode(true); setSparkWorkflowState('idle'); }}>
+                <TouchableOpacity style={styles.sparkFab} onPress={async () => {
+                    setSparkMode(true);
+                    setSparkWorkflowState('idle');
+                    const dismissed = await AsyncStorage.getItem('sparkHintDismissed');
+                    if (dismissed !== 'true') {
+                      setSparkHintDontShow(false);
+                      setShowSparkHint(true);
+                      if (sparkHintTimerRef.current) clearTimeout(sparkHintTimerRef.current);
+                      sparkHintTimerRef.current = setTimeout(() => setShowSparkHint(false), 2500);
+                    }
+                  }}>
                   <Ionicons name="sparkles" size={22} color="#FFF" />
                 </TouchableOpacity>
                 <TouchableOpacity style={styles.micBtn} onPress={handleAudioRecording}>
@@ -2301,6 +2314,66 @@ export default function CustomerChatScreen() {
           </View>
         </View>
         </>
+      )}
+
+      {/* Spark Hint Overlay
+           Appears on every Spark FAB tap (unless permanently dismissed).
+           Auto-dismisses after 2.5s. X closes this instance only.
+           "Don't show again" sets AsyncStorage sparkHintDismissed=true permanently.
+           Spark mode activates in parallel — hint never blocks input. */}
+      {showSparkHint && (
+        <View pointerEvents="box-none" style={{
+          position: 'absolute', bottom: 80, right: 12,
+          width: 265, backgroundColor: 'rgba(7,94,84,0.93)',
+          borderRadius: 14, padding: 14, zIndex: 999,
+          shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
+          shadowOpacity: 0.3, shadowRadius: 8, elevation: 8,
+        }}>
+          {/* X — closes this instance only, shows again next tap */}
+          <TouchableOpacity
+            onPress={() => { if (sparkHintTimerRef.current) clearTimeout(sparkHintTimerRef.current); setShowSparkHint(false); }}
+            style={{ position: 'absolute', top: 8, right: 10, zIndex: 10 }}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <Text style={{ color: '#FFF', fontSize: 15, fontWeight: '600' }}>✕</Text>
+          </TouchableOpacity>
+
+          <Text style={{ color: '#FFD700', fontSize: 12, fontWeight: '700', marginBottom: 8, marginRight: 24 }}>
+            ⚡ You can say:
+          </Text>
+          {[
+            'Bill banao 5 Gulab',
+            'Maal aaya — purchase bill',
+            'Payment mila 2000',
+            'Supplier ko diya 5000',
+            'Reminder bhejo Friday ko',
+            'Delivery schedule karo',
+            'Quote banao 10 router',
+            'Maal wapas aaya — return',
+            'Kharcha record karo 500',
+          ].map((tip, i) => (
+            <Text key={i} style={{ color: '#E8F5E9', fontSize: 11, marginBottom: 4 }}>• {tip}</Text>
+          ))}
+
+          {/* Don't show again — permanent dismiss */}
+          <TouchableOpacity
+            onPress={async () => {
+              if (sparkHintTimerRef.current) clearTimeout(sparkHintTimerRef.current);
+              const next = !sparkHintDontShow;
+              setSparkHintDontShow(next);
+              if (next) {
+                await AsyncStorage.setItem('sparkHintDismissed', 'true');
+                setShowSparkHint(false);
+              }
+            }}
+            style={{ flexDirection: 'row', alignItems: 'center', marginTop: 10, gap: 6 }}
+          >
+            <Text style={{ color: sparkHintDontShow ? '#FFD700' : '#AAA', fontSize: 13 }}>
+              {sparkHintDontShow ? '☑' : '☐'}
+            </Text>
+            <Text style={{ color: '#CCC', fontSize: 11 }}>Don't show again</Text>
+          </TouchableOpacity>
+        </View>
       )}
 
       {/* 3-dot menu overlay */}
