@@ -124,6 +124,7 @@ export default function CustomerChatScreen() {
   const [removedItems, setRemovedItems] = useState<Set<string>>(new Set());
   const [unresolvedNames, setUnresolvedNames] = useState<Record<string, string>>({});
   const [editableQuantities, setEditableQuantities] = useState<Record<string, string>>({});
+  const [editingResolvedItems, setEditingResolvedItems] = useState<Set<string>>(new Set());
   // Date edit sheet
   const [dateEditVisible, setDateEditVisible] = useState(false);
   const [dateEditAction, setDateEditAction] = useState<any>(null);
@@ -1055,7 +1056,7 @@ export default function CustomerChatScreen() {
         // Pre-populate unresolvedPrices from OCR unit_price for unresolved items
         const prefillPrices: Record<string, string> = {};
         for (const action of (data.actions || [])) {
-          if (action.action_type !== 'create_invoice' && action.action_type !== 'create_quote') continue;
+          if (action.action_type !== 'create_invoice' && action.action_type !== 'create_quote' && action.action_type !== 'create_purchase_bill') continue;
           const items = action.items || [];
           items.forEach((item: any, idx: number) => {
             if (item.product_id === null && item.unit_price != null) {
@@ -1105,7 +1106,7 @@ export default function CustomerChatScreen() {
 
       // Step 1: validate and insert unresolved products
       for (const action of previewActions) {
-        if (action.action_type !== 'create_invoice' && action.action_type !== 'create_quote') continue;
+        if (action.action_type !== 'create_invoice' && action.action_type !== 'create_quote' && action.action_type !== 'create_purchase_bill') continue;
         const items = action.items || [];
         for (let idx = 0; idx < items.length; idx++) {
           const item = items[idx];
@@ -1159,6 +1160,32 @@ export default function CustomerChatScreen() {
             method: 'PATCH',
             headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({ parameters: { items: updatedItems } }),
+          });
+        }
+      }
+
+      // Step 1b: patch resolved items edited via pencil (qty/price)
+      // PATCH merges — existing fields like freight/due_date preserved
+      for (const action of previewActions) {
+        if (action.action_type !== 'create_invoice' && action.action_type !== 'create_quote' && action.action_type !== 'create_purchase_bill') continue;
+        const items = action.items || [];
+        let hasEdits = false;
+        const updatedItems = items.map((item: any, idx: number) => {
+          const itemKey = `${action.action_id}-${idx}`;
+          if (item.product_id === null) return item;
+          if (removedItems.has(itemKey)) return item;
+          const editedQty = editableQuantities[itemKey] ? parseFloat(editableQuantities[itemKey]) || item.quantity : item.quantity;
+          const editedPrice = unresolvedPrices[itemKey] ? parseFloat(unresolvedPrices[itemKey]) || item.unit_price : item.unit_price;
+          if (editedQty === item.quantity && editedPrice === item.unit_price) return item;
+          hasEdits = true;
+          return { ...item, quantity: editedQty, unit_price: editedPrice, line_total: editedPrice * editedQty };
+        });
+        if (hasEdits) {
+          const newTotal = updatedItems.reduce((s: number, i: any) => s + (i.line_total || 0), 0);
+          await fetch(`${backendUrl}/api/chat/${customer_id}/spark/action/${action.action_id}`, {
+            method: 'PATCH',
+            headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ parameters: { items: updatedItems, amount: newTotal } }),
           });
         }
       }
@@ -2400,10 +2427,36 @@ export default function CustomerChatScreen() {
                                       }}
                                     />
                                   </View>
+                                ) : editingResolvedItems.has(itemKey) ? (
+                                  <View style={styles.editableRow}>
+                                    <TextInput
+                                      style={styles.editableQtyInput}
+                                      placeholder="Qty"
+                                      placeholderTextColor="#999"
+                                      keyboardType="numeric"
+                                      value={editableQuantities[itemKey] ?? String(item.quantity || '')}
+                                      onChangeText={(text) => setEditableQuantities(prev => ({ ...prev, [itemKey]: text.replace(/[^0-9.]/g, '') }))}
+                                      autoFocus
+                                    />
+                                    <Text style={{ fontSize: 14, color: '#333' }}>×</Text>
+                                    <Text style={[styles.invoiceItemName, { flex: 1 }]}>{item.product_name}</Text>
+                                  </View>
                                 ) : (
-                                  <Text style={styles.invoiceItemName}>
-                                    {item.quantity} × {item.product_name}
-                                  </Text>
+                                  <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+                                    <Text style={[styles.invoiceItemName, { flex: 1 }]}>
+                                      {item.quantity} × {item.product_name}
+                                    </Text>
+                                    <TouchableOpacity
+                                      onPress={() => {
+                                        setEditingResolvedItems(prev => new Set([...prev, itemKey]));
+                                        setUnresolvedPrices(prev => ({ ...prev, [itemKey]: String(item.unit_price ?? '') }));
+                                        setEditableQuantities(prev => ({ ...prev, [itemKey]: String(item.quantity ?? '') }));
+                                      }}
+                                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                                    >
+                                      <Text style={{ fontSize: 13, color: '#075E54', paddingHorizontal: 6 }}>✏️</Text>
+                                    </TouchableOpacity>
+                                  </View>
                                 )}
                                 {isUnresolved && (
                                   <TouchableOpacity onPress={() => setRemovedItems(prev => new Set([...prev, itemKey]))} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
@@ -2416,11 +2469,42 @@ export default function CustomerChatScreen() {
                                   New · Add to catalog
                                 </Text>
                               )}
-                              {!isUnresolved && item.unit_price != null && (
+                              {!isUnresolved && editingResolvedItems.has(itemKey) && (
+                                <View style={{ flexDirection: 'row', gap: 6, marginTop: 6, alignItems: 'center' }}>
+                                  <Text style={{ fontSize: 12, color: '#555', width: 36 }}>
+                                    {action.action_type === 'create_purchase_bill' ? 'Cost' : 'Price'}
+                                  </Text>
+                                  <TextInput
+                                    style={{ borderWidth: 1, borderColor: '#075E54', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 4, width: 110, fontSize: 14, color: '#333' }}
+                                    placeholder="₹ Amount"
+                                    placeholderTextColor="#999"
+                                    keyboardType="numeric"
+                                    value={unresolvedPrices[itemKey] ?? String(item.unit_price ?? '')}
+                                    onChangeText={(text) => setUnresolvedPrices(prev => ({ ...prev, [itemKey]: text }))}
+                                  />
+                                  <TouchableOpacity
+                                    onPress={() => setEditingResolvedItems(prev => { const s = new Set(prev); s.delete(itemKey); return s; })}
+                                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                                  >
+                                    <Text style={{ fontSize: 15, color: '#075E54', fontWeight: '700' }}>✓</Text>
+                                  </TouchableOpacity>
+                                </View>
+                              )}
+                              {!isUnresolved && !editingResolvedItems.has(itemKey) && item.unit_price != null && (
                                 <Text style={styles.invoiceItemPrice}>
                                   @ ₹{item.unit_price.toLocaleString('en-IN')} = ₹{(item.line_total || item.unit_price * item.quantity).toLocaleString('en-IN')}
                                   {item.tax_rate > 0 ? <Text style={{ fontSize: 11, color: '#888' }}> (GST {item.tax_rate}%)</Text> : null}
                                 </Text>
+                              )}
+                              {!isUnresolved && !editingResolvedItems.has(itemKey) && item.unit_price == null && (
+                                <TouchableOpacity onPress={() => {
+                                  setEditingResolvedItems(prev => new Set([...prev, itemKey]));
+                                  setEditableQuantities(prev => ({ ...prev, [itemKey]: String(item.quantity ?? '') }));
+                                }}>
+                                  <Text style={{ fontSize: 12, color: '#F9A825', marginTop: 2 }}>
+                                    {action.action_type === 'create_purchase_bill' ? 'Tap to enter cost' : 'Tap to enter price'}
+                                  </Text>
+                                </TouchableOpacity>
                               )}
                               {isUnresolved && (
                                 <View style={{ flexDirection: 'row', gap: 6, marginTop: 6 }}>
