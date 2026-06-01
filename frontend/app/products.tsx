@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView, FlatList, TextInput,
   ActivityIndicator, Alert, Linking, KeyboardAvoidingView, Platform, Image,
+  Modal, Pressable,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -10,9 +11,8 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import { authService } from '../lib/auth';
 import ProductFormSheet, { ProductFormData } from '../components/primitives/ProductFormSheet';
-import { Modal, Pressable } from 'react-native';
 
-interface Product { id: string; name: string; category: string; image_url: string | null; selling_price: number; cost_price: number; is_top_seller: boolean; }
+interface Product { id: string; name: string; category: string; image_url: string | null; selling_price: number; cost_price: number; tax_rate: number; is_top_seller: boolean; }
 interface Suggestion { product_id: string; product_name: string; reason: string; }
 
 export default function ProductsCatalogScreen() {
@@ -237,7 +237,7 @@ export default function ProductsCatalogScreen() {
       name: product.name,
       category: product.category,
       sellingPrice: String(product.selling_price),
-      taxRate: 0,
+      taxRate: product.tax_rate ?? 0,
       costPrice: String(product.cost_price || ''),
     });
     setEditingProductId(product.id);
@@ -248,7 +248,8 @@ export default function ProductsCatalogScreen() {
   const handleFormSubmit = async (data: ProductFormData) => {
     setFormLoading(true);
     try {
-      const token = await authService.getToken();
+      const token = await getToken();
+      if (!token) return;
       const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
       const body = {
         name: data.name,
@@ -281,7 +282,8 @@ export default function ProductsCatalogScreen() {
       { text: 'Cancel', style: 'cancel' },
       { text: 'Archive', style: 'destructive', onPress: async () => {
         try {
-          const token = await authService.getToken();
+          const token = await getToken();
+          if (!token) return;
           const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
           const res = await fetch(`${backendUrl}/api/products/${product.id}`, {
             method: 'PATCH',
@@ -376,7 +378,7 @@ export default function ProductsCatalogScreen() {
                 </View>
               ) : (
                 prods.map(p => (
-                  <TouchableOpacity key={p.id} style={s.listRow} onPress={() => toggleProduct(p.id)}>
+                  <TouchableOpacity key={p.id} style={s.listRow} onPress={() => toggleProduct(p.id)} onLongPress={() => { setLongPressProduct(p); setLongPressMenuVisible(true); }}>
                     <Ionicons name={selected.has(p.id) ? 'checkbox' : 'square-outline'} size={20} color={selected.has(p.id) ? '#075E54' : '#CCC'} />
                     {p.image_url ? (
                       <Image source={{ uri: p.image_url }} style={s.listImage} resizeMode="cover" />
