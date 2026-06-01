@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View, Text, Image, StyleSheet, TouchableOpacity, FlatList, TextInput,
   ActivityIndicator, Alert, Linking, KeyboardAvoidingView, Platform,
-  Keyboard, Modal, Pressable, ScrollView, InteractionManager, LayoutAnimation,
+  Keyboard, Modal, Pressable, ScrollView, InteractionManager, LayoutAnimation, Animated,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
@@ -87,6 +87,7 @@ export default function CustomerChatScreen() {
   const [showSparkHint, setShowSparkHint] = useState(false);
   const [sparkHintDontShow, setSparkHintDontShow] = useState(false);
   const sparkHintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sparkHintOpacity = useRef(new Animated.Value(0)).current;
   const [sparkInput, setSparkInput] = useState('');
   const [forwardedAttachment, setForwardedAttachment] = useState<{
     type: 'text' | 'image' | 'audio' | 'file';
@@ -2300,8 +2301,12 @@ export default function CustomerChatScreen() {
                     if (dismissed !== 'true') {
                       setSparkHintDontShow(false);
                       setShowSparkHint(true);
+                      sparkHintOpacity.setValue(0);
+                      Animated.timing(sparkHintOpacity, { toValue: 1, duration: 200, useNativeDriver: true }).start();
                       if (sparkHintTimerRef.current) clearTimeout(sparkHintTimerRef.current);
-                      sparkHintTimerRef.current = setTimeout(() => setShowSparkHint(false), 2500);
+                      sparkHintTimerRef.current = setTimeout(() => {
+                        Animated.timing(sparkHintOpacity, { toValue: 0, duration: 200, useNativeDriver: true }).start(() => setShowSparkHint(false));
+                      }, 3500);
                     }
                   }}>
                   <Ionicons name="sparkles" size={22} color="#FFF" />
@@ -2317,19 +2322,31 @@ export default function CustomerChatScreen() {
       )}
 
       {/* Spark Hint Overlay
-           Appears on every Spark FAB tap (unless permanently dismissed).
-           Auto-dismisses after 2.5s. X closes this instance only.
-           "Don't show again" sets AsyncStorage sparkHintDismissed=true permanently.
-           Spark mode activates in parallel — hint never blocks input. */}
+           - Fade in 200ms on show, fade out 200ms on dismiss
+           - Auto-dismisses after 3.5s with fade out
+           - X: immediate close this instance only (no fade)
+           - Bullet tap: pre-fills Spark input + fade dismiss
+           - Maal aaya bullet also opens gallery picker
+           - Don't show again: fade out + permanent AsyncStorage dismiss */}
       {showSparkHint && (
-        <View pointerEvents="box-none" style={{
-          position: 'absolute', bottom: 80, right: 12,
-          width: 265, backgroundColor: 'rgba(7,94,84,0.93)',
-          borderRadius: 14, padding: 14, zIndex: 999,
+        <Animated.View pointerEvents="box-none" style={{
+          position: 'absolute', bottom: 72, right: 8,
+          width: 272, backgroundColor: 'rgba(7,94,84,0.78)',
+          borderRadius: 14, padding: 16, zIndex: 999,
           shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
-          shadowOpacity: 0.3, shadowRadius: 8, elevation: 8,
+          shadowOpacity: 0.25, shadowRadius: 8, elevation: 8,
+          opacity: sparkHintOpacity,
         }}>
-          {/* X — closes this instance only, shows again next tap */}
+          {/* Speech bubble tail pointing to Spark FAB */}
+          <View style={{
+            position: 'absolute', bottom: -10, right: 18,
+            width: 0, height: 0,
+            borderLeftWidth: 10, borderRightWidth: 10, borderTopWidth: 10,
+            borderLeftColor: 'transparent', borderRightColor: 'transparent',
+            borderTopColor: 'rgba(7,94,84,0.78)',
+          }} />
+
+          {/* X — immediate close, shows again next tap */}
           <TouchableOpacity
             onPress={() => { if (sparkHintTimerRef.current) clearTimeout(sparkHintTimerRef.current); setShowSparkHint(false); }}
             style={{ position: 'absolute', top: 8, right: 10, zIndex: 10 }}
@@ -2338,42 +2355,46 @@ export default function CustomerChatScreen() {
             <Text style={{ color: '#FFF', fontSize: 15, fontWeight: '600' }}>✕</Text>
           </TouchableOpacity>
 
-          <Text style={{ color: '#FFD700', fontSize: 12, fontWeight: '700', marginBottom: 8, marginRight: 24 }}>
+          <Text style={{ color: '#FFD700', fontSize: 12, fontWeight: '700', marginBottom: 10, marginRight: 24 }}>
             ⚡ You can say:
           </Text>
           {[
-            'Bill banao 5 Gulab',
-            'Maal aaya — purchase bill',
-            'Payment mila 2000',
-            'Supplier ko diya 5000',
-            'Reminder bhejo Friday ko',
-            'Delivery schedule karo',
-            'Quote banao 10 router',
-            'Maal wapas aaya — return',
-            'Kharcha record karo 500',
+            { text: 'Bill banao [ITEM NAME] ka 5 pcs', fill: 'Bill banao [ITEM NAME] ka 5 pcs' },
+            { text: 'Maal aaya — attach purchase bill photo', fill: 'Maal aaya', gallery: true },
+            { text: 'Payment received 2000', fill: 'Payment received 2000' },
+            { text: 'Paid supplier 5000', fill: 'Paid supplier 5000' },
+            { text: 'Send reminder for Friday', fill: 'Send reminder for Friday' },
+            { text: 'Schedule delivery', fill: 'Schedule delivery' },
+            { text: 'Create quote for [ITEM NAME] 10 pcs', fill: 'Create quote for [ITEM NAME] 10 pcs' },
+            { text: 'Maal wapas aaya [ITEM NAME]', fill: 'Maal wapas aaya [ITEM NAME]' },
+            { text: 'Record expense 500', fill: 'Record expense 500' },
           ].map((tip, i) => (
-            <Text key={i} style={{ color: '#E8F5E9', fontSize: 11, marginBottom: 4 }}>• {tip}</Text>
+            <TouchableOpacity key={i} onPress={() => {
+              setSparkInput(tip.fill);
+              if (tip.gallery) handlePickGallery();
+              if (sparkHintTimerRef.current) clearTimeout(sparkHintTimerRef.current);
+              Animated.timing(sparkHintOpacity, { toValue: 0, duration: 200, useNativeDriver: true }).start(() => setShowSparkHint(false));
+            }}>
+              <Text style={{ color: '#E8F5E9', fontSize: 11.5, marginBottom: 7, lineHeight: 17 }}>• {tip.text}</Text>
+            </TouchableOpacity>
           ))}
 
-          {/* Don't show again — permanent dismiss */}
+          {/* Don't show again — permanent dismiss with fade out */}
           <TouchableOpacity
             onPress={async () => {
               if (sparkHintTimerRef.current) clearTimeout(sparkHintTimerRef.current);
-              const next = !sparkHintDontShow;
-              setSparkHintDontShow(next);
-              if (next) {
-                await AsyncStorage.setItem('sparkHintDismissed', 'true');
-                setShowSparkHint(false);
-              }
+              setSparkHintDontShow(true);
+              await AsyncStorage.setItem('sparkHintDismissed', 'true');
+              Animated.timing(sparkHintOpacity, { toValue: 0, duration: 200, useNativeDriver: true }).start(() => setShowSparkHint(false));
             }}
-            style={{ flexDirection: 'row', alignItems: 'center', marginTop: 10, gap: 6 }}
+            style={{ flexDirection: 'row', alignItems: 'center', marginTop: 12, gap: 6 }}
           >
             <Text style={{ color: sparkHintDontShow ? '#FFD700' : '#AAA', fontSize: 13 }}>
               {sparkHintDontShow ? '☑' : '☐'}
             </Text>
             <Text style={{ color: '#CCC', fontSize: 11 }}>Don't show again</Text>
           </TouchableOpacity>
-        </View>
+        </Animated.View>
       )}
 
       {/* 3-dot menu overlay */}
