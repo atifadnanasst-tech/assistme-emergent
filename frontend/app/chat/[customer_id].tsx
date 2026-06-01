@@ -2427,36 +2427,24 @@ export default function CustomerChatScreen() {
                                       }}
                                     />
                                   </View>
-                                ) : editingResolvedItems.has(itemKey) ? (
-                                  <View style={styles.editableRow}>
-                                    <TextInput
-                                      style={styles.editableQtyInput}
-                                      placeholder="Qty"
-                                      placeholderTextColor="#999"
-                                      keyboardType="numeric"
-                                      value={editableQuantities[itemKey] ?? String(item.quantity || '')}
-                                      onChangeText={(text) => setEditableQuantities(prev => ({ ...prev, [itemKey]: text.replace(/[^0-9.]/g, '') }))}
-                                      autoFocus
-                                    />
-                                    <Text style={{ fontSize: 14, color: '#333' }}>×</Text>
-                                    <Text style={[styles.invoiceItemName, { flex: 1 }]}>{item.product_name}</Text>
-                                  </View>
                                 ) : (
+                                  /* DEFERRED: inline pencil edit for resolved items — hidden until polish sprint
                                   <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
                                     <Text style={[styles.invoiceItemName, { flex: 1 }]}>
                                       {item.quantity} × {item.product_name}
                                     </Text>
-                                    <TouchableOpacity
-                                      onPress={() => {
-                                        setEditingResolvedItems(prev => new Set([...prev, itemKey]));
-                                        setUnresolvedPrices(prev => ({ ...prev, [itemKey]: String(item.unit_price ?? '') }));
-                                        setEditableQuantities(prev => ({ ...prev, [itemKey]: String(item.quantity ?? '') }));
-                                      }}
-                                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                                    >
+                                    <TouchableOpacity onPress={() => {
+                                      setEditingResolvedItems(prev => new Set([...prev, itemKey]));
+                                      setUnresolvedPrices(prev => ({ ...prev, [itemKey]: String(item.unit_price ?? '') }));
+                                      setEditableQuantities(prev => ({ ...prev, [itemKey]: String(item.quantity ?? '') }));
+                                    }} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
                                       <Text style={{ fontSize: 13, color: '#075E54', paddingHorizontal: 6 }}>✏️</Text>
                                     </TouchableOpacity>
                                   </View>
+                                  */
+                                  <Text style={styles.invoiceItemName}>
+                                    {item.quantity} × {item.product_name}
+                                  </Text>
                                 )}
                                 {isUnresolved && (
                                   <TouchableOpacity onPress={() => setRemovedItems(prev => new Set([...prev, itemKey]))} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
@@ -2469,42 +2457,12 @@ export default function CustomerChatScreen() {
                                   New · Add to catalog
                                 </Text>
                               )}
-                              {!isUnresolved && editingResolvedItems.has(itemKey) && (
-                                <View style={{ flexDirection: 'row', gap: 6, marginTop: 6, alignItems: 'center' }}>
-                                  <Text style={{ fontSize: 12, color: '#555', width: 36 }}>
-                                    {action.action_type === 'create_purchase_bill' ? 'Cost' : 'Price'}
-                                  </Text>
-                                  <TextInput
-                                    style={{ borderWidth: 1, borderColor: '#075E54', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 4, width: 110, fontSize: 14, color: '#333' }}
-                                    placeholder="₹ Amount"
-                                    placeholderTextColor="#999"
-                                    keyboardType="numeric"
-                                    value={unresolvedPrices[itemKey] ?? String(item.unit_price ?? '')}
-                                    onChangeText={(text) => setUnresolvedPrices(prev => ({ ...prev, [itemKey]: text }))}
-                                  />
-                                  <TouchableOpacity
-                                    onPress={() => setEditingResolvedItems(prev => { const s = new Set(prev); s.delete(itemKey); return s; })}
-                                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                                  >
-                                    <Text style={{ fontSize: 15, color: '#075E54', fontWeight: '700' }}>✓</Text>
-                                  </TouchableOpacity>
-                                </View>
-                              )}
-                              {!isUnresolved && !editingResolvedItems.has(itemKey) && item.unit_price != null && (
+                              {/* DEFERRED: cost/price edit mode for resolved items — hidden until polish sprint */}
+                              {!isUnresolved && item.unit_price != null && (
                                 <Text style={styles.invoiceItemPrice}>
                                   @ ₹{item.unit_price.toLocaleString('en-IN')} = ₹{(item.line_total || item.unit_price * item.quantity).toLocaleString('en-IN')}
                                   {item.tax_rate > 0 ? <Text style={{ fontSize: 11, color: '#888' }}> (GST {item.tax_rate}%)</Text> : null}
                                 </Text>
-                              )}
-                              {!isUnresolved && !editingResolvedItems.has(itemKey) && item.unit_price == null && (
-                                <TouchableOpacity onPress={() => {
-                                  setEditingResolvedItems(prev => new Set([...prev, itemKey]));
-                                  setEditableQuantities(prev => ({ ...prev, [itemKey]: String(item.quantity ?? '') }));
-                                }}>
-                                  <Text style={{ fontSize: 12, color: '#F9A825', marginTop: 2 }}>
-                                    {action.action_type === 'create_purchase_bill' ? 'Tap to enter cost' : 'Tap to enter price'}
-                                  </Text>
-                                </TouchableOpacity>
                               )}
                               {isUnresolved && (
                                 <View style={{ flexDirection: 'row', gap: 6, marginTop: 6 }}>
