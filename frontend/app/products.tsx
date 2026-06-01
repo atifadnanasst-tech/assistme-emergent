@@ -9,6 +9,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import { authService } from '../lib/auth';
+import ProductFormSheet, { ProductFormData } from '../components/primitives/ProductFormSheet';
+import { Modal, Pressable } from 'react-native';
 
 interface Product { id: string; name: string; category: string; image_url: string | null; selling_price: number; cost_price: number; is_top_seller: boolean; }
 interface Suggestion { product_id: string; product_name: string; reason: string; }
@@ -32,6 +34,16 @@ export default function ProductsCatalogScreen() {
   const [saveNewPrices, setSaveNewPrices] = useState(false);
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
+  // Product form state
+  const [formVisible, setFormVisible] = useState(false);
+  const [formMode, setFormMode] = useState<'add' | 'edit'>('add');
+  const [formInitialValues, setFormInitialValues] = useState<Partial<ProductFormData>>({});
+  const [formLoading, setFormLoading] = useState(false);
+  const [formCategory, setFormCategory] = useState('');
+  const [editingProductId, setEditingProductId] = useState<string | null>(null);
+  const [longPressProduct, setLongPressProduct] = useState<Product | null>(null);
+  const [longPressMenuVisible, setLongPressMenuVisible] = useState(false);
+  const [headerMenuVisible, setHeaderMenuVisible] = useState(false);
 
   const getToken = async () => {
     const token = await authService.getAccessToken();
@@ -211,6 +223,78 @@ export default function ProductsCatalogScreen() {
     </SafeAreaView>
   );
 
+  const openAddForm = (category?: string) => {
+    setFormMode('add');
+    setFormInitialValues(category ? { category } : {});
+    setFormCategory(category || '');
+    setEditingProductId(null);
+    setFormVisible(true);
+  };
+
+  const openEditForm = (product: Product) => {
+    setFormMode('edit');
+    setFormInitialValues({
+      name: product.name,
+      category: product.category,
+      sellingPrice: String(product.selling_price),
+      taxRate: 0,
+      costPrice: String(product.cost_price || ''),
+    });
+    setEditingProductId(product.id);
+    setFormVisible(true);
+    setLongPressMenuVisible(false);
+  };
+
+  const handleFormSubmit = async (data: ProductFormData) => {
+    setFormLoading(true);
+    try {
+      const token = await authService.getToken();
+      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+      const body = {
+        name: data.name,
+        selling_price: Number(data.sellingPrice),
+        tax_rate: data.taxRate,
+        category: data.category || null,
+        cost_price: Number(data.costPrice) || 0,
+      };
+      const res = formMode === 'add'
+        ? await fetch(`${backendUrl}/api/products`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+        : await fetch(`${backendUrl}/api/products/${editingProductId}`, { method: 'PATCH', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      if (res.ok) {
+        setFormVisible(false);
+        await loadCatalog();
+        Alert.alert('Success', formMode === 'add' ? 'Product added successfully.' : 'Product updated.');
+      } else {
+        const err = await res.json().catch(() => ({}));
+        Alert.alert('Error', err.message || 'Something went wrong.');
+      }
+    } catch (err) {
+      Alert.alert('Error', 'Could not save product. Please try again.');
+    } finally {
+      setFormLoading(false);
+    }
+  };
+
+  const handleArchive = async (product: Product) => {
+    setLongPressMenuVisible(false);
+    Alert.alert('Archive Product', `Archive "${product.name}"? It will no longer appear in your catalog.`, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Archive', style: 'destructive', onPress: async () => {
+        try {
+          const token = await authService.getToken();
+          const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+          const res = await fetch(`${backendUrl}/api/products/${product.id}`, {
+            method: 'PATCH',
+            headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ is_active: false }),
+          });
+          if (res.ok) { await loadCatalog(); }
+          else { Alert.alert('Error', 'Could not archive product.'); }
+        } catch { Alert.alert('Error', 'Could not archive product.'); }
+      }},
+    ]);
+  };
+
   return (
     <SafeAreaView style={s.safe} edges={['top']}>
       {/* Header */}
@@ -220,11 +304,8 @@ export default function ProductsCatalogScreen() {
           <Text style={s.headerTitle}>Smart Catalog</Text>
         </View>
         <View style={s.viewToggle}>
-          <TouchableOpacity style={[s.toggleIcon, viewMode === 'list' && s.toggleActive]} onPress={() => setViewMode('list')}>
-            <Ionicons name="list" size={20} color={viewMode === 'list' ? '#075E54' : '#999'} />
-          </TouchableOpacity>
-          <TouchableOpacity style={[s.toggleIcon, viewMode === 'grid' && s.toggleActive]} onPress={() => setViewMode('grid')}>
-            <Ionicons name="grid" size={20} color={viewMode === 'grid' ? '#075E54' : '#999'} />
+          <TouchableOpacity style={s.toggleIcon} onPress={() => setHeaderMenuVisible(true)}>
+            <Ionicons name="ellipsis-vertical" size={22} color="#333" />
           </TouchableOpacity>
         </View>
       </View>
@@ -256,7 +337,7 @@ export default function ProductsCatalogScreen() {
                   <Ionicons name={prods.every(p => selected.has(p.id)) ? 'checkbox' : 'square-outline'} size={22} color={prods.every(p => selected.has(p.id)) ? '#075E54' : '#CCC'} />
                 </TouchableOpacity>
                 <Text style={s.catName}>{cat}</Text>
-                <TouchableOpacity onPress={() => Alert.alert('Coming Soon', 'Product creation will be available soon')}>
+                <TouchableOpacity onPress={() => openAddForm(cat)}>
                   <Text style={s.addNewText}>+ Add New</Text>
                 </TouchableOpacity>
               </View>
@@ -264,7 +345,8 @@ export default function ProductsCatalogScreen() {
               {viewMode === 'grid' ? (
                 <View style={s.gridContainer}>
                   {prods.map(p => (
-                    <TouchableOpacity key={p.id} style={s.gridCard} onPress={() => toggleProduct(p.id)}>
+                    <TouchableOpacity key={p.id} style={s.gridCard} onPress={() => toggleProduct(p.id)}
+                      onLongPress={() => { setLongPressProduct(p); setLongPressMenuVisible(true); }}>
                       {p.image_url ? (
                         <Image source={{ uri: p.image_url }} style={s.gridImage} resizeMode="cover" />
                       ) : (
@@ -376,71 +458,56 @@ export default function ProductsCatalogScreen() {
         </View>
       </SafeAreaView>
     </SafeAreaView>
+
+      {/* Header three-dot menu */}
+      <Modal visible={headerMenuVisible} transparent animationType="fade" onRequestClose={() => setHeaderMenuVisible(false)}>
+        <Pressable style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.3)' }} onPress={() => setHeaderMenuVisible(false)}>
+          <View style={{ position: 'absolute', top: 60, right: 12, backgroundColor: '#FFF', borderRadius: 12, paddingVertical: 8, minWidth: 200, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.15, shadowRadius: 8, elevation: 8 }}>
+            {[
+              { label: 'Add Product', icon: 'add-circle-outline', onPress: () => { setHeaderMenuVisible(false); openAddForm(); } },
+              { label: viewMode === 'grid' ? 'List View' : 'Grid View', icon: viewMode === 'grid' ? 'list-outline' : 'grid-outline', onPress: () => { setViewMode(v => v === 'grid' ? 'list' : 'grid'); setHeaderMenuVisible(false); } },
+              { label: 'Import Products', icon: 'cloud-upload-outline', onPress: () => { setHeaderMenuVisible(false); Alert.alert('Coming Soon', 'Import Products from photo, PDF, or document.'); } },
+              { label: 'Generate Catalog PDF', icon: 'document-text-outline', onPress: () => { setHeaderMenuVisible(false); } },
+            ].map(item => (
+              <TouchableOpacity key={item.label} onPress={item.onPress} style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, gap: 12 }}>
+                <Ionicons name={item.icon as any} size={20} color="#333" />
+                <Text style={{ fontSize: 15, color: '#333' }}>{item.label}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </Pressable>
+      </Modal>
+
+      {/* Long press product menu */}
+      <Modal visible={longPressMenuVisible} transparent animationType="fade" onRequestClose={() => setLongPressMenuVisible(false)}>
+        <Pressable style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.3)', justifyContent: 'center', alignItems: 'center' }} onPress={() => setLongPressMenuVisible(false)}>
+          <View style={{ backgroundColor: '#FFF', borderRadius: 16, paddingVertical: 8, minWidth: 220, shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 12, elevation: 8 }}>
+            <Text style={{ fontSize: 14, fontWeight: '600', color: '#666', paddingHorizontal: 20, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#F0F0F0' }}>
+              {longPressProduct?.name}
+            </Text>
+            <TouchableOpacity onPress={() => longPressProduct && openEditForm(longPressProduct)}
+              style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 14, gap: 12 }}>
+              <Ionicons name="create-outline" size={20} color="#075E54" />
+              <Text style={{ fontSize: 15, color: '#333' }}>Edit Product</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => longPressProduct && handleArchive(longPressProduct)}
+              style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 14, gap: 12 }}>
+              <Ionicons name="archive-outline" size={20} color="#E53935" />
+              <Text style={{ fontSize: 15, color: '#E53935' }}>Archive Product</Text>
+            </TouchableOpacity>
+          </View>
+        </Pressable>
+      </Modal>
+
+      {/* Product Form Sheet — Add / Edit */}
+      <ProductFormSheet
+        visible={formVisible}
+        mode={formMode}
+        initialValues={formInitialValues}
+        categories={categories}
+        onSubmit={handleFormSubmit}
+        onDismiss={() => setFormVisible(false)}
+        loading={formLoading}
+      />
   );
 }
-
-const s = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#F5F5F5' },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#FFF', paddingVertical: 12, paddingHorizontal: 16, borderBottomWidth: 1, borderBottomColor: '#F0F0F0' },
-  headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  logoBubble: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#E8F5E9', justifyContent: 'center', alignItems: 'center' },
-  headerTitle: { fontSize: 20, fontWeight: '700', color: '#1A1A1A' },
-  viewToggle: { flexDirection: 'row', gap: 4 },
-  toggleIcon: { padding: 6, borderRadius: 6 },
-  toggleActive: { backgroundColor: '#E8F5E9' },
-  bizRow: { backgroundColor: '#FFF', paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#F0F0F0' },
-  bizLabel: { fontSize: 10, fontWeight: '600', color: '#999', letterSpacing: 0.5 },
-  bizName: { fontSize: 16, fontWeight: '600', color: '#1A1A1A', marginTop: 2 },
-  tabScroll: { backgroundColor: '#FFF', maxHeight: 48 },
-  tabContent: { paddingHorizontal: 12, gap: 8, alignItems: 'center' },
-  filterTab: { paddingVertical: 12, paddingHorizontal: 14, borderBottomWidth: 3, borderBottomColor: 'transparent' },
-  filterTabActive: { borderBottomColor: '#075E54' },
-  filterTabText: { fontSize: 13, color: '#999', fontWeight: '500' },
-  filterTabTextActive: { color: '#075E54', fontWeight: '700' },
-  scroll: { flex: 1 },
-  scrollContent: { padding: 12 },
-  emptyState: { alignItems: 'center', paddingVertical: 40 },
-  emptyText: { color: '#999', fontSize: 15 },
-  catGroup: { marginBottom: 16 },
-  catHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 10 },
-  catCheckbox: { padding: 2 },
-  catName: { flex: 1, fontSize: 16, fontWeight: '700', color: '#1A1A1A' },
-  addNewText: { color: '#075E54', fontSize: 13, fontWeight: '600' },
-  gridContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  gridCard: { width: '48%', backgroundColor: '#FFF', borderRadius: 12, overflow: 'hidden', elevation: 1 },
-  gridImage: { width: '100%', height: 120, backgroundColor: '#F0F0F0' },
-  gridImagePlaceholder: { height: 120, backgroundColor: '#F0F0F0', justifyContent: 'center', alignItems: 'center' },
-  gridImageLetter: { fontSize: 32, fontWeight: '700', color: '#CCC' },
-  topBadge: { position: 'absolute', top: 6, right: 6, backgroundColor: '#FF9800', borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2 },
-  topBadgeText: { fontSize: 9, fontWeight: '700', color: '#FFF' },
-  gridCardBody: { padding: 10 },
-  gridNameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  gridProductName: { flex: 1, fontSize: 14, fontWeight: '600', color: '#1A1A1A' },
-  gridPriceRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 6 },
-  gridPrice: { fontSize: 15, fontWeight: '700', color: '#075E54' },
-  priceEditInput: { borderWidth: 1, borderColor: '#075E54', borderRadius: 6, padding: 4, fontSize: 14, width: 80, color: '#333' },
-  listRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF', borderRadius: 10, padding: 12, marginBottom: 6, gap: 10 },
-  listImage: { width: 40, height: 40, borderRadius: 8, backgroundColor: '#F0F0F0' },
-  listImagePlaceholder: { width: 40, height: 40, borderRadius: 8, backgroundColor: '#F0F0F0', justifyContent: 'center', alignItems: 'center' },
-  listImageLetter: { fontSize: 18, fontWeight: '700', color: '#CCC' },
-  listProductName: { fontSize: 14, fontWeight: '600', color: '#1A1A1A' },
-  listTopLabel: { fontSize: 10, fontWeight: '700', color: '#FF9800' },
-  listPriceCol: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  listPrice: { fontSize: 15, fontWeight: '700', color: '#075E54' },
-  aiBadge: { backgroundColor: '#E8F5E9', borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2 },
-  aiBadgeText: { fontSize: 10, fontWeight: '700', color: '#075E54' },
-  aiReason: { fontSize: 12, color: '#666', fontStyle: 'italic', marginTop: 2 },
-  checkboxSection: { backgroundColor: '#FFF', borderRadius: 12, padding: 14, marginTop: 12 },
-  checkboxRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 10 },
-  checkboxLabel: { fontSize: 14, fontWeight: '600', color: '#333' },
-  checkboxSub: { fontSize: 12, color: '#999' },
-  bottomSafe: { backgroundColor: '#FFF' },
-  bottomBar: { flexDirection: 'row', backgroundColor: '#FFF', paddingVertical: 10, paddingHorizontal: 12, gap: 8, borderTopWidth: 1, borderTopColor: '#F0F0F0' },
-  pdfBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 14, borderRadius: 10, backgroundColor: '#F5F5F5' },
-  pdfBtnText: { fontSize: 14, fontWeight: '600', color: '#333' },
-  shareBtn: { flex: 1.2, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 14, borderRadius: 10, backgroundColor: '#075E54' },
-  shareBtnText: { fontSize: 14, fontWeight: '600', color: '#FFF' },
-  waBtn: { flex: 1.2, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 14, borderRadius: 10, backgroundColor: '#25D366' },
-  waBtnText: { fontSize: 14, fontWeight: '600', color: '#FFF' },
-});
