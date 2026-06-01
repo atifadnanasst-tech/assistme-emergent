@@ -457,7 +457,6 @@ export default function ProductsCatalogScreen() {
           </TouchableOpacity>
         </View>
       </SafeAreaView>
-    </SafeAreaView>
 
       {/* Header three-dot menu */}
       <Modal visible={headerMenuVisible} transparent animationType="fade" onRequestClose={() => setHeaderMenuVisible(false)}>
@@ -509,5 +508,6 @@ export default function ProductsCatalogScreen() {
         onDismiss={() => setFormVisible(false)}
         loading={formLoading}
       />
+    </SafeAreaView>
   );
 }
