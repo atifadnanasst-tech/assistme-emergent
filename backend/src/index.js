@@ -5181,6 +5181,57 @@ app.post('/api/products', async (c) => {
   }
 });
 
+// ─── PATCH /api/products/:id ────────────────────────────────
+// Handles: edit fields, archive (is_active=false), restore (is_active=true)
+// No DELETE endpoint — soft delete is a state change via PATCH
+app.patch('/api/products/:id', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+    const productId = c.req.param('id');
+    const body = await c.req.json().catch(() => ({}));
+
+    const updates = {};
+    if (body.name !== undefined) {
+      if (!body.name.trim()) return c.json({ error: 'invalid_name', message: 'Product name cannot be empty' }, 400);
+      updates.name = body.name.trim();
+    }
+    if (body.selling_price !== undefined) {
+      if (Number(body.selling_price) < 0) return c.json({ error: 'invalid_price', message: 'Selling price cannot be negative' }, 400);
+      updates.selling_price = Number(body.selling_price);
+    }
+    if (body.cost_price !== undefined) {
+      if (Number(body.cost_price) < 0) return c.json({ error: 'invalid_price', message: 'Cost price cannot be negative' }, 400);
+      updates.cost_price = Number(body.cost_price);
+    }
+    if (body.tax_rate !== undefined) {
+      const tr = Number(body.tax_rate);
+      if (tr < 0 || tr > 100) return c.json({ error: 'invalid_tax_rate', message: 'Tax rate must be between 0 and 100' }, 400);
+      updates.tax_rate = tr;
+    }
+    if (body.category !== undefined) updates.category = body.category.trim();
+    if (body.unit !== undefined) updates.unit = body.unit.trim();
+    if (body.is_active !== undefined) updates.is_active = body.is_active === true;
+    if (body.is_active === false) updates.deleted_at = new Date().toISOString();
+    if (body.is_active === true) updates.deleted_at = null;
+
+    if (Object.keys(updates).length === 0) return c.json({ error: 'no_fields' }, 400);
+
+    const { data: product, error } = await supabase
+      .from('products').update(updates)
+      .eq('id', productId).eq('organisation_id', organisationId)
+      .select('id, name, selling_price, cost_price, tax_rate, category, unit, is_active').single();
+
+    if (error) { console.error('[PATCH /api/products/:id]', error.message); return c.json({ error: 'server_error' }, 500); }
+    console.log('[PATCH /api/products/:id] Updated:', productId, Object.keys(updates));
+    return c.json(product);
+  } catch (err) {
+    console.error('[PATCH /api/products/:id]', err.message);
+    return c.json({ error: 'server_error' }, 500);
+  }
+});
+
 // ─── GET /api/catalog ───────────────────────────────────────
 app.get('/api/catalog', async (c) => {
   try {
