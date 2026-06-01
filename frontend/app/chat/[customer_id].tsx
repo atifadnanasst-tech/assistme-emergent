@@ -2330,8 +2330,8 @@ export default function CustomerChatScreen() {
            - Don't show again: fade out + permanent AsyncStorage dismiss */}
       {showSparkHint && (
         <Animated.View pointerEvents="box-none" style={{
-          position: 'absolute', bottom: 72, right: 8,
-          width: 272, backgroundColor: 'rgba(7,94,84,0.78)',
+          position: 'absolute', bottom: 130, right: 8,
+          width: 272, backgroundColor: 'rgba(7,94,84,0.84)',
           borderRadius: 14, padding: 16, zIndex: 999,
           shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
           shadowOpacity: 0.25, shadowRadius: 8, elevation: 8,
@@ -2343,7 +2343,7 @@ export default function CustomerChatScreen() {
             width: 0, height: 0,
             borderLeftWidth: 10, borderRightWidth: 10, borderTopWidth: 10,
             borderLeftColor: 'transparent', borderRightColor: 'transparent',
-            borderTopColor: 'rgba(7,94,84,0.78)',
+            borderTopColor: 'rgba(7,94,84,0.84)',
           }} />
 
           {/* X — immediate close, shows again next tap */}
