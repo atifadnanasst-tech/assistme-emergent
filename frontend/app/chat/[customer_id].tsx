@@ -2370,10 +2370,12 @@ export default function CustomerChatScreen() {
             { text: 'Record expense 500', fill: 'Record expense 500' },
           ].map((tip, i) => (
             <TouchableOpacity key={i} onPress={() => {
-              setSparkInput(tip.fill);
+              setInputText(tip.fill);
+              setSparkInput('');
               if (tip.gallery) handlePickGallery();
               if (sparkHintTimerRef.current) clearTimeout(sparkHintTimerRef.current);
               Animated.timing(sparkHintOpacity, { toValue: 0, duration: 200, useNativeDriver: true }).start(() => setShowSparkHint(false));
+              setTimeout(() => inputRef.current?.focus(), 100);
             }}>
               <Text style={{ color: '#E8F5E9', fontSize: 11.5, marginBottom: 7, lineHeight: 17 }}>• {tip.text}</Text>
             </TouchableOpacity>
