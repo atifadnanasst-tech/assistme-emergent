@@ -5147,36 +5147,20 @@ app.post('/api/products', async (c) => {
     const auth = await authenticateChat(c);
     if (!auth) return c.json({ error: 'unauthorized' }, 401);
     const { organisationId } = auth;
-
     const body = await c.req.json().catch(() => ({}));
-    const { name, selling_price, tax_rate } = body;
-
-    if (!name?.trim()) return c.json({ error: 'validation', message: 'Product name is required' }, 400);
-    if (!selling_price || selling_price <= 0) return c.json({ error: 'validation', message: 'Valid selling price is required' }, 400);
-
-    const { data: newProduct, error: productError } = await supabase
-      .from('products')
-      .insert({
-        organisation_id: organisationId,
-        name: name.trim(),
-        selling_price,
-        unit: 'pcs',
-        cost_price: 0,
-        tax_rate: parseFloat(tax_rate) || 0,
-        is_active: true,
-      })
-      .select('id, name, selling_price')
-      .single();
-
-    if (productError) {
-      console.error('[ADD PRODUCT] Insert error:', productError);
-      return c.json({ error: 'server_error' }, 500);
-    }
-
-    console.log('[ADD PRODUCT] Created:', newProduct.id, newProduct.name);
-    return c.json({ id: newProduct.id, name: newProduct.name, selling_price: newProduct.selling_price }, 201);
+    const { createProduct } = await import('./services/business/productMutations.js');
+    const result = await createProduct(supabase, organisationId, {
+      name: body.name,
+      sellingPrice: body.selling_price,
+      taxRate: body.tax_rate,
+      category: body.category || null,
+      costPrice: body.cost_price || 0,
+      unit: body.unit || 'pcs',
+    });
+    if (result.status === 'failed') return c.json({ error: result.error, message: result.message }, 400);
+    return c.json(result.product, 201);
   } catch (err) {
-    console.error('[ADD PRODUCT] Error:', err);
+    console.error('[POST /api/products] Error:', err.message);
     return c.json({ error: 'server_error' }, 500);
   }
 });
@@ -5191,41 +5175,27 @@ app.patch('/api/products/:id', async (c) => {
     const { organisationId } = auth;
     const productId = c.req.param('id');
     const body = await c.req.json().catch(() => ({}));
-
-    const updates = {};
-    if (body.name !== undefined) {
-      if (!body.name.trim()) return c.json({ error: 'invalid_name', message: 'Product name cannot be empty' }, 400);
-      updates.name = body.name.trim();
+    const { updateProduct, archiveProduct, restoreProduct } = await import('./services/business/productMutations.js');
+    if (body.is_active === false) {
+      const result = await archiveProduct(supabase, organisationId, productId);
+      if (result.status === 'failed') return c.json({ error: result.error }, 500);
+      return c.json({ success: true, operation: 'archive' });
     }
-    if (body.selling_price !== undefined) {
-      if (Number(body.selling_price) < 0) return c.json({ error: 'invalid_price', message: 'Selling price cannot be negative' }, 400);
-      updates.selling_price = Number(body.selling_price);
+    if (body.is_active === true) {
+      const result = await restoreProduct(supabase, organisationId, productId);
+      if (result.status === 'failed') return c.json({ error: result.error }, 500);
+      return c.json({ success: true, operation: 'restore' });
     }
-    if (body.cost_price !== undefined) {
-      if (Number(body.cost_price) < 0) return c.json({ error: 'invalid_price', message: 'Cost price cannot be negative' }, 400);
-      updates.cost_price = Number(body.cost_price);
-    }
-    if (body.tax_rate !== undefined) {
-      const tr = Number(body.tax_rate);
-      if (tr < 0 || tr > 100) return c.json({ error: 'invalid_tax_rate', message: 'Tax rate must be between 0 and 100' }, 400);
-      updates.tax_rate = tr;
-    }
-    if (body.category !== undefined) updates.category = body.category.trim();
-    if (body.unit !== undefined) updates.unit = body.unit.trim();
-    if (body.is_active !== undefined) updates.is_active = body.is_active === true;
-    if (body.is_active === false) updates.deleted_at = new Date().toISOString();
-    if (body.is_active === true) updates.deleted_at = null;
-
-    if (Object.keys(updates).length === 0) return c.json({ error: 'no_fields' }, 400);
-
-    const { data: product, error } = await supabase
-      .from('products').update(updates)
-      .eq('id', productId).eq('organisation_id', organisationId)
-      .select('id, name, selling_price, cost_price, tax_rate, category, unit, is_active').single();
-
-    if (error) { console.error('[PATCH /api/products/:id]', error.message); return c.json({ error: 'server_error' }, 500); }
-    console.log('[PATCH /api/products/:id] Updated:', productId, Object.keys(updates));
-    return c.json(product);
+    const result = await updateProduct(supabase, organisationId, productId, {
+      name: body.name,
+      sellingPrice: body.selling_price,
+      costPrice: body.cost_price,
+      taxRate: body.tax_rate,
+      category: body.category,
+      unit: body.unit,
+    });
+    if (result.status === 'failed') return c.json({ error: result.error, message: result.message }, 400);
+    return c.json(result.product);
   } catch (err) {
     console.error('[PATCH /api/products/:id]', err.message);
     return c.json({ error: 'server_error' }, 500);
