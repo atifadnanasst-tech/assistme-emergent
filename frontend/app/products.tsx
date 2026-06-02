@@ -512,59 +512,6 @@ export default function ProductsCatalogScreen() {
       />
     </SafeAreaView>
   );
-}          <View style={s.catGroup}>
-            <Text style={s.catName}>AI Suggested Items</Text>
-            {suggestions.map(sg => (
-              <TouchableOpacity key={sg.product_id} style={s.listRow} onPress={() => toggleProduct(sg.product_id)}>
-                <Ionicons name={selected.has(sg.product_id) ? 'checkbox' : 'square-outline'} size={20} color={selected.has(sg.product_id) ? '#075E54' : '#CCC'} />
-                <View style={s.aiBadge}><Text style={s.aiBadgeText}>AI</Text></View>
-                <View style={{ flex: 1 }}>
-                  <Text style={s.listProductName}>{sg.product_name}</Text>
-                  <Text style={s.aiReason}>{sg.reason}</Text>
-                </View>
-              </TouchableOpacity>
-            ))}
-          </View>
-        )}
-
-        {/* Checkboxes */}
-        <View style={s.checkboxSection}>
-          <TouchableOpacity style={s.checkboxRow} onPress={() => includeAI ? (setIncludeAI(false), setSuggestions([])) : fetchSuggestions()}>
-            <Ionicons name={includeAI ? 'checkbox' : 'square-outline'} size={22} color={includeAI ? '#075E54' : '#CCC'} />
-            <View>
-              <Text style={s.checkboxLabel}>Include AI suggested items ✦</Text>
-              <Text style={s.checkboxSub}>Based on past orders</Text>
-            </View>
-            {suggestionsLoading && <ActivityIndicator size="small" color="#075E54" />}
-          </TouchableOpacity>
-          <TouchableOpacity style={s.checkboxRow} onPress={() => setHidePrices(!hidePrices)}>
-            <Ionicons name={hidePrices ? 'checkbox' : 'square-outline'} size={22} color={hidePrices ? '#075E54' : '#CCC'} />
-            <Text style={s.checkboxLabel}>Hide prices in catalog</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={s.checkboxRow} onPress={() => setSaveNewPrices(!saveNewPrices)}>
-            <Ionicons name={saveNewPrices ? 'checkbox' : 'square-outline'} size={22} color={saveNewPrices ? '#075E54' : '#CCC'} />
-            <Text style={s.checkboxLabel}>Save new prices</Text>
-          </TouchableOpacity>
-        </View>
-        <View style={{ height: 100 }} />
-      </ScrollView>
-
-      {/* Bottom Action Bar */}
-      <SafeAreaView style={s.bottomSafe} edges={['bottom']}>
-        <View style={s.bottomBar}>
-          <TouchableOpacity style={s.pdfBtn} onPress={() => handleSubmit('pdf')} disabled={!!submitting || selected.size === 0}>
-            {submitting === 'pdf' ? <ActivityIndicator size="small" color="#333" /> : <><Ionicons name="document" size={16} color="#333" /><Text style={s.pdfBtnText}>PDF</Text></>}
-          </TouchableOpacity>
-          <TouchableOpacity style={s.shareBtn} onPress={() => handleSubmit('share')} disabled={!!submitting || selected.size === 0}>
-            {submitting === 'share' ? <ActivityIndicator size="small" color="#FFF" /> : <><Ionicons name="share-social" size={16} color="#FFF" /><Text style={s.shareBtnText}>Share</Text></>}
-          </TouchableOpacity>
-          <TouchableOpacity style={s.waBtn} onPress={() => handleSubmit('whatsapp')} disabled={!!submitting || selected.size === 0}>
-            {submitting === 'whatsapp' ? <ActivityIndicator size="small" color="#FFF" /> : <><Ionicons name="logo-whatsapp" size={16} color="#FFF" /><Text style={s.waBtnText}>WhatsApp</Text></>}
-          </TouchableOpacity>
-        </View>
-      </SafeAreaView>
-    </SafeAreaView>
-  );
 }
 
 const s = StyleSheet.create({
