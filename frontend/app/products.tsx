@@ -11,6 +11,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import { authService } from '../lib/auth';
 import ProductFormSheet, { ProductFormData } from '../components/primitives/ProductFormSheet';
+import ProductImportSheet from '../components/primitives/ProductImportSheet';
 
 interface Product { id: string; name: string; category: string; image_url: string | null; selling_price: number; cost_price: number; tax_rate: number; is_top_seller: boolean; }
 interface Suggestion { product_id: string; product_name: string; reason: string; }
@@ -47,6 +48,7 @@ export default function ProductsCatalogScreen() {
   const [archivedVisible, setArchivedVisible] = useState(false);
   const [archivedProducts, setArchivedProducts] = useState<{id:string,name:string,category:string,selling_price:number}[]>([]);
   const [archivedLoading, setArchivedLoading] = useState(false);
+  const [importVisible, setImportVisible] = useState(false);
 
   const getToken = async () => {
     const token = await authService.getAccessToken();
@@ -523,8 +525,9 @@ export default function ProductsCatalogScreen() {
       {/* Bottom Action Bar */}
       <SafeAreaView style={s.bottomSafe} edges={['bottom']}>
         <View style={s.bottomBar}>
-          <TouchableOpacity style={[s.pdfBtn, selected.size === 0 && s.btnDisabled]} onPress={() => selected.size === 0 ? Alert.alert('', 'Select at least 1 product first') : handleSubmit('pdf')} disabled={!!submitting}>
-            {submitting === 'pdf' ? <ActivityIndicator size="small" color="#333" /> : <><Ionicons name="document" size={16} color={selected.size === 0 ? '#BBB' : '#333'} /><Text style={[s.pdfBtnText, selected.size === 0 && s.btnDisabledText]}>PDF</Text></>}
+          <TouchableOpacity style={s.importBtn} onPress={() => setImportVisible(true)}>
+            <Ionicons name="cloud-upload-outline" size={16} color="#075E54" />
+            <Text style={s.importBtnText}>Import</Text>
           </TouchableOpacity>
           <TouchableOpacity style={[s.shareBtn, selected.size === 0 && s.btnDisabled]} onPress={() => selected.size === 0 ? Alert.alert('', 'Select at least 1 product first') : handleSubmit('share')} disabled={!!submitting}>
             {submitting === 'share' ? <ActivityIndicator size="small" color="#FFF" /> : <><Ionicons name="share-social" size={16} color={selected.size === 0 ? '#BBB' : '#FFF'} /><Text style={[s.shareBtnText, selected.size === 0 && s.btnDisabledText]}>Share</Text></>}
@@ -542,7 +545,7 @@ export default function ProductsCatalogScreen() {
             {[
               { label: 'Add Product', icon: 'add-circle-outline', onPress: () => { setHeaderMenuVisible(false); openAddForm(); } },
               { label: viewMode === 'grid' ? 'List View' : 'Grid View', icon: viewMode === 'grid' ? 'list-outline' : 'grid-outline', onPress: () => { setViewMode(v => v === 'grid' ? 'list' : 'grid'); setHeaderMenuVisible(false); } },
-              { label: 'Import Products', icon: 'cloud-upload-outline', onPress: () => { setHeaderMenuVisible(false); Alert.alert('Coming Soon', 'Import Products from photo, PDF, or document.'); } },
+              { label: 'Import Products', icon: 'cloud-upload-outline', onPress: () => { setHeaderMenuVisible(false); setImportVisible(true); } },
               { label: 'Archived Products', icon: 'archive-outline', onPress: () => { setHeaderMenuVisible(false); loadArchived(); setArchivedVisible(true); } },
               { label: 'Generate Catalog PDF', icon: 'document-text-outline', onPress: () => { setHeaderMenuVisible(false); handleSubmit('pdf'); } },
             ].map(item => (
@@ -615,6 +618,17 @@ export default function ProductsCatalogScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* Product Import Sheet */}
+      <ProductImportSheet
+        visible={importVisible}
+        onDismiss={() => setImportVisible(false)}
+        onComplete={({ created, updated, skipped }) => {
+          setImportVisible(false);
+          loadCatalog();
+          Alert.alert('Import Complete', `${created} created · ${updated} updated · ${skipped} skipped`);
+        }}
+      />
 
       {/* Product Form Sheet — Add / Edit */}
       <ProductFormSheet
@@ -708,6 +722,8 @@ const s = StyleSheet.create({
   bottomBar: { flexDirection: 'row', backgroundColor: '#FFF', paddingVertical: 10, paddingHorizontal: 12, gap: 8, borderTopWidth: 1, borderTopColor: '#F0F0F0' },
   pdfBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 14, borderRadius: 10, backgroundColor: '#F5F5F5' },
   pdfBtnText: { fontSize: 14, fontWeight: '600', color: '#333' },
+  importBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 14, borderRadius: 10, backgroundColor: '#E8F5E9', borderWidth: 1, borderColor: '#075E54' },
+  importBtnText: { fontSize: 14, fontWeight: '600', color: '#075E54' },
   shareBtn: { flex: 1.2, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 14, borderRadius: 10, backgroundColor: '#075E54' },
   shareBtnText: { fontSize: 14, fontWeight: '600', color: '#FFF' },
   waBtn: { flex: 1.2, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 14, borderRadius: 10, backgroundColor: '#25D366' },
