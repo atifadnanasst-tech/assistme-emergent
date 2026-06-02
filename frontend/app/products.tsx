@@ -44,6 +44,9 @@ export default function ProductsCatalogScreen() {
   const [longPressProduct, setLongPressProduct] = useState<Product | null>(null);
   const [longPressMenuVisible, setLongPressMenuVisible] = useState(false);
   const [headerMenuVisible, setHeaderMenuVisible] = useState(false);
+  const [archivedVisible, setArchivedVisible] = useState(false);
+  const [archivedProducts, setArchivedProducts] = useState<{id:string,name:string,category:string,selling_price:number}[]>([]);
+  const [archivedLoading, setArchivedLoading] = useState(false);
 
   const getToken = async () => {
     const token = await authService.getAccessToken();
@@ -65,6 +68,33 @@ export default function ProductsCatalogScreen() {
       setProducts(data.products || []);
       setCategories(data.categories || []);
     } catch {} finally { setLoading(false); }
+  };
+
+  const loadArchived = async () => {
+    setArchivedLoading(true);
+    try {
+      const token = await getToken();
+      if (!token) return;
+      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+      const res = await fetch(`${backendUrl}/api/products/archived`, { headers: { 'Authorization': `Bearer ${token}` } });
+      const data = await res.json();
+      setArchivedProducts(data.products || []);
+    } catch {} finally { setArchivedLoading(false); }
+  };
+
+  const handleUnarchive = async (productId: string) => {
+    try {
+      const token = await getToken();
+      if (!token) return;
+      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+      const res = await fetch(`${backendUrl}/api/products/${productId}`, {
+        method: 'PATCH',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_active: true }),
+      });
+      if (res.ok) { await loadArchived(); await loadCatalog(); }
+      else { Alert.alert('Error', 'Could not unarchive product.'); }
+    } catch { Alert.alert('Error', 'Could not unarchive product.'); }
   };
 
   // Filtering
@@ -472,6 +502,7 @@ export default function ProductsCatalogScreen() {
               { label: 'Add Product', icon: 'add-circle-outline', onPress: () => { setHeaderMenuVisible(false); openAddForm(); } },
               { label: viewMode === 'grid' ? 'List View' : 'Grid View', icon: viewMode === 'grid' ? 'list-outline' : 'grid-outline', onPress: () => { setViewMode(v => v === 'grid' ? 'list' : 'grid'); setHeaderMenuVisible(false); } },
               { label: 'Import Products', icon: 'cloud-upload-outline', onPress: () => { setHeaderMenuVisible(false); Alert.alert('Coming Soon', 'Import Products from photo, PDF, or document.'); } },
+              { label: 'Archived Products', icon: 'archive-outline', onPress: () => { setHeaderMenuVisible(false); loadArchived(); setArchivedVisible(true); } },
               { label: 'Generate Catalog PDF', icon: 'document-text-outline', onPress: () => { setHeaderMenuVisible(false); handleSubmit('pdf'); } },
             ].map(item => (
               <TouchableOpacity key={item.label} onPress={item.onPress} style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, gap: 12 }}>
@@ -502,6 +533,41 @@ export default function ProductsCatalogScreen() {
             </TouchableOpacity>
           </View>
         </Pressable>
+      </Modal>
+
+      {/* Archived Products Modal */}
+      <Modal visible={archivedVisible} transparent animationType="slide" onRequestClose={() => setArchivedVisible(false)}>
+        <View style={s.archivedOverlay}>
+          <View style={s.archivedSheet}>
+            <View style={s.archivedHeader}>
+              <Text style={s.archivedTitle}>Archived Products</Text>
+              <TouchableOpacity onPress={() => setArchivedVisible(false)} style={{ padding: 6 }}>
+                <Ionicons name="close" size={22} color="#333" />
+              </TouchableOpacity>
+            </View>
+            {archivedLoading ? (
+              <ActivityIndicator size="large" color="#075E54" style={{ marginTop: 40 }} />
+            ) : archivedProducts.length === 0 ? (
+              <View style={s.archivedEmpty}>
+                <Text style={s.archivedEmptyText}>No archived products</Text>
+              </View>
+            ) : (
+              <ScrollView>
+                {archivedProducts.map(p => (
+                  <View key={p.id} style={s.archivedRow}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={s.archivedName}>{p.name}</Text>
+                      <Text style={s.archivedCat}>{p.category || 'Uncategorized'}</Text>
+                    </View>
+                    <TouchableOpacity style={s.unarchiveBtn} onPress={() => handleUnarchive(p.id)}>
+                      <Text style={s.unarchiveBtnText}>Restore</Text>
+                    </TouchableOpacity>
+                  </View>
+                ))}
+              </ScrollView>
+            )}
+          </View>
+        </View>
       </Modal>
 
       {/* Product Form Sheet — Add / Edit */}
@@ -581,6 +647,17 @@ const s = StyleSheet.create({
   optionsStrip: { flexDirection: 'row', backgroundColor: '#FFF', borderTopWidth: 1, borderTopColor: '#F0F0F0', paddingHorizontal: 12, paddingVertical: 6, gap: 4 },
   optionItem: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, paddingVertical: 6 },
   optionLabel: { fontSize: 11, color: '#555', fontWeight: '500' },
+  archivedOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
+  archivedSheet: { backgroundColor: '#FFF', borderTopLeftRadius: 20, borderTopRightRadius: 20, maxHeight: '75%', paddingBottom: 30 },
+  archivedHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 16, borderBottomWidth: 1, borderBottomColor: '#F0F0F0' },
+  archivedTitle: { fontSize: 16, fontWeight: '700', color: '#1A1A1A' },
+  archivedEmpty: { alignItems: 'center', paddingVertical: 50 },
+  archivedEmptyText: { fontSize: 14, color: '#999' },
+  archivedRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#F5F5F5' },
+  archivedName: { fontSize: 14, fontWeight: '600', color: '#1A1A1A' },
+  archivedCat: { fontSize: 12, color: '#999', marginTop: 2 },
+  unarchiveBtn: { paddingHorizontal: 14, paddingVertical: 7, borderRadius: 8, backgroundColor: '#E8F5E9', borderWidth: 1, borderColor: '#075E54' },
+  unarchiveBtnText: { fontSize: 13, fontWeight: '600', color: '#075E54' },
   bottomSafe: { backgroundColor: '#FFF' },
   bottomBar: { flexDirection: 'row', backgroundColor: '#FFF', paddingVertical: 10, paddingHorizontal: 12, gap: 8, borderTopWidth: 1, borderTopColor: '#F0F0F0' },
   pdfBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 14, borderRadius: 10, backgroundColor: '#F5F5F5' },

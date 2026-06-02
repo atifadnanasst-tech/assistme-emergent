@@ -5202,6 +5202,26 @@ app.patch('/api/products/:id', async (c) => {
   }
 });
 
+// ─── GET /api/products/archived ─────────────────────────────
+app.get('/api/products/archived', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+    const { data: products, error } = await supabase
+      .from('products')
+      .select('id, name, category, selling_price, image_url')
+      .eq('organisation_id', organisationId)
+      .eq('is_active', false)
+      .order('name');
+    if (error) return c.json({ error: 'db_error' }, 500);
+    return c.json({ products: products || [] });
+  } catch (err) {
+    console.error('[GET /api/products/archived]', err.message);
+    return c.json({ error: 'server_error' }, 500);
+  }
+});
+
 // ─── GET /api/catalog ───────────────────────────────────────
 app.get('/api/catalog', async (c) => {
   try {
