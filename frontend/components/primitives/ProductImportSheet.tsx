@@ -46,20 +46,23 @@ interface ReviewItem extends ExtractedProduct {
   _edited_name: string;
   _edited_price: string;
   _edited_category: string;
+  _edited_gst: string;
 }
 
 interface ProductImportSheetProps {
   visible: boolean;
   onDismiss: () => void;
   onComplete: (counts: { created: number; updated: number; skipped: number }) => void;
+  existingCategories?: string[];
 }
 
 type Step = 'pick' | 'extracting' | 'review' | 'confirming';
 
-export default function ProductImportSheet({ visible, onDismiss, onComplete }: ProductImportSheetProps) {
+export default function ProductImportSheet({ visible, onDismiss, onComplete, existingCategories = [] }: ProductImportSheetProps) {
   const [step, setStep] = useState<Step>('pick');
   const [items, setItems] = useState<ReviewItem[]>([]);
   const [telemetry, setTelemetry] = useState<{ total_extracted: number; total_new: number; total_resolved: number; total_fuzzy: number; model_used: string } | null>(null);
+  const [activeCatIdx, setActiveCatIdx] = useState<number | null>(null);
 
   const getToken = async () => {
     const token = await authService.getAccessToken();
@@ -118,6 +121,7 @@ export default function ProductImportSheet({ visible, onDismiss, onComplete }: P
         _edited_name: p.name,
         _edited_price: p.selling_price != null ? String(p.selling_price) : '',
         _edited_category: p.category || '',
+        _edited_gst: p.tax_rate != null ? String(p.tax_rate) : '',
       })));
       setStep('review');
     } catch { Alert.alert('Error', 'Something went wrong during extraction.'); setStep('pick'); }
@@ -177,7 +181,7 @@ export default function ProductImportSheet({ visible, onDismiss, onComplete }: P
           action: i._action,
           matched_id: i._action === 'update' ? i.matched_product?.id : undefined,
           original_name: i._original_name !== i._edited_name ? i._original_name : undefined,
-          product_data: { name: i._edited_name, sku: i.sku || null, category: i._edited_category || null, unit: i.unit || null, selling_price: i._edited_price ? Number(i._edited_price) : null, cost_price: i.cost_price || null, tax_rate: i.tax_rate || null, brand: i.brand || null, hsn_code: i.hsn_code || null, description: i.description || null },
+          product_data: { name: i._edited_name, sku: i.sku || null, category: i._edited_category || null, unit: i.unit || null, selling_price: i._edited_price ? Number(i._edited_price) : null, cost_price: i.cost_price || null, tax_rate: i._edited_gst ? Number(i._edited_gst) : (i.tax_rate || null), brand: i.brand || null, hsn_code: i.hsn_code || null, description: i.description || null },
         })) }),
       });
       if (!res.ok) { Alert.alert('Error', 'Import failed. Please try again.'); setStep('review'); return; }
@@ -260,11 +264,31 @@ export default function ProductImportSheet({ visible, onDismiss, onComplete }: P
                 <TextInput style={[s.reviewName, item._action === 'skip' && s.strikethrough]} value={item._edited_name} onChangeText={v => { const u = [...items]; u[idx]._edited_name = v; setItems(u); }} editable={item._action !== 'skip'} />
                 <View style={s.reviewMeta}>
                   <TextInput style={s.reviewPrice} value={item._edited_price} onChangeText={v => { const u = [...items]; u[idx]._edited_price = v; setItems(u); }} keyboardType="numeric" placeholder="Price" editable={item._action !== 'skip'} />
-                  <TextInput style={s.reviewCat} value={item._edited_category} onChangeText={v => { const u = [...items]; u[idx]._edited_category = v; setItems(u); }} placeholder="Category" editable={item._action !== 'skip'} />
+                  <TextInput style={s.reviewGst} value={item._edited_gst} onChangeText={v => { const u = [...items]; u[idx]._edited_gst = v; setItems(u); }} keyboardType="numeric" placeholder="GST%" editable={item._action !== 'skip'} />
                 </View>
-                {(item.sku || item.tax_rate || item.brand) && (
+                <View>
+                  <TextInput
+                    style={s.reviewCat}
+                    value={item._edited_category}
+                    onChangeText={v => { const u = [...items]; u[idx]._edited_category = v; setItems(u); setActiveCatIdx(idx); }}
+                    onFocus={() => setActiveCatIdx(idx)}
+                    onBlur={() => setTimeout(() => setActiveCatIdx(null), 150)}
+                    placeholder="Category"
+                    editable={item._action !== 'skip'}
+                  />
+                  {activeCatIdx === idx && existingCategories.filter(c => c.toLowerCase().includes((item._edited_category || '').toLowerCase()) && c !== item._edited_category && (item._edited_category || '').length > 0).length > 0 && (
+                    <View style={s.catDropdown}>
+                      {existingCategories.filter(c => c.toLowerCase().includes((item._edited_category || '').toLowerCase()) && c !== item._edited_category).slice(0, 4).map(c => (
+                        <TouchableOpacity key={c} style={s.catDropdownItem} onPress={() => { const u = [...items]; u[idx]._edited_category = c; setItems(u); setActiveCatIdx(null); }}>
+                          <Text style={s.catDropdownText}>{c}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  )}
+                </View>
+                {(item.sku || item.brand || item.hsn_code) && (
                   <Text style={s.reviewExtra}>
-                    {[item.sku && `SKU: ${item.sku}`, item.tax_rate && `GST: ${item.tax_rate}%`, item.brand && `Brand: ${item.brand}`].filter(Boolean).join(' · ')}
+                    {[item.sku && `SKU: ${item.sku}`, item.brand && `Brand: ${item.brand}`, item.hsn_code && `HSN: ${item.hsn_code}`].filter(Boolean).join(' · ')}
                   </Text>
                 )}
                 {item.resolution_status === 'existing' && item.matched_product && <Text style={s.reviewMatch}>↳ Updates: {item.matched_product.name}</Text>}
@@ -317,4 +341,8 @@ const s = StyleSheet.create({
   confirmCount: { fontSize: 13, color: '#666' },
   confirmBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#075E54', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 10 },
   confirmBtnText: { fontSize: 14, fontWeight: '600', color: '#FFF' },
+  reviewGst: { fontSize: 12, color: '#333', borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3, width: 55 },
+  catDropdown: { position: 'absolute' as any, top: 36, left: 0, right: 0, backgroundColor: '#FFF', borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 8, zIndex: 999, elevation: 10 },
+  catDropdownItem: { paddingHorizontal: 12, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#F5F5F5' },
+  catDropdownText: { fontSize: 13, color: '#333' },
 });

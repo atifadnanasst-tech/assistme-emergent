@@ -623,6 +623,7 @@ export default function ProductsCatalogScreen() {
       <ProductImportSheet
         visible={importVisible}
         onDismiss={() => setImportVisible(false)}
+        existingCategories={categories}
         onComplete={({ created, updated, skipped }) => {
           setImportVisible(false);
           loadCatalog();
