@@ -193,7 +193,7 @@ export default function ProductImportSheet({ visible, onDismiss, onComplete, exi
 
   const confColor = (c: number) => c >= 0.95 ? '#2E7D32' : c >= 0.75 ? '#F57C00' : '#C62828';
   const statusColor = (s: string) => s === 'new' ? '#2E7D32' : s === 'fuzzy' ? '#F57C00' : '#1565C0';
-  const statusLabel = (s: string) => s === 'new' ? 'NEW' : s === 'existing' ? 'EXISTS' : 'FUZZY';
+  const statusLabel = (s: string) => s === 'new' ? 'Add to Catalog' : s === 'existing' ? 'Already Exists' : 'Similar Found';
 
   return (
     <BottomSheet visible={visible} onDismiss={handleDismiss} maxHeight={640}>
@@ -240,7 +240,7 @@ export default function ProductImportSheet({ visible, onDismiss, onComplete, exi
         <>
           {telemetry && (
             <View style={s.telemetryRow}>
-              <Text style={s.telemetryText}>✦ {telemetry.total_extracted} extracted · {telemetry.total_new} new · {telemetry.total_resolved} existing · {telemetry.total_fuzzy} fuzzy · {telemetry.model_used}</Text>
+              <Text style={s.telemetryText}>✦ {telemetry.total_extracted} products found · {telemetry.total_new} to add · {telemetry.total_resolved} already in catalog · {telemetry.total_fuzzy} similar</Text>
             </View>
           )}
           <ScrollView style={{ maxHeight: 420 }} showsVerticalScrollIndicator={false}>
@@ -291,8 +291,21 @@ export default function ProductImportSheet({ visible, onDismiss, onComplete, exi
                     {[item.sku && `SKU: ${item.sku}`, item.brand && `Brand: ${item.brand}`, item.hsn_code && `HSN: ${item.hsn_code}`].filter(Boolean).join(' · ')}
                   </Text>
                 )}
-                {item.resolution_status === 'existing' && item.matched_product && <Text style={s.reviewMatch}>↳ Updates: {item.matched_product.name}</Text>}
-                {item.resolution_status === 'fuzzy' && item.matched_product && <Text style={s.reviewFuzzy}>↳ Possible match: {item.matched_product.name}</Text>}
+                {item.resolution_status === 'existing' && item.matched_product && (
+                  <Text style={s.reviewMatch}>↳ Will update: {item.matched_product.name}</Text>
+                )}
+                {item.resolution_status === 'fuzzy' && item.matched_product && (
+                  <TouchableOpacity style={s.fuzzyChip} onPress={() => {
+                    const u = [...items];
+                    u[idx]._original_name = u[idx]._edited_name;
+                    u[idx]._edited_name = item.matched_product!.name;
+                    u[idx]._action = 'update';
+                    setItems(u);
+                  }}>
+                    <Ionicons name="swap-horizontal" size={12} color="#F57C00" />
+                    <Text style={s.fuzzyChipText}>Use instead: {item.matched_product.name}</Text>
+                  </TouchableOpacity>
+                )}
               </View>
             ))}
           </ScrollView>
@@ -345,4 +358,6 @@ const s = StyleSheet.create({
   catDropdown: { position: 'absolute' as any, top: 36, left: 0, right: 0, backgroundColor: '#FFF', borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 8, zIndex: 999, elevation: 10 },
   catDropdownItem: { paddingHorizontal: 12, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#F5F5F5' },
   catDropdownText: { fontSize: 13, color: '#333' },
+  fuzzyChip: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, backgroundColor: '#FFF3E0', borderWidth: 1, borderColor: '#F57C00', alignSelf: 'flex-start' as any },
+  fuzzyChipText: { fontSize: 11, color: '#F57C00', fontWeight: '600' },
 });
