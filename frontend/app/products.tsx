@@ -275,6 +275,43 @@ export default function ProductsCatalogScreen() {
     setLongPressMenuVisible(false);
   };
 
+  const uploadProductImage = async (productId: string, imageUri: string) => {
+    try {
+      const token = await getToken();
+      if (!token) return;
+      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+      const formData = new FormData();
+      const filename = imageUri.split('/').pop() || 'photo.jpg';
+      const ext = filename.split('.').pop()?.toLowerCase() || 'jpg';
+      const mime = ext === 'png' ? 'image/png' : 'image/jpeg';
+      formData.append('file', { uri: imageUri, name: filename, type: mime } as any);
+      await fetch(`${backendUrl}/api/products/${productId}/image`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` },
+        body: formData,
+      });
+    } catch (err) {
+      console.error('[uploadProductImage] failed:', err);
+    }
+  };
+
+  const handleUpdatePhoto = async (product: Product) => {
+    setLongPressMenuVisible(false);
+    const permission = await (await import('expo-image-picker')).requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) { Alert.alert('Permission required', 'Please allow access to your photo library.'); return; }
+    const result = await (await import('expo-image-picker')).launchImageLibraryAsync({
+      mediaTypes: 'images' as any,
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.7,
+    });
+    if (!result.canceled && result.assets[0]) {
+      await uploadProductImage(product.id, result.assets[0].uri);
+      await loadCatalog();
+      Alert.alert('Done', 'Photo updated.');
+    }
+  };
+
   const handleFormSubmit = async (data: ProductFormData) => {
     setFormLoading(true);
     try {
@@ -292,6 +329,11 @@ export default function ProductsCatalogScreen() {
         ? await fetch(`${backendUrl}/api/products`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
         : await fetch(`${backendUrl}/api/products/${editingProductId}`, { method: 'PATCH', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       if (res.ok) {
+        const saved = await res.json().catch(() => ({}));
+        const productId = formMode === 'add' ? saved.id : editingProductId;
+        if (data.imageUri && productId) {
+          await uploadProductImage(productId, data.imageUri);
+        }
         setFormVisible(false);
         await loadCatalog();
         Alert.alert('Success', formMode === 'add' ? 'Product added successfully.' : 'Product updated.');
@@ -525,6 +567,11 @@ export default function ProductsCatalogScreen() {
               style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 14, gap: 12 }}>
               <Ionicons name="create-outline" size={20} color="#075E54" />
               <Text style={{ fontSize: 15, color: '#333' }}>Edit Product</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => longPressProduct && handleUpdatePhoto(longPressProduct)}
+              style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 14, gap: 12 }}>
+              <Ionicons name="camera-outline" size={20} color="#075E54" />
+              <Text style={{ fontSize: 15, color: '#333' }}>Update Photo</Text>
             </TouchableOpacity>
             <TouchableOpacity onPress={() => longPressProduct && handleArchive(longPressProduct)}
               style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 14, gap: 12 }}>

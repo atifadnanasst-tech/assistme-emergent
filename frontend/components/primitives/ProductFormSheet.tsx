@@ -15,8 +15,9 @@
 
 import React, { useState, useEffect } from 'react';
 import {
-  View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator,
+  View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, Image, Alert,
 } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
 import BottomSheet from './BottomSheet';
 
 const GST_OPTIONS = [0, 5, 12, 18, 28];
@@ -27,6 +28,7 @@ export interface ProductFormData {
   sellingPrice: string;
   taxRate: number;
   costPrice: string;
+  imageUri?: string;
 }
 
 interface ProductFormSheetProps {
@@ -48,6 +50,7 @@ export default function ProductFormSheet({
   const [taxRate, setTaxRate] = useState(0);
   const [costPrice, setCostPrice] = useState('');
   const [showSuggestions, setShowSuggestions] = useState(false);
+  const [imageUri, setImageUri] = useState<string | null>(null);
 
   useEffect(() => {
     if (visible && initialValues) {
@@ -56,10 +59,11 @@ export default function ProductFormSheet({
       setSellingPrice(initialValues.sellingPrice || '');
       setTaxRate(initialValues.taxRate ?? 0);
       setCostPrice(initialValues.costPrice || '');
+      setImageUri(initialValues.imageUri || null);
     }
     if (!visible) {
       setName(''); setCategory(''); setSellingPrice('');
-      setTaxRate(0); setCostPrice(''); setShowSuggestions(false);
+      setTaxRate(0); setCostPrice(''); setShowSuggestions(false); setImageUri(null);
     }
   }, [visible]);
 
@@ -69,14 +73,43 @@ export default function ProductFormSheet({
 
   const canSubmit = name.trim().length > 0 && sellingPrice.length > 0 && Number(sellingPrice) >= 0;
 
+  const pickImage = async () => {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      Alert.alert('Permission required', 'Please allow access to your photo library.');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: 'images' as ImagePicker.MediaType,
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.7,
+    });
+    if (!result.canceled && result.assets[0]) {
+      setImageUri(result.assets[0].uri);
+    }
+  };
+
   const handleSubmit = () => {
     if (!canSubmit) return;
-    onSubmit({ name: name.trim(), category: category.trim(), sellingPrice, taxRate, costPrice });
+    onSubmit({ name: name.trim(), category: category.trim(), sellingPrice, taxRate, costPrice, imageUri: imageUri || undefined });
   };
 
   return (
     <BottomSheet visible={visible} onDismiss={onDismiss}>
       <Text style={styles.heading}>{mode === 'add' ? 'Add Product' : 'Edit Product'}</Text>
+
+      <TouchableOpacity style={styles.imagePicker} onPress={pickImage}>
+        {imageUri ? (
+          <Image source={{ uri: imageUri }} style={styles.imagePreview} />
+        ) : (
+          <View style={styles.imagePlaceholder}>
+            <Text style={styles.imagePlaceholderIcon}>📷</Text>
+            <Text style={styles.imagePlaceholderText}>Add Photo</Text>
+          </View>
+        )}
+        <Text style={styles.imagePickerLabel}>{imageUri ? 'Change Photo' : 'Add Photo'}</Text>
+      </TouchableOpacity>
 
       <Text style={styles.label}>Product Name *</Text>
       <TextInput
@@ -143,6 +176,12 @@ export default function ProductFormSheet({
 
 const styles = StyleSheet.create({
   heading: { fontSize: 18, fontWeight: '700', color: '#1A1A1A', marginBottom: 16 },
+  imagePicker: { alignItems: 'center', marginBottom: 8 },
+  imagePreview: { width: 90, height: 90, borderRadius: 12, marginBottom: 4 },
+  imagePlaceholder: { width: 90, height: 90, borderRadius: 12, backgroundColor: '#E8F5E9', justifyContent: 'center', alignItems: 'center', marginBottom: 4 },
+  imagePlaceholderIcon: { fontSize: 28 },
+  imagePlaceholderText: { fontSize: 11, color: '#999', marginTop: 2 },
+  imagePickerLabel: { fontSize: 12, color: '#075E54', fontWeight: '600' },
   label: { fontSize: 13, fontWeight: '600', color: '#555', marginBottom: 6, marginTop: 12 },
   optional: { fontSize: 12, fontWeight: '400', color: '#999' },
   input: { borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 10, paddingHorizontal: 14, paddingVertical: 12, fontSize: 15, color: '#1A1A1A', backgroundColor: '#FAFAFA' },

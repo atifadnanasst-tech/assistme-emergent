@@ -5202,6 +5202,46 @@ app.patch('/api/products/:id', async (c) => {
   }
 });
 
+// ─── POST /api/products/:id/image ───────────────────────────
+app.post('/api/products/:id/image', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+    const productId = c.req.param('id');
+
+    const { data: product } = await supabase.from('products').select('id').eq('id', productId).eq('organisation_id', organisationId).single();
+    if (!product) return c.json({ error: 'not_found' }, 404);
+
+    const formData = await c.req.formData();
+    const file = formData.get('file');
+    if (!file || typeof file === 'string') return c.json({ error: 'no_file' }, 400);
+
+    const mimeType = file.type || 'image/jpeg';
+    if (!mimeType.startsWith('image/')) return c.json({ error: 'invalid_mime', message: 'Only images allowed' }, 400);
+
+    const ext = (file.name || 'photo.jpg').split('.').pop() || 'jpg';
+    const fileName = `products/${organisationId}/${productId}-${Date.now()}.${ext}`;
+    const arrayBuffer = await file.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+
+    if (buffer.length > 5 * 1024 * 1024) return c.json({ error: 'file_too_large', message: 'Max 5MB' }, 400);
+
+    const { error: uploadErr } = await supabase.storage.from('chat-attachments').upload(fileName, buffer, { contentType: mimeType, upsert: true });
+    if (uploadErr) return c.json({ error: 'upload_failed', message: uploadErr.message }, 500);
+
+    const { data: urlData } = supabase.storage.from('chat-attachments').getPublicUrl(fileName);
+    const imageUrl = urlData.publicUrl;
+
+    await supabase.from('products').update({ image_url: imageUrl }).eq('id', productId).eq('organisation_id', organisationId);
+
+    return c.json({ success: true, image_url: imageUrl, product_id: productId });
+  } catch (err) {
+    console.error('[POST /api/products/:id/image]', err.message);
+    return c.json({ error: 'server_error' }, 500);
+  }
+});
+
 // ─── GET /api/products/archived ─────────────────────────────
 app.get('/api/products/archived', async (c) => {
   try {
