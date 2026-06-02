@@ -468,7 +468,7 @@ export default function ProductsCatalogScreen() {
               { label: 'Add Product', icon: 'add-circle-outline', onPress: () => { setHeaderMenuVisible(false); openAddForm(); } },
               { label: viewMode === 'grid' ? 'List View' : 'Grid View', icon: viewMode === 'grid' ? 'list-outline' : 'grid-outline', onPress: () => { setViewMode(v => v === 'grid' ? 'list' : 'grid'); setHeaderMenuVisible(false); } },
               { label: 'Import Products', icon: 'cloud-upload-outline', onPress: () => { setHeaderMenuVisible(false); Alert.alert('Coming Soon', 'Import Products from photo, PDF, or document.'); } },
-              { label: 'Generate Catalog PDF', icon: 'document-text-outline', onPress: () => { setHeaderMenuVisible(false); } },
+              { label: 'Generate Catalog PDF', icon: 'document-text-outline', onPress: () => { setHeaderMenuVisible(false); handleSubmit('pdf'); } },
             ].map(item => (
               <TouchableOpacity key={item.label} onPress={item.onPress} style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, gap: 12 }}>
                 <Ionicons name={item.icon as any} size={20} color="#333" />
