@@ -33,7 +33,7 @@ export default function BottomSheet({ visible, onDismiss, children, maxHeight, s
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onDismiss}>
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
         <View style={styles.overlay}>
           <Pressable style={StyleSheet.absoluteFillObject} onPress={onDismiss} />
           <View style={[styles.container, { paddingBottom: insets.bottom + 8 }]}>

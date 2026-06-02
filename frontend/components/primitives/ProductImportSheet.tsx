@@ -44,9 +44,11 @@ interface ReviewItem extends ExtractedProduct {
   _action: 'create' | 'update' | 'skip';
   _original_name: string;
   _edited_name: string;
-  _edited_price: string;
+  _edited_selling_price: string;
+  _edited_cost_price: string;
   _edited_category: string;
   _edited_gst: string;
+  _price_type: 'selling' | 'cost';
 }
 
 interface ProductImportSheetProps {
@@ -119,9 +121,11 @@ export default function ProductImportSheet({ visible, onDismiss, onComplete, exi
         _action: p.resolution_status === 'existing' ? 'update' : 'create',
         _original_name: p.name,
         _edited_name: p.name,
-        _edited_price: p.selling_price != null ? String(p.selling_price) : '',
+        _edited_selling_price: p.selling_price != null ? String(p.selling_price) : '',
+        _edited_cost_price: p.cost_price != null ? String(p.cost_price) : '',
         _edited_category: p.category || '',
         _edited_gst: p.tax_rate != null ? String(p.tax_rate) : '',
+        _price_type: 'selling' as 'selling' | 'cost',
       })));
       setStep('review');
     } catch { Alert.alert('Error', 'Something went wrong during extraction.'); setStep('pick'); }
@@ -181,7 +185,7 @@ export default function ProductImportSheet({ visible, onDismiss, onComplete, exi
           action: i._action,
           matched_id: i._action === 'update' ? i.matched_product?.id : undefined,
           original_name: i._original_name !== i._edited_name ? i._original_name : undefined,
-          product_data: { name: i._edited_name, sku: i.sku || null, category: i._edited_category || null, unit: i.unit || null, selling_price: i._edited_price ? Number(i._edited_price) : null, cost_price: i.cost_price || null, tax_rate: i._edited_gst ? Number(i._edited_gst) : (i.tax_rate || null), brand: i.brand || null, hsn_code: i.hsn_code || null, description: i.description || null },
+          product_data: { name: i._edited_name, sku: i.sku || null, category: i._edited_category || null, unit: i.unit || null, selling_price: i._edited_selling_price ? Number(i._edited_selling_price) : null, cost_price: i._edited_cost_price ? Number(i._edited_cost_price) : null, tax_rate: i._edited_gst ? Number(i._edited_gst) : (i.tax_rate || null), brand: i.brand || null, hsn_code: i.hsn_code || null, description: i.description || null },
         })) }),
       });
       if (!res.ok) { Alert.alert('Error', 'Import failed. Please try again.'); setStep('review'); return; }
@@ -263,7 +267,14 @@ export default function ProductImportSheet({ visible, onDismiss, onComplete, exi
                 </View>
                 <TextInput style={[s.reviewName, item._action === 'skip' && s.strikethrough]} value={item._edited_name} onChangeText={v => { const u = [...items]; u[idx]._edited_name = v; setItems(u); }} editable={item._action !== 'skip'} />
                 <View style={s.reviewMeta}>
-                  <TextInput style={s.reviewPrice} value={item._edited_price} onChangeText={v => { const u = [...items]; u[idx]._edited_price = v; setItems(u); }} keyboardType="numeric" placeholder="Price" editable={item._action !== 'skip'} />
+                  <TouchableOpacity style={s.priceTypeBtn} onPress={() => { const u = [...items]; u[idx]._price_type = u[idx]._price_type === 'selling' ? 'cost' : 'selling'; setItems(u); }} disabled={item._action === 'skip'}>
+                    <Text style={s.priceTypeBtnText}>{item._price_type === 'selling' ? 'Sale ↕' : 'Cost ↕'}</Text>
+                  </TouchableOpacity>
+                  {item._price_type === 'selling' ? (
+                    <TextInput style={s.reviewPrice} value={item._edited_selling_price} onChangeText={v => { const u = [...items]; u[idx]._edited_selling_price = v; setItems(u); }} keyboardType="numeric" placeholder="Sale Price" editable={item._action !== 'skip'} />
+                  ) : (
+                    <TextInput style={s.reviewPrice} value={item._edited_cost_price} onChangeText={v => { const u = [...items]; u[idx]._edited_cost_price = v; setItems(u); }} keyboardType="numeric" placeholder="Cost Price" editable={item._action !== 'skip'} />
+                  )}
                   <TextInput style={s.reviewGst} value={item._edited_gst} onChangeText={v => { const u = [...items]; u[idx]._edited_gst = v; setItems(u); }} keyboardType="numeric" placeholder="GST%" editable={item._action !== 'skip'} />
                 </View>
                 <View>
@@ -360,4 +371,6 @@ const s = StyleSheet.create({
   catDropdownText: { fontSize: 13, color: '#333' },
   fuzzyChip: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, backgroundColor: '#FFF3E0', borderWidth: 1, borderColor: '#F57C00', alignSelf: 'flex-start' as any },
   fuzzyChipText: { fontSize: 11, color: '#F57C00', fontWeight: '600' },
+  priceTypeBtn: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, backgroundColor: '#E8F5E9', borderWidth: 1, borderColor: '#075E54' },
+  priceTypeBtnText: { fontSize: 11, fontWeight: '700', color: '#075E54' },
 });
