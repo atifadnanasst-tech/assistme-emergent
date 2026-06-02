@@ -423,27 +423,24 @@ export default function ProductsCatalogScreen() {
           </View>
         )}
 
-        {/* Checkboxes */}
-        <View style={s.checkboxSection}>
-          <TouchableOpacity style={s.checkboxRow} onPress={() => includeAI ? (setIncludeAI(false), setSuggestions([])) : fetchSuggestions()}>
-            <Ionicons name={includeAI ? 'checkbox' : 'square-outline'} size={22} color={includeAI ? '#075E54' : '#CCC'} />
-            <View>
-              <Text style={s.checkboxLabel}>Include AI suggested items ✦</Text>
-              <Text style={s.checkboxSub}>Based on past orders</Text>
-            </View>
-            {suggestionsLoading && <ActivityIndicator size="small" color="#075E54" />}
-          </TouchableOpacity>
-          <TouchableOpacity style={s.checkboxRow} onPress={() => setHidePrices(!hidePrices)}>
-            <Ionicons name={hidePrices ? 'checkbox' : 'square-outline'} size={22} color={hidePrices ? '#075E54' : '#CCC'} />
-            <Text style={s.checkboxLabel}>Hide prices in catalog</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={s.checkboxRow} onPress={() => setSaveNewPrices(!saveNewPrices)}>
-            <Ionicons name={saveNewPrices ? 'checkbox' : 'square-outline'} size={22} color={saveNewPrices ? '#075E54' : '#CCC'} />
-            <Text style={s.checkboxLabel}>Save new prices</Text>
-          </TouchableOpacity>
-        </View>
-        <View style={{ height: 100 }} />
       </ScrollView>
+
+      {/* Catalog Options Strip */}
+      <View style={s.optionsStrip}>
+        <TouchableOpacity style={s.optionItem} onPress={() => includeAI ? (setIncludeAI(false), setSuggestions([])) : fetchSuggestions()}>
+          <Ionicons name={includeAI ? 'checkbox' : 'square-outline'} size={16} color={includeAI ? '#075E54' : '#999'} />
+          <Text style={s.optionLabel}>AI Suggest</Text>
+          {suggestionsLoading && <ActivityIndicator size="small" color="#075E54" />}
+        </TouchableOpacity>
+        <TouchableOpacity style={s.optionItem} onPress={() => setHidePrices(!hidePrices)}>
+          <Ionicons name={hidePrices ? 'checkbox' : 'square-outline'} size={16} color={hidePrices ? '#075E54' : '#999'} />
+          <Text style={s.optionLabel}>Hide Prices</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={s.optionItem} onPress={() => setSaveNewPrices(!saveNewPrices)}>
+          <Ionicons name={saveNewPrices ? 'checkbox' : 'square-outline'} size={16} color={saveNewPrices ? '#075E54' : '#999'} />
+          <Text style={s.optionLabel}>Save Prices</Text>
+        </TouchableOpacity>
+      </View>
 
       {/* Bottom Action Bar */}
       <SafeAreaView style={s.bottomSafe} edges={['bottom']}>
@@ -570,6 +567,9 @@ const s = StyleSheet.create({
   checkboxRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 10 },
   checkboxLabel: { fontSize: 14, fontWeight: '600', color: '#333' },
   checkboxSub: { fontSize: 12, color: '#999' },
+  optionsStrip: { flexDirection: 'row', backgroundColor: '#FFF', borderTopWidth: 1, borderTopColor: '#F0F0F0', paddingHorizontal: 12, paddingVertical: 6, gap: 4 },
+  optionItem: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, paddingVertical: 6 },
+  optionLabel: { fontSize: 11, color: '#555', fontWeight: '500' },
   bottomSafe: { backgroundColor: '#FFF' },
   bottomBar: { flexDirection: 'row', backgroundColor: '#FFF', paddingVertical: 10, paddingHorizontal: 12, gap: 8, borderTopWidth: 1, borderTopColor: '#F0F0F0' },
   pdfBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 14, borderRadius: 10, backgroundColor: '#F5F5F5' },
