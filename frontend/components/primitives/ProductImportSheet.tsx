@@ -48,7 +48,8 @@ interface ReviewItem extends ExtractedProduct {
   _edited_cost_price: string;
   _edited_category: string;
   _edited_gst: string;
-  _price_type: 'selling' | 'cost';
+  _extracted_price: string;
+  _price_locked: boolean;
 }
 
 interface ProductImportSheetProps {
@@ -65,6 +66,7 @@ export default function ProductImportSheet({ visible, onDismiss, onComplete, exi
   const [items, setItems] = useState<ReviewItem[]>([]);
   const [telemetry, setTelemetry] = useState<{ total_extracted: number; total_new: number; total_resolved: number; total_fuzzy: number; model_used: string } | null>(null);
   const [activeCatIdx, setActiveCatIdx] = useState<number | null>(null);
+  const [extractedPriceType, setExtractedPriceType] = useState<'selling' | 'cost'>('selling');
 
   const getToken = async () => {
     const token = await authService.getAccessToken();
@@ -121,11 +123,12 @@ export default function ProductImportSheet({ visible, onDismiss, onComplete, exi
         _action: p.resolution_status === 'existing' ? 'update' : 'create',
         _original_name: p.name,
         _edited_name: p.name,
+        _extracted_price: p.selling_price != null ? String(p.selling_price) : (p.cost_price != null ? String(p.cost_price) : ''),
         _edited_selling_price: p.selling_price != null ? String(p.selling_price) : '',
-        _edited_cost_price: p.cost_price != null ? String(p.cost_price) : '',
+        _edited_cost_price: '',
         _edited_category: p.category || '',
         _edited_gst: p.tax_rate != null ? String(p.tax_rate) : '',
-        _price_type: 'selling' as 'selling' | 'cost',
+        _price_locked: false,
       })));
       setStep('review');
     } catch { Alert.alert('Error', 'Something went wrong during extraction.'); setStep('pick'); }
@@ -169,6 +172,20 @@ export default function ProductImportSheet({ visible, onDismiss, onComplete, exi
     const f = await uploadFile(asset.uri, 'application/pdf', asset.name || 'catalog.pdf');
     if (!f) { Alert.alert('Upload failed', 'Could not upload PDF.'); setStep('pick'); return; }
     await runExtraction([f]);
+  };
+
+  const togglePriceType = (newType: 'selling' | 'cost') => {
+    setExtractedPriceType(newType);
+    setItems(prev => prev.map(item => {
+      if (item._price_locked) return item;
+      const ep = item._extracted_price;
+      if (!ep) return item;
+      return {
+        ...item,
+        _edited_selling_price: newType === 'selling' ? ep : (item._edited_selling_price !== ep ? item._edited_selling_price : ''),
+        _edited_cost_price: newType === 'cost' ? ep : (item._edited_cost_price !== ep ? item._edited_cost_price : ''),
+      };
+    }));
   };
 
   const confirmImport = async () => {
@@ -247,7 +264,22 @@ export default function ProductImportSheet({ visible, onDismiss, onComplete, exi
               <Text style={s.telemetryText}>✦ {telemetry.total_extracted} products found · {telemetry.total_new} to add · {telemetry.total_resolved} already in catalog · {telemetry.total_fuzzy} similar</Text>
             </View>
           )}
-          <ScrollView style={{ maxHeight: 420 }} showsVerticalScrollIndicator={false}>
+          {(() => {
+            const unedited = items.filter(i => !i._price_locked).length;
+            return (
+              <View style={s.globalPriceRow}>
+                <View>
+                  <Text style={s.globalPriceLabel}>Imported prices represent:</Text>
+                  {unedited < items.length && <Text style={s.globalPriceSub}>{unedited} unedited · {items.length - unedited} prices locked</Text>}
+                </View>
+                <TouchableOpacity style={s.globalPriceBtn} onPress={() => togglePriceType(extractedPriceType === 'selling' ? 'cost' : 'selling')}>
+                  <Text style={s.globalPriceBtnText}>{extractedPriceType === 'selling' ? 'Sale Price ↕' : 'Cost Price ↕'}</Text>
+                </TouchableOpacity>
+              </View>
+            );
+          })()}
+
+          <ScrollView style={{ maxHeight: 390 }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
             {items.map((item, idx) => (
               <View key={idx} style={[s.reviewRow, item._action === 'skip' && s.reviewRowSkipped]}>
                 <View style={s.reviewTop}>
@@ -267,15 +299,18 @@ export default function ProductImportSheet({ visible, onDismiss, onComplete, exi
                 </View>
                 <TextInput style={[s.reviewName, item._action === 'skip' && s.strikethrough]} value={item._edited_name} onChangeText={v => { const u = [...items]; u[idx]._edited_name = v; setItems(u); }} editable={item._action !== 'skip'} />
                 <View style={s.reviewMeta}>
-                  <TouchableOpacity style={s.priceTypeBtn} onPress={() => { const u = [...items]; u[idx]._price_type = u[idx]._price_type === 'selling' ? 'cost' : 'selling'; setItems(u); }} disabled={item._action === 'skip'}>
-                    <Text style={s.priceTypeBtnText}>{item._price_type === 'selling' ? 'Sale ↕' : 'Cost ↕'}</Text>
-                  </TouchableOpacity>
-                  {item._price_type === 'selling' ? (
-                    <TextInput style={s.reviewPrice} value={item._edited_selling_price} onChangeText={v => { const u = [...items]; u[idx]._edited_selling_price = v; setItems(u); }} keyboardType="numeric" placeholder="Sale Price" editable={item._action !== 'skip'} />
-                  ) : (
-                    <TextInput style={s.reviewPrice} value={item._edited_cost_price} onChangeText={v => { const u = [...items]; u[idx]._edited_cost_price = v; setItems(u); }} keyboardType="numeric" placeholder="Cost Price" editable={item._action !== 'skip'} />
-                  )}
-                  <TextInput style={s.reviewGst} value={item._edited_gst} onChangeText={v => { const u = [...items]; u[idx]._edited_gst = v; setItems(u); }} keyboardType="numeric" placeholder="GST%" editable={item._action !== 'skip'} />
+                  <View style={s.priceField}>
+                    <Text style={s.priceFieldLabel}>SALE</Text>
+                    <TextInput style={[s.reviewPrice, extractedPriceType === 'cost' && !item._edited_selling_price && s.reviewPriceDim]} value={item._edited_selling_price} onChangeText={v => { const u = [...items]; u[idx]._edited_selling_price = v; u[idx]._price_locked = true; setItems(u); }} keyboardType="numeric" placeholder="—" editable={item._action !== 'skip'} />
+                  </View>
+                  <View style={s.priceField}>
+                    <Text style={s.priceFieldLabel}>COST</Text>
+                    <TextInput style={[s.reviewPrice, extractedPriceType === 'selling' && !item._edited_cost_price && s.reviewPriceDim]} value={item._edited_cost_price} onChangeText={v => { const u = [...items]; u[idx]._edited_cost_price = v; u[idx]._price_locked = true; setItems(u); }} keyboardType="numeric" placeholder="—" editable={item._action !== 'skip'} />
+                  </View>
+                  <View style={s.priceField}>
+                    <Text style={s.priceFieldLabel}>GST%</Text>
+                    <TextInput style={s.reviewGst} value={item._edited_gst} onChangeText={v => { const u = [...items]; u[idx]._edited_gst = v; setItems(u); }} keyboardType="numeric" placeholder="—" editable={item._action !== 'skip'} />
+                  </View>
                 </View>
                 <View>
                   <TextInput
@@ -371,6 +406,12 @@ const s = StyleSheet.create({
   catDropdownText: { fontSize: 13, color: '#333' },
   fuzzyChip: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, backgroundColor: '#FFF3E0', borderWidth: 1, borderColor: '#F57C00', alignSelf: 'flex-start' as any },
   fuzzyChipText: { fontSize: 11, color: '#F57C00', fontWeight: '600' },
-  priceTypeBtn: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, backgroundColor: '#E8F5E9', borderWidth: 1, borderColor: '#075E54' },
-  priceTypeBtnText: { fontSize: 11, fontWeight: '700', color: '#075E54' },
+  globalPriceRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 10, paddingHorizontal: 4, marginBottom: 6, borderBottomWidth: 1, borderBottomColor: '#F0F0F0' },
+  globalPriceLabel: { fontSize: 12, color: '#444', fontWeight: '600' },
+  globalPriceSub: { fontSize: 10, color: '#999', marginTop: 2 },
+  globalPriceBtn: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, backgroundColor: '#075E54' },
+  globalPriceBtnText: { fontSize: 12, fontWeight: '700', color: '#FFF' },
+  priceField: { alignItems: 'center', gap: 2 },
+  priceFieldLabel: { fontSize: 9, color: '#999', fontWeight: '700', letterSpacing: 0.5 },
+  reviewPriceDim: { opacity: 0.3 },
 });
