@@ -512,4 +512,123 @@ export default function ProductsCatalogScreen() {
       />
     </SafeAreaView>
   );
+}          <View style={s.catGroup}>
+            <Text style={s.catName}>AI Suggested Items</Text>
+            {suggestions.map(sg => (
+              <TouchableOpacity key={sg.product_id} style={s.listRow} onPress={() => toggleProduct(sg.product_id)}>
+                <Ionicons name={selected.has(sg.product_id) ? 'checkbox' : 'square-outline'} size={20} color={selected.has(sg.product_id) ? '#075E54' : '#CCC'} />
+                <View style={s.aiBadge}><Text style={s.aiBadgeText}>AI</Text></View>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.listProductName}>{sg.product_name}</Text>
+                  <Text style={s.aiReason}>{sg.reason}</Text>
+                </View>
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
+
+        {/* Checkboxes */}
+        <View style={s.checkboxSection}>
+          <TouchableOpacity style={s.checkboxRow} onPress={() => includeAI ? (setIncludeAI(false), setSuggestions([])) : fetchSuggestions()}>
+            <Ionicons name={includeAI ? 'checkbox' : 'square-outline'} size={22} color={includeAI ? '#075E54' : '#CCC'} />
+            <View>
+              <Text style={s.checkboxLabel}>Include AI suggested items ✦</Text>
+              <Text style={s.checkboxSub}>Based on past orders</Text>
+            </View>
+            {suggestionsLoading && <ActivityIndicator size="small" color="#075E54" />}
+          </TouchableOpacity>
+          <TouchableOpacity style={s.checkboxRow} onPress={() => setHidePrices(!hidePrices)}>
+            <Ionicons name={hidePrices ? 'checkbox' : 'square-outline'} size={22} color={hidePrices ? '#075E54' : '#CCC'} />
+            <Text style={s.checkboxLabel}>Hide prices in catalog</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={s.checkboxRow} onPress={() => setSaveNewPrices(!saveNewPrices)}>
+            <Ionicons name={saveNewPrices ? 'checkbox' : 'square-outline'} size={22} color={saveNewPrices ? '#075E54' : '#CCC'} />
+            <Text style={s.checkboxLabel}>Save new prices</Text>
+          </TouchableOpacity>
+        </View>
+        <View style={{ height: 100 }} />
+      </ScrollView>
+
+      {/* Bottom Action Bar */}
+      <SafeAreaView style={s.bottomSafe} edges={['bottom']}>
+        <View style={s.bottomBar}>
+          <TouchableOpacity style={s.pdfBtn} onPress={() => handleSubmit('pdf')} disabled={!!submitting || selected.size === 0}>
+            {submitting === 'pdf' ? <ActivityIndicator size="small" color="#333" /> : <><Ionicons name="document" size={16} color="#333" /><Text style={s.pdfBtnText}>PDF</Text></>}
+          </TouchableOpacity>
+          <TouchableOpacity style={s.shareBtn} onPress={() => handleSubmit('share')} disabled={!!submitting || selected.size === 0}>
+            {submitting === 'share' ? <ActivityIndicator size="small" color="#FFF" /> : <><Ionicons name="share-social" size={16} color="#FFF" /><Text style={s.shareBtnText}>Share</Text></>}
+          </TouchableOpacity>
+          <TouchableOpacity style={s.waBtn} onPress={() => handleSubmit('whatsapp')} disabled={!!submitting || selected.size === 0}>
+            {submitting === 'whatsapp' ? <ActivityIndicator size="small" color="#FFF" /> : <><Ionicons name="logo-whatsapp" size={16} color="#FFF" /><Text style={s.waBtnText}>WhatsApp</Text></>}
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    </SafeAreaView>
+  );
 }
+
+const s = StyleSheet.create({
+  safe: { flex: 1, backgroundColor: '#F5F5F5' },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#FFF', paddingVertical: 12, paddingHorizontal: 16, borderBottomWidth: 1, borderBottomColor: '#F0F0F0' },
+  headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  logoBubble: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#E8F5E9', justifyContent: 'center', alignItems: 'center' },
+  headerTitle: { fontSize: 20, fontWeight: '700', color: '#1A1A1A' },
+  viewToggle: { flexDirection: 'row', gap: 4 },
+  toggleIcon: { padding: 6, borderRadius: 6 },
+  toggleActive: { backgroundColor: '#E8F5E9' },
+  bizRow: { backgroundColor: '#FFF', paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#F0F0F0' },
+  bizLabel: { fontSize: 10, fontWeight: '600', color: '#999', letterSpacing: 0.5 },
+  bizName: { fontSize: 16, fontWeight: '600', color: '#1A1A1A', marginTop: 2 },
+  tabScroll: { backgroundColor: '#FFF', maxHeight: 48 },
+  tabContent: { paddingHorizontal: 12, gap: 8, alignItems: 'center' },
+  filterTab: { paddingVertical: 12, paddingHorizontal: 14, borderBottomWidth: 3, borderBottomColor: 'transparent' },
+  filterTabActive: { borderBottomColor: '#075E54' },
+  filterTabText: { fontSize: 13, color: '#999', fontWeight: '500' },
+  filterTabTextActive: { color: '#075E54', fontWeight: '700' },
+  scroll: { flex: 1 },
+  scrollContent: { padding: 12 },
+  emptyState: { alignItems: 'center', paddingVertical: 40 },
+  emptyText: { color: '#999', fontSize: 15 },
+  catGroup: { marginBottom: 16 },
+  catHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 10 },
+  catCheckbox: { padding: 2 },
+  catName: { flex: 1, fontSize: 16, fontWeight: '700', color: '#1A1A1A' },
+  addNewText: { color: '#075E54', fontSize: 13, fontWeight: '600' },
+  gridContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  gridCard: { width: '48%', backgroundColor: '#FFF', borderRadius: 12, overflow: 'hidden', elevation: 1 },
+  gridImage: { width: '100%', height: 120, backgroundColor: '#F0F0F0' },
+  gridImagePlaceholder: { height: 120, backgroundColor: '#F0F0F0', justifyContent: 'center', alignItems: 'center' },
+  gridImageLetter: { fontSize: 32, fontWeight: '700', color: '#CCC' },
+  topBadge: { position: 'absolute', top: 6, right: 6, backgroundColor: '#FF9800', borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2 },
+  topBadgeText: { fontSize: 9, fontWeight: '700', color: '#FFF' },
+  gridCardBody: { padding: 10 },
+  gridNameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  gridProductName: { flex: 1, fontSize: 14, fontWeight: '600', color: '#1A1A1A' },
+  gridPriceRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 6 },
+  gridPrice: { fontSize: 15, fontWeight: '700', color: '#075E54' },
+  priceEditInput: { borderWidth: 1, borderColor: '#075E54', borderRadius: 6, padding: 4, fontSize: 14, width: 80, color: '#333' },
+  listRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF', borderRadius: 10, padding: 12, marginBottom: 6, gap: 10 },
+  listImage: { width: 40, height: 40, borderRadius: 8, backgroundColor: '#F0F0F0' },
+  listImagePlaceholder: { width: 40, height: 40, borderRadius: 8, backgroundColor: '#F0F0F0', justifyContent: 'center', alignItems: 'center' },
+  listImageLetter: { fontSize: 18, fontWeight: '700', color: '#CCC' },
+  listProductName: { fontSize: 14, fontWeight: '600', color: '#1A1A1A' },
+  listTopLabel: { fontSize: 10, fontWeight: '700', color: '#FF9800' },
+  listPriceCol: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  listPrice: { fontSize: 15, fontWeight: '700', color: '#075E54' },
+  aiBadge: { backgroundColor: '#E8F5E9', borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2 },
+  aiBadgeText: { fontSize: 10, fontWeight: '700', color: '#075E54' },
+  aiReason: { fontSize: 12, color: '#666', fontStyle: 'italic', marginTop: 2 },
+  checkboxSection: { backgroundColor: '#FFF', borderRadius: 12, padding: 14, marginTop: 12 },
+  checkboxRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 10 },
+  checkboxLabel: { fontSize: 14, fontWeight: '600', color: '#333' },
+  checkboxSub: { fontSize: 12, color: '#999' },
+  bottomSafe: { backgroundColor: '#FFF' },
+  bottomBar: { flexDirection: 'row', backgroundColor: '#FFF', paddingVertical: 10, paddingHorizontal: 12, gap: 8, borderTopWidth: 1, borderTopColor: '#F0F0F0' },
+  pdfBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 14, borderRadius: 10, backgroundColor: '#F5F5F5' },
+  pdfBtnText: { fontSize: 14, fontWeight: '600', color: '#333' },
+  shareBtn: { flex: 1.2, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 14, borderRadius: 10, backgroundColor: '#075E54' },
+  shareBtnText: { fontSize: 14, fontWeight: '600', color: '#FFF' },
+  waBtn: { flex: 1.2, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 14, borderRadius: 10, backgroundColor: '#25D366' },
+  waBtnText: { fontSize: 14, fontWeight: '600', color: '#FFF' },
+});
