@@ -306,6 +306,13 @@ export default function ProductsCatalogScreen() {
           <Text style={s.headerTitle}>Smart Catalog</Text>
         </View>
         <View style={s.viewToggle}>
+          <TouchableOpacity style={s.selectAllBtn} onPress={() => {
+            const allIds = filtered.map(p => p.id);
+            const allSelected = allIds.every(id => selected.has(id));
+            setSelected(allSelected ? new Set() : new Set(allIds));
+          }}>
+            <Text style={s.selectAllText}>{filtered.length > 0 && filtered.every(p => selected.has(p.id)) ? 'Deselect All' : 'Select All'}</Text>
+          </TouchableOpacity>
           <TouchableOpacity style={s.toggleIcon} onPress={() => setHeaderMenuVisible(true)}>
             <Ionicons name="ellipsis-vertical" size={22} color="#333" />
           </TouchableOpacity>
@@ -445,14 +452,14 @@ export default function ProductsCatalogScreen() {
       {/* Bottom Action Bar */}
       <SafeAreaView style={s.bottomSafe} edges={['bottom']}>
         <View style={s.bottomBar}>
-          <TouchableOpacity style={s.pdfBtn} onPress={() => handleSubmit('pdf')} disabled={!!submitting || selected.size === 0}>
-            {submitting === 'pdf' ? <ActivityIndicator size="small" color="#333" /> : <><Ionicons name="document" size={16} color="#333" /><Text style={s.pdfBtnText}>PDF</Text></>}
+          <TouchableOpacity style={[s.pdfBtn, selected.size === 0 && s.btnDisabled]} onPress={() => selected.size === 0 ? Alert.alert('', 'Select at least 1 product first') : handleSubmit('pdf')} disabled={!!submitting}>
+            {submitting === 'pdf' ? <ActivityIndicator size="small" color="#333" /> : <><Ionicons name="document" size={16} color={selected.size === 0 ? '#BBB' : '#333'} /><Text style={[s.pdfBtnText, selected.size === 0 && s.btnDisabledText]}>PDF</Text></>}
           </TouchableOpacity>
-          <TouchableOpacity style={s.shareBtn} onPress={() => handleSubmit('share')} disabled={!!submitting || selected.size === 0}>
-            {submitting === 'share' ? <ActivityIndicator size="small" color="#FFF" /> : <><Ionicons name="share-social" size={16} color="#FFF" /><Text style={s.shareBtnText}>Share</Text></>}
+          <TouchableOpacity style={[s.shareBtn, selected.size === 0 && s.btnDisabled]} onPress={() => selected.size === 0 ? Alert.alert('', 'Select at least 1 product first') : handleSubmit('share')} disabled={!!submitting}>
+            {submitting === 'share' ? <ActivityIndicator size="small" color="#FFF" /> : <><Ionicons name="share-social" size={16} color={selected.size === 0 ? '#BBB' : '#FFF'} /><Text style={[s.shareBtnText, selected.size === 0 && s.btnDisabledText]}>Share</Text></>}
           </TouchableOpacity>
-          <TouchableOpacity style={s.waBtn} onPress={() => handleSubmit('whatsapp')} disabled={!!submitting || selected.size === 0}>
-            {submitting === 'whatsapp' ? <ActivityIndicator size="small" color="#FFF" /> : <><Ionicons name="logo-whatsapp" size={16} color="#FFF" /><Text style={s.waBtnText}>WhatsApp</Text></>}
+          <TouchableOpacity style={[s.waBtn, selected.size === 0 && s.btnDisabled]} onPress={() => selected.size === 0 ? Alert.alert('', 'Select at least 1 product first') : handleSubmit('whatsapp')} disabled={!!submitting}>
+            {submitting === 'whatsapp' ? <ActivityIndicator size="small" color="#FFF" /> : <><Ionicons name="logo-whatsapp" size={16} color={selected.size === 0 ? '#BBB' : '#FFF'} /><Text style={[s.waBtnText, selected.size === 0 && s.btnDisabledText]}>WhatsApp</Text></>}
           </TouchableOpacity>
         </View>
       </SafeAreaView>
@@ -520,6 +527,10 @@ const s = StyleSheet.create({
   headerTitle: { fontSize: 20, fontWeight: '700', color: '#1A1A1A' },
   viewToggle: { flexDirection: 'row', gap: 4 },
   toggleIcon: { padding: 6, borderRadius: 6 },
+  selectAllBtn: { paddingHorizontal: 10, paddingVertical: 6 },
+  selectAllText: { fontSize: 13, color: '#075E54', fontWeight: '600' },
+  btnDisabled: { opacity: 0.4 },
+  btnDisabledText: { color: '#999' },
   toggleActive: { backgroundColor: '#E8F5E9' },
   bizRow: { backgroundColor: '#FFF', paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#F0F0F0' },
   bizLabel: { fontSize: 10, fontWeight: '600', color: '#999', letterSpacing: 0.5 },
