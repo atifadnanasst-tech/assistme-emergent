@@ -269,6 +269,7 @@ export default function ProductsCatalogScreen() {
       sellingPrice: String(product.selling_price),
       taxRate: product.tax_rate ?? 0,
       costPrice: String(product.cost_price || ''),
+      imageUri: product.image_url || undefined,
     });
     setEditingProductId(product.id);
     setFormVisible(true);
@@ -301,8 +302,6 @@ export default function ProductsCatalogScreen() {
     if (!permission.granted) { Alert.alert('Permission required', 'Please allow access to your photo library.'); return; }
     const result = await (await import('expo-image-picker')).launchImageLibraryAsync({
       mediaTypes: 'images' as any,
-      allowsEditing: true,
-      aspect: [1, 1],
       quality: 0.7,
     });
     if (!result.canceled && result.assets[0]) {
