@@ -23,10 +23,10 @@
 
 export async function createProduct(supabase, orgId, data) {
   try {
-    const { name, sellingPrice, taxRate = 0, category = null, costPrice = 0, unit = "pcs" } = data;
+    const { name, sellingPrice, taxRate = 0, category = null, costPrice = 0, unit = "pcs", sku, description, customFields } = data;
     if (!name?.trim()) return { status: "failed", error: "name_required" };
     if (sellingPrice == null || Number(sellingPrice) < 0) return { status: "failed", error: "invalid_selling_price" };
-    const { data: product, error } = await supabase.from("products").insert({
+    const insertRow = {
       organisation_id: orgId,
       name: name.trim(),
       selling_price: Number(sellingPrice),
@@ -35,7 +35,12 @@ export async function createProduct(supabase, orgId, data) {
       category: category?.trim() || null,
       unit: unit?.trim() || "pcs",
       is_active: true,
-    }).select("id, name, selling_price, cost_price, tax_rate, category, unit, is_active").single();
+      custom_fields: customFields || {},
+    };
+    if (sku) insertRow.sku = sku.trim();
+    if (description) insertRow.description = description.trim();
+    const { data: product, error } = await supabase.from("products").insert(insertRow).select("id, name, selling_price, cost_price, tax_rate, category, unit, is_active, sku, description").single();
+    if (error?.code === "23505") return { status: "failed", error: "sku_conflict", message: "A product with this SKU already exists." };
     if (error) { console.error("[createProduct]", error.message); return { status: "failed", error: "db_error", message: error.message }; }
     console.log("[createProduct] Created:", product.id, product.name);
     return { status: "success", operation: "create", product };
@@ -67,6 +72,12 @@ export async function updateProduct(supabase, orgId, productId, data) {
     }
     if (data.category !== undefined) updates.category = data.category?.trim() || null;
     if (data.unit !== undefined) updates.unit = data.unit?.trim() || "pcs";
+    if (data.sku !== undefined) updates.sku = data.sku?.trim() || null;
+    if (data.description !== undefined) updates.description = data.description?.trim() || null;
+    if (data.customFields && Object.keys(data.customFields).length > 0) {
+      const { data: existing } = await supabase.from("products").select("custom_fields").eq("id", productId).single();
+      updates.custom_fields = { ...(existing?.custom_fields || {}), ...data.customFields };
+    }
     if (Object.keys(updates).length === 0) return { status: "failed", error: "no_fields" };
     const { data: product, error } = await supabase.from("products").update(updates)
       .eq("id", productId).eq("organisation_id", orgId)

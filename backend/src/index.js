@@ -5242,6 +5242,66 @@ app.post('/api/products/:id/image', async (c) => {
   }
 });
 
+// ─── POST /api/products/import/extract ──────────────────────
+app.post('/api/products/import/extract', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+
+    const body = await c.req.json();
+    const { files } = body;
+    if (!files || !Array.isArray(files) || files.length === 0)
+      return c.json({ error: 'no_files' }, 400);
+
+    const client = getOpenAI();
+    if (!client) return c.json({ error: 'ai_unavailable' }, 503);
+
+    const { data: org } = await supabase.from('organisations').select('subscription_plan').eq('id', organisationId).single();
+    const plan = org?.subscription_plan || 'free';
+
+    const { extractProductsFromFiles, resolveImportedProducts } = await import('./services/business/productImport.js');
+    const { products, totalExtracted, usedFallback, importModel } = await extractProductsFromFiles({ files, client, plan });
+    const { resolved, totalResolved, totalNew, totalFuzzy } = await resolveImportedProducts({ products, organisationId, supabase });
+
+    return c.json({
+      products: resolved,
+      used_fallback: usedFallback,
+      total: resolved.length,
+      total_extracted: totalExtracted,
+      total_resolved: totalResolved,
+      total_new: totalNew,
+      total_fuzzy: totalFuzzy,
+      model_used: importModel,
+    });
+  } catch (err) {
+    console.error('[POST /api/products/import/extract]', err.message);
+    return c.json({ error: 'server_error' }, 500);
+  }
+});
+
+// ─── POST /api/products/import/confirm ──────────────────────
+app.post('/api/products/import/confirm', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+
+    const body = await c.req.json();
+    const { items } = body;
+    if (!items || !Array.isArray(items))
+      return c.json({ error: 'no_items' }, 400);
+
+    const { confirmImportedProducts } = await import('./services/business/productImport.js');
+    const result = await confirmImportedProducts({ items, organisationId, supabase });
+
+    return c.json(result);
+  } catch (err) {
+    console.error('[POST /api/products/import/confirm]', err.message);
+    return c.json({ error: 'server_error' }, 500);
+  }
+});
+
 // ─── GET /api/products/archived ─────────────────────────────
 app.get('/api/products/archived', async (c) => {
   try {
