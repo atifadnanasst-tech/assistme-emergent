@@ -21,6 +21,7 @@
  */
 
 import { dispatchMenuQuery } from './index.js';
+import { dispatchFreeform } from './freeform.js';
 import { randomUUID } from 'crypto';
 
 // ── Server-owned menu labels ──────────────────────────────────
@@ -221,12 +222,28 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
         const openai = getOpenAI();
         result = await dispatchMenuQuery(menu_id, supabase, organisationId, orgCurrency, openai, orgLanguage);
       } else {
-        result = {
-          response_text: 'Freeform business queries are coming soon. Use the menu categories above to explore your business data.',
-          chart_data: null,
-          next_action: null,
-          message_type: 'ai_response',
-        };
+        const { data: recentMsgs } = await supabase
+          .from('messages')
+          .select('role, content')
+          .eq('ai_conversation_id', ai_conversation_id)
+          .order('created_at', { ascending: false })
+          .limit(8);
+        const conversationHistory = (recentMsgs || []).reverse();
+
+        const openai = getOpenAI();
+        result = await dispatchFreeform({
+          message,
+          orgId: organisationId,
+          orgContext: {
+            currency: orgCurrency,
+            language: orgLanguage,
+            openai,
+          },
+          conversationId: ai_conversation_id,
+          supabase,
+          scope: 'org',
+          conversationHistory,
+        });
       }
 
       // Save AI response message
@@ -245,6 +262,8 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
             message_type: result.message_type || 'ai_response',
             chart_data: result.chart_data || null,
             next_action: result.next_action || null,
+            execution_plan: result.execution_plan || null,
+            pending_plan_id: result.pending_plan_id || null,
             preview_text: result.response_text.substring(0, 50),
             read_by_owner: true,
             menu_id: menu_id || null,
@@ -267,6 +286,8 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
         chart_data: result.chart_data || null,
         next_action: result.next_action || null,
         message_type: result.message_type || 'ai_response',
+        execution_plan: result.execution_plan || null,
+        pending_plan_id: result.pending_plan_id || null,
       });
 
     } catch (error) {
