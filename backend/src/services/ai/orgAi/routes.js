@@ -369,4 +369,160 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
       return c.json({ error: 'server_error' }, 500);
     }
   });
+
+  // ── POST /api/home/execute-plan ───────────────────────────────
+  // Session I-B: Confirms and executes a pending freeform plan.
+  //
+  // SECURITY MODEL:
+  //   - org ownership verified from JWT — never from body
+  //   - plan params loaded server-side from ai_actions (client sent UUID only)
+  //   - atomic claim via UPDATE WHERE status='pending' prevents double-execution
+  //   - 5-minute expiry enforced before execution
+  //   - drift detection re-runs selector and rejects if product count changed
+  //
+  // STATUS FLOW (ai_actions):
+  //   pending → approved (atomic claim) → executed (after successful run)
+  //   pending → rejected (expired or drifted)
+  //   approved → failed (unexpected execution error)
+  app.post('/api/home/execute-plan', async (c) => {
+    let claimedPlanId = null;
+
+    try {
+      const auth = await authenticateChat(c);
+      if (!auth) return c.json({ error: 'unauthorized' }, 401);
+      const { organisationId } = auth;
+
+      const body = await c.req.json();
+      const { pending_plan_id } = body;
+
+      if (!pending_plan_id) return c.json({ error: 'pending_plan_id required' }, 400);
+
+      const { data: planRow, error: fetchErr } = await supabase
+        .from('ai_actions')
+        .select('id, organisation_id, action_type, status, parameters, created_at')
+        .eq('id', pending_plan_id)
+        .eq('organisation_id', organisationId)
+        .eq('action_type', 'freeform_plan')
+        .maybeSingle();
+
+      if (fetchErr || !planRow) {
+        return c.json({ error: 'plan_not_found' }, 404);
+      }
+
+      const ageMs = Date.now() - new Date(planRow.created_at).getTime();
+      if (ageMs > 5 * 60 * 1000) {
+        await supabase.from('ai_actions').update({ status: 'rejected' })
+          .eq('id', pending_plan_id).eq('status', 'pending');
+        return c.json({ error: 'plan_expired', message: 'This plan has expired. Please make your request again.' }, 410);
+      }
+
+      const { data: claimed, error: claimErr } = await supabase
+        .from('ai_actions')
+        .update({ status: 'approved' })
+        .eq('id', pending_plan_id)
+        .eq('organisation_id', organisationId)
+        .eq('status', 'pending')
+        .select('id')
+        .single();
+
+      if (claimErr || !claimed) {
+        return c.json({ error: 'plan_already_executed', message: 'This plan was already confirmed or is being processed.' }, 409);
+      }
+
+      claimedPlanId = pending_plan_id;
+
+      const { plan_steps, preview_count, org_context } = planRow.parameters || {};
+
+      if (!plan_steps || plan_steps.length === 0) {
+        await supabase.from('ai_actions').update({ status: 'failed' }).eq('id', claimedPlanId);
+        return c.json({ error: 'invalid_plan' }, 400);
+      }
+
+      const step = plan_steps[0];
+      const { capability, params } = step;
+
+      const { data: org } = await supabase.from('organisations').select('currency')
+        .eq('id', organisationId).maybeSingle();
+      const orgCurrency = org?.currency || org_context?.currency || 'INR';
+
+      if (capability === 'mutate_product' && preview_count !== null && preview_count !== undefined) {
+        const { resolveProductSelectorCount } = await import('../capabilities/productSelector.js');
+        const { count: currentCount, error: countErr } = await resolveProductSelectorCount({
+          selector: params?.selector || {},
+          orgId: organisationId,
+          supabase,
+        });
+
+        if (!countErr && currentCount !== preview_count) {
+          await supabase.from('ai_actions').update({ status: 'rejected' }).eq('id', claimedPlanId);
+          claimedPlanId = null;
+          return c.json({
+            error: 'plan_drifted',
+            message: `Product list changed since preview. Previously ${preview_count} products, now ${currentCount}. Please make your request again.`,
+            preview_count,
+            current_count: currentCount,
+          }, 409);
+        }
+      }
+
+      let executionResult;
+
+      if (capability === 'mutate_product') {
+        const { mutateProductCapability } = await import('../capabilities/mutationCapabilities.js');
+        executionResult = await mutateProductCapability(params, organisationId, supabase, { currency: orgCurrency });
+      } else {
+        await supabase.from('ai_actions').update({ status: 'failed' }).eq('id', claimedPlanId);
+        claimedPlanId = null;
+        return c.json({ error: 'capability_not_implemented', message: `Execution of "${capability}" is coming soon.` }, 501);
+      }
+
+      await supabase.from('ai_actions')
+        .update({ status: 'executed', last_run_at: new Date().toISOString(), run_count: 1 })
+        .eq('id', claimedPlanId);
+      claimedPlanId = null;
+
+      const execution_id = randomUUID();
+      await supabase.from('action_log').insert({
+        organisation_id: organisationId,
+        entity_type: 'organisation',
+        entity_id: organisationId,
+        action_type: capability,
+        signal_type: 'freeform_execution',
+        source_surface: 'org_ai_freeform',
+        execution_id,
+        channel: 'in_app',
+        status: 'sent',
+        metadata: {
+          pending_plan_id,
+          capability,
+          affected_count: executionResult._mutation_result?.affected_count || 0,
+          operation: executionResult._mutation_result?.operation || null,
+        },
+        actioned_at: new Date().toISOString(),
+      });
+
+      const { getSuggestedNextActions } = await import('../ai/capabilityRegistry.js');
+      const suggested = getSuggestedNextActions(capability);
+
+      console.log('[execute-plan]', { pending_plan_id, capability, affected: executionResult._mutation_result?.affected_count, execution_id });
+
+      return c.json({
+        success: true,
+        execution_id,
+        response_text: executionResult.response_text,
+        chart_data: executionResult.chart_data || null,
+        next_action: executionResult.next_action || null,
+        message_type: executionResult.message_type || 'ai_response',
+        suggested_next_actions: suggested,
+      });
+
+    } catch (error) {
+      if (claimedPlanId) {
+        await supabase.from('ai_actions').update({ status: 'failed' })
+          .eq('id', claimedPlanId).eq('status', 'approved');
+      }
+      console.error('POST /api/home/execute-plan error:', error);
+      return c.json({ error: 'server_error' }, 500);
+    }
+  });
 }

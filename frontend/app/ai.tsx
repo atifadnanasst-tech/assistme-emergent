@@ -727,9 +727,43 @@ export default function AIScreen() {
     const handleConfirm = async () => {
       if (isConfirming || !planId) return;
       setConfirmingPlanId(planId);
-      // Session I-B: wire to /api/home/execute-plan
-      Alert.alert('Coming in Session I-B', 'Confirmation endpoint not yet built.');
-      setConfirmingPlanId(null);
+      try {
+        const token = await getToken();
+        if (!token) { setConfirmingPlanId(null); return; }
+        const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+        const res = await fetch(`${backendUrl}/api/home/execute-plan`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pending_plan_id: planId }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          Alert.alert('Could not execute', data.message || data.error || 'Execution failed. Please try again.');
+          return;
+        }
+        // Disable Confirm button on original plan card by nulling pending_plan_id
+        setMessages(prev =>
+          prev.map(m => m.pending_plan_id === planId ? { ...m, pending_plan_id: null } : m)
+        );
+        // Prepend COO result — inverted FlatList, prepend = visually bottom
+        const resultMsg: AIMessage = {
+          id: data.execution_id || `exec-${Date.now()}`,
+          role: 'assistant',
+          content: data.response_text || 'Done.',
+          card_type: data.message_type || 'query_response',
+          card_data: {},
+          chart_data: data.chart_data || null,
+          next_action: data.next_action || null,
+          execution_plan: null,
+          pending_plan_id: null,
+          created_at: new Date().toISOString(),
+        };
+        setMessages(prev => [resultMsg, ...prev]);
+      } catch (err: any) {
+        Alert.alert('Error', 'Something went wrong. Please try again.');
+      } finally {
+        setConfirmingPlanId(null);
+      }
     };
 
     return (
