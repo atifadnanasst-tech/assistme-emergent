@@ -49,6 +49,9 @@ export async function resolveProductSelector({
     query = query.ilike('category', `%${selector.category}%`);
   } else if (selector.name_contains !== undefined && selector.name_contains !== null && selector.name_contains !== '') {
     query = query.ilike('name', `%${selector.name_contains}%`);
+  } else if (selector.name !== undefined && selector.name !== null && selector.name !== '') {
+    // alias: planner may send 'name' instead of 'name_contains'
+    query = query.ilike('name', `%${selector.name}%`);
   } else if (selector.all === true) {
     // explicit opt-in — no additional filter
   } else {
