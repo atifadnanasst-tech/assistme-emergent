@@ -431,7 +431,7 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
 
       claimedPlanId = pending_plan_id;
 
-      const { plan_steps, preview_count, org_context } = planRow.parameters || {};
+      const { plan_steps, preview_count, ai_conversation_id, org_context } = planRow.parameters || {};
 
       if (!plan_steps || plan_steps.length === 0) {
         await supabase.from('ai_actions').update({ status: 'failed' }).eq('id', claimedPlanId);
@@ -446,7 +446,7 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
       const orgCurrency = org?.currency || org_context?.currency || 'INR';
 
       if (capability === 'mutate_product' && preview_count !== null && preview_count !== undefined) {
-        const { resolveProductSelectorCount } = await import('../capabilities/productSelector.js');
+        const { resolveProductSelectorCount } = await import('../../capabilities/productSelector.js');
         const { count: currentCount, error: countErr } = await resolveProductSelectorCount({
           selector: params?.selector || {},
           orgId: organisationId,
@@ -468,7 +468,7 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
       let executionResult;
 
       if (capability === 'mutate_product') {
-        const { mutateProductCapability } = await import('../capabilities/mutationCapabilities.js');
+        const { mutateProductCapability } = await import('../../capabilities/mutationCapabilities.js');
         executionResult = await mutateProductCapability(params, organisationId, supabase, { currency: orgCurrency });
       } else {
         await supabase.from('ai_actions').update({ status: 'failed' }).eq('id', claimedPlanId);
@@ -501,10 +501,33 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
         actioned_at: new Date().toISOString(),
       });
 
-      const { getSuggestedNextActions } = await import('../ai/capabilityRegistry.js');
+      const { getSuggestedNextActions } = await import('../../ai/capabilityRegistry.js');
       const suggested = getSuggestedNextActions(capability);
 
       console.log('[execute-plan]', { pending_plan_id, capability, affected: executionResult._mutation_result?.affected_count, execution_id });
+
+      // Save result message to DB so it survives reload
+      if (ai_conversation_id) {
+        await supabase.from('messages').insert({
+          organisation_id: organisationId,
+          ai_conversation_id,
+          role: 'assistant',
+          content: executionResult.response_text,
+          canonical_text: executionResult.response_text,
+          input_modality: 'text',
+          metadata: {
+            sender_type: 'ai',
+            visibility: 'owner_only',
+            message_type: executionResult.message_type || 'ai_response',
+            chart_data: executionResult.chart_data || null,
+            next_action: executionResult.next_action || null,
+            execution_plan: null,
+            pending_plan_id: null,
+            preview_text: executionResult.response_text.substring(0, 50),
+            read_by_owner: true,
+          },
+        });
+      }
 
       return c.json({
         success: true,

@@ -797,7 +797,7 @@ export default function AIScreen() {
 
         <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
           <TouchableOpacity
-            style={{ flex: 1, backgroundColor: '#B0BEC5', borderRadius: 8, paddingVertical: 10, alignItems: 'center' }}
+            style={{ flex: 1, backgroundColor: '#B0BEC5', borderRadius: 8, paddingVertical: 10, alignItems: 'center', marginTop: 10 }}
             onPress={() => Alert.alert('Not implemented', 'Cancellation will be available in Session I-B.')}
           >
             <Text style={{ color: '#FFFFFF', fontSize: 13, fontWeight: '700' }}>✗ Cancel</Text>

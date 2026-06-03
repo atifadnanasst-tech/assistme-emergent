@@ -100,6 +100,7 @@ export async function dispatchFreeform({
           parameters: {
             plan_steps: planCard._plan_steps,
             preview_count: planCard.affected_count,
+            ai_conversation_id: conversationId,
             scope,
             org_context: { currency: orgContext.currency, language: orgContext.language },
           },
