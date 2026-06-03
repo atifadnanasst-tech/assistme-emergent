@@ -33,6 +33,8 @@ interface AIMessage {
   card_data: Record<string, any>;
   chart_data: Record<string, any> | null;
   next_action: ActionData | null;
+  execution_plan: Record<string, any> | null;
+  pending_plan_id: string | null;
   created_at: string;
 }
 
@@ -60,6 +62,7 @@ export default function AIScreen() {
   const [actionModalData, setActionModalData] = useState<ActionData | null>(null);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [aiRecording, setAiRecording] = useState<Audio.Recording | null>(null);
+  const [confirmingPlanId, setConfirmingPlanId] = useState<string | null>(null);
 
   // TODO: consolidate handleMenuQuery + handleSendDirect into shared sendAiRequest helper
   // Pure helper — index-based dropdown positioning (no layout measurement needed)
@@ -160,6 +163,8 @@ export default function AIScreen() {
         card_data: {},
         chart_data: data.chart_data || null,
         next_action: data.next_action || null,
+        execution_plan: data.execution_plan || null,
+        pending_plan_id: data.pending_plan_id || null,
         created_at: new Date().toISOString(),
       };
       setMessages(prev => [aiMsg, ...prev]); // inverted: prepend = visually bottom
@@ -265,6 +270,8 @@ export default function AIScreen() {
           card_data: {},
           chart_data: m.metadata?.chart_data || null,
           next_action: m.metadata?.next_action || null,
+          execution_plan: m.metadata?.execution_plan || null,
+          pending_plan_id: m.metadata?.pending_plan_id || null,
           created_at: m.created_at,
         }));
         // DESC order from backend + inverted FlatList = natural bottom anchoring (canonical chat pattern)
@@ -305,6 +312,8 @@ export default function AIScreen() {
     card_data: {},
     chart_data: m.metadata?.chart_data || null,
     next_action: m.metadata?.next_action || null,
+    execution_plan: m.metadata?.execution_plan || null,
+    pending_plan_id: m.metadata?.pending_plan_id || null,
     created_at: m.created_at,
   });
 
@@ -481,6 +490,8 @@ export default function AIScreen() {
         card_data: {},
         chart_data: data.chart_data || null,
         next_action: data.next_action || null,
+        execution_plan: data.execution_plan || null,
+        pending_plan_id: data.pending_plan_id || null,
         created_at: new Date().toISOString(),
       };
       setMessages(prev => [aiMsg, ...prev]); // inverted: prepend = visually bottom
@@ -705,6 +716,74 @@ export default function AIScreen() {
     </View>
   );
 
+  const renderExecutionPlan = (msg: AIMessage) => {
+    const plan = msg.execution_plan;
+    const planId = msg.pending_plan_id;
+    if (!plan) return renderQueryResponse(msg);
+
+    const s = plan.currency_symbol ?? '₹';
+    const isConfirming = confirmingPlanId === planId;
+
+    const handleConfirm = async () => {
+      if (isConfirming || !planId) return;
+      setConfirmingPlanId(planId);
+      // Session I-B: wire to /api/home/execute-plan
+      Alert.alert('Coming in Session I-B', 'Confirmation endpoint not yet built.');
+      setConfirmingPlanId(null);
+    };
+
+    return (
+      <View style={[styles.cardContainer, styles.cardBordered]}>
+        <View style={styles.cardHeader}>
+          <Text style={styles.cardIcon}>📋</Text>
+          <Text style={styles.cardTitle}>Execution Plan</Text>
+        </View>
+
+        <Text style={styles.cardBody}>{plan.operation_description}</Text>
+
+        {plan.preview_rows && plan.preview_rows.length > 0 && (
+          <View style={{ marginTop: 8, marginBottom: 4 }}>
+            <View style={{ flexDirection: 'row', marginBottom: 4 }}>
+              <Text style={{ flex: 2, fontSize: 11, color: '#666666', fontWeight: '600' }}>PRODUCT</Text>
+              <Text style={{ flex: 1, fontSize: 11, color: '#666666', fontWeight: '600', textAlign: 'right' }}>BEFORE</Text>
+              <Text style={{ flex: 1, fontSize: 11, color: '#075E54', fontWeight: '600', textAlign: 'right' }}>AFTER</Text>
+            </View>
+            {plan.preview_rows.map((row: any, i: number) => (
+              <View key={i} style={{ flexDirection: 'row', paddingVertical: 3, borderTopWidth: 1, borderTopColor: '#F0F0F0' }}>
+                <Text style={{ flex: 2, fontSize: 13, color: '#1A1A1A' }} numberOfLines={1}>{row.name}</Text>
+                <Text style={{ flex: 1, fontSize: 13, color: '#666666', textAlign: 'right' }}>{s}{row.before?.toLocaleString('en-IN')}</Text>
+                <Text style={{ flex: 1, fontSize: 13, color: '#075E54', fontWeight: '600', textAlign: 'right' }}>{s}{row.after?.toLocaleString('en-IN')}</Text>
+              </View>
+            ))}
+            {plan.more_count > 0 && (
+              <Text style={{ fontSize: 12, color: '#999999', marginTop: 4 }}>+{plan.more_count} more products</Text>
+            )}
+          </View>
+        )}
+
+        <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
+          <TouchableOpacity
+            style={{ flex: 1, backgroundColor: '#B0BEC5', borderRadius: 8, paddingVertical: 10, alignItems: 'center' }}
+            onPress={() => Alert.alert('Not implemented', 'Cancellation will be available in Session I-B.')}
+          >
+            <Text style={{ color: '#FFFFFF', fontSize: 13, fontWeight: '700' }}>✗ Cancel</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.actionTriggerBtn, { flex: 1, opacity: isConfirming ? 0.6 : 1 }]}
+            onPress={handleConfirm}
+            disabled={isConfirming}
+          >
+            <Text style={styles.actionTriggerBtnText}>
+              {isConfirming ? 'Processing...' : '✓ Confirm'}
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        <Text style={styles.cardTimestamp}>{formatTime(msg.created_at)}</Text>
+      </View>
+    );
+  };
+
   const renderMessage = ({ item }: { item: AIMessage }) => {
     if (item.role === 'user') return renderUserMessage(item);
 
@@ -721,6 +800,7 @@ export default function AIScreen() {
       case 'reorder_suggestion': return renderReorderSuggestion(item);
       case 'bank_summary': return renderBankSummary(item);
       case 'collection_insight': return renderCollectionInsight(item);
+      case 'execution_plan': return renderExecutionPlan(item);
       case 'query_response':
       default: return renderQueryResponse(item);
     }
