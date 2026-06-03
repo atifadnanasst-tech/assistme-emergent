@@ -47,13 +47,13 @@ export async function dispatchFreeform({
   }
 
   // Step 3: Validate
-  const { validPlan, unknownCapabilities } = validatePlan({ plan: planResult.plan, userPrompt: message, orgId, scope });
+  const { validPlan, unknownCapabilities } = await validatePlan({ plan: planResult.plan, userPrompt: message, orgId, scope, supabase });
 
   if (validPlan.length === 0) {
     const intentDesc = unknownCapabilities.length > 0
       ? unknownCapabilities.slice(0, 2).map(c => `"${c.replace(/_/g, ' ')}"`).join(' or ')
       : 'that';
-    return { response_text: `I don't know how to ${intentDesc} yet. This capability is coming soon. Try asking about your sales, customers, products, or payments.`, chart_data: null, next_action: null, message_type: 'ai_response', execution_plan: null, pending_plan_id: null };
+    return { response_text: `I understand what you're trying to do, but AssistMe can't perform ${intentDesc} yet. I've recorded this as a capability request so the AssistMe team can prioritise it in a future update. In the meantime, I can help you analyse your business data — try asking about sales, customers, products, invoices, or payments.`, chart_data: null, next_action: null, message_type: 'ai_response', execution_plan: null, pending_plan_id: null };
   }
 
   // Step 4: Classify

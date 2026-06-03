@@ -3,16 +3,44 @@
  *
  * Location: /backend/src/services/ai/validator.js
  * Created: Session I-A, Jun 2026
+ * Updated: Session II, Jun 2026
  *
  * PURPOSE: Guards between planner output and dispatcher execution.
  *          Catches hallucinated capability names before anything is dispatched.
- *          Session I: unknown intents logged to console only.
- *          Session II: will upsert to missing_capabilities table.
+ *          Unknown intents upserted to missing_capabilities table for roadmap intelligence.
  */
 
 import { getCapability, requiresFullConfirmation } from './capabilityRegistry.js';
 
-export function validatePlan({ plan, userPrompt, orgId, scope }) {
+// Upsert unknown intent to missing_capabilities table.
+// scope reserved for future roadmap analytics (not yet stored).
+async function logMissingCapability({ supabase, orgId, userPrompt, detectedIntent }) {
+  if (!supabase || !orgId) return;
+  try {
+    const { data: existing } = await supabase
+      .from('missing_capabilities')
+      .select('id, frequency')
+      .eq('organisation_id', orgId)
+      .eq('detected_intent', detectedIntent)
+      .maybeSingle();
+
+    if (existing) {
+      await supabase.from('missing_capabilities')
+        .update({ frequency: existing.frequency + 1, last_seen_at: new Date().toISOString() })
+        .eq('id', existing.id);
+    } else {
+      await supabase.from('missing_capabilities').insert({
+        organisation_id: orgId,
+        user_prompt: userPrompt?.substring(0, 500) || '',
+        detected_intent: detectedIntent,
+      });
+    }
+  } catch (err) {
+    console.warn('[validator] missing_capabilities log failed:', err.message);
+  }
+}
+
+export async function validatePlan({ plan, userPrompt, orgId, scope, supabase }) {
   const validPlan = [];
   const unknownCapabilities = [];
   const warnings = [];
@@ -27,13 +55,8 @@ export function validatePlan({ plan, userPrompt, orgId, scope }) {
     const cap = getCapability(capName);
     if (!cap) {
       unknownCapabilities.push(capName);
-      console.warn('[MISSING_CAPABILITY]', JSON.stringify({
-        detected_intent: capName,
-        user_prompt: userPrompt?.substring(0, 200),
-        organisation_id: orgId,
-        scope,
-        timestamp: new Date().toISOString(),
-      }));
+      console.warn('[MISSING_CAPABILITY]', capName, '| org:', orgId);
+      await logMissingCapability({ supabase, orgId, userPrompt, detectedIntent: capName });
       continue;
     }
 
