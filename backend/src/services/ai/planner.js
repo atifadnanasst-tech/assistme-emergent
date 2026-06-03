@@ -67,9 +67,14 @@ RULES:
 7. "meri attar products" → params.selector.category = "attar".
 8. For bulk operations use selector, not individual IDs.
 9. label should match the language the owner used (Hindi/English/mixed).
+10. If owner specifies an EXPLICIT TARGET PRICE ("make it 1150", "set to 550", "1150 kar do", "price 199 rakhna"):
+    ALWAYS use change_type="set_price" with the exact number as value.
+    NEVER use increase_pct or decrease_pct for explicit target prices.
 
 PARAM EXAMPLES:
-- mutate_product bulk price: { "operation": "bulk_price_change", "selector": { "category": "attar" }, "change_type": "increase_pct", "value": 10 }
+- mutate_product bulk % increase: { "operation": "bulk_price_change", "selector": { "category": "attar" }, "change_type": "increase_pct", "value": 10 }
+- mutate_product set absolute price: { "operation": "bulk_price_change", "selector": { "name": "Attar Mogra" }, "change_type": "set_price", "value": 1150 }
+- mutate_product % decrease: { "operation": "bulk_price_change", "selector": { "category": "perfume" }, "change_type": "decrease_pct", "value": 5 }
 - mutate_payment: { "operation": "record_payment", "customer_name": "ABC", "amount": 5000 }
 - query_customers: { "filter": "overdue" }
 - send_payment_reminder: { "target": "all_overdue" }`;
