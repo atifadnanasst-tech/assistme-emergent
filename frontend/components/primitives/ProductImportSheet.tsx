@@ -13,10 +13,10 @@
  * CONSUMERS: products.tsx Import button
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet, ActivityIndicator,
-  TextInput, ScrollView, Alert,
+  TextInput, ScrollView, Alert, Keyboard,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
@@ -69,6 +69,13 @@ export default function ProductImportSheet({ visible, onDismiss, onComplete, exi
   const [telemetry, setTelemetry] = useState<{ total_extracted: number; total_new: number; total_resolved: number; total_fuzzy: number; model_used: string } | null>(null);
   const [activeCatIdx, setActiveCatIdx] = useState<number | null>(null);
   const [extractedPriceType, setExtractedPriceType] = useState<'selling' | 'cost'>('selling');
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+
+  useEffect(() => {
+    const show = Keyboard.addListener('keyboardDidShow', e => setKeyboardHeight(e.endCoordinates.height));
+    const hide = Keyboard.addListener('keyboardDidHide', () => setKeyboardHeight(0));
+    return () => { show.remove(); hide.remove(); };
+  }, []);
 
   const getToken = async () => {
     const token = await authService.getAccessToken();
@@ -283,7 +290,7 @@ export default function ProductImportSheet({ visible, onDismiss, onComplete, exi
             );
           })()}
 
-          <ScrollView style={{ maxHeight: 390 }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+          <ScrollView style={{ maxHeight: 390 }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingBottom: keyboardHeight > 0 ? keyboardHeight + 40 : 24 }}>
             {items.map((item, idx) => (
               <View key={idx} style={[s.reviewRow, item._action === 'skip' && s.reviewRowSkipped]}>
                 <View style={s.reviewTop}>

@@ -32,7 +32,8 @@
         "android.permission.READ_MEDIA_VIDEO"
       ],
       "edgeToEdgeEnabled": true,
-      "googleServicesFile": "./google-services.json"
+      "googleServicesFile": "./google-services.json",
+      "softwareKeyboardLayoutMode": "pan"
     },
     "web": {
       "bundler": "metro",
