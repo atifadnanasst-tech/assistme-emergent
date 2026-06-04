@@ -83,7 +83,9 @@ PARAM EXAMPLES:
 - mutate_product bulk % increase: { "operation": "bulk_price_change", "selector": { "category": "attar" }, "change_type": "increase_pct", "value": 10 }
 - mutate_product set absolute price: { "operation": "bulk_price_change", "selector": { "name": "Attar Mogra" }, "change_type": "set_price", "value": 1150 }
 - mutate_product % decrease: { "operation": "bulk_price_change", "selector": { "category": "perfume" }, "change_type": "decrease_pct", "value": 5 }
-- mutate_payment: { "operation": "record_payment", "customer_name": "ABC", "amount": 5000 }
+- mutate_payment record payment: { "operation": "record_payment", "customer": { "name": "ABC Traders" }, "amount": 5000 }
+- mutate_payment with date: { "operation": "record_payment", "customer": { "name": "Ania" }, "amount": 3600, "date": "2026-06-04" }
+- mutate_payment with method: { "operation": "record_payment", "customer": { "name": "XYZ" }, "amount": 10000, "method": "upi" }
 - query_customers: { "filter": "overdue" }
 - send_payment_reminder: { "target": "all_overdue" }`;
 }

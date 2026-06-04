@@ -10,6 +10,7 @@
  */
 
 import { resolveProductSelector } from '../capabilities/productSelector.js';
+import { resolveCustomerSelector } from '../capabilities/customerSelector.js';
 
 const CURRENCY_SYMBOLS = { INR: '₹', USD: '$', AED: 'AED ', GBP: '£', EUR: '€' };
 const sym = (currency) => CURRENCY_SYMBOLS[currency] || `${currency} `;
@@ -25,7 +26,7 @@ export async function buildExecutionPlanCard({ validPlan, orgId, supabase, orgCo
   }
 
   if (capability === 'mutate_payment') {
-    return _buildPaymentPlan({ params, label, capability, orgContext });
+    return _buildPaymentPlan({ params, label, capability, orgContext, orgId, supabase });
   }
 
   return _buildGenericPlan({ capability, params, label, orgContext });
@@ -86,14 +87,20 @@ async function _buildProductMutationPlan({ params, orgId, supabase, orgContext, 
   };
 }
 
-function _buildPaymentPlan({ params, label, capability, orgContext }) {
+async function _buildPaymentPlan({ params, label, capability, orgContext, orgId, supabase }) {
   const { customer: customerSelector = {}, amount, date, method } = params;
   const currency = orgContext?.currency || 'INR';
   const s = currency === 'INR' ? '₹' : `${currency} `;
   const numAmount = Number(amount);
-  const customerName = customerSelector.name || customerSelector.customer_name || 'the customer';
   const paymentDate = date || new Date().toISOString().split('T')[0];
   const methodLabel = method ? ` via ${method}` : '';
+
+  // Resolve customer name from DB so preview shows confirmed name, not raw planner input
+  let customerName = customerSelector.name || customerSelector.customer_name || 'the customer';
+  if (orgId && supabase && (customerSelector.name || customerSelector.customer_name)) {
+    const { customer } = await resolveCustomerSelector({ selector: customerSelector, orgId, supabase });
+    if (customer?.name) customerName = customer.name;
+  }
 
   return {
     capability,

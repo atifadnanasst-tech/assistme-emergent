@@ -30,7 +30,12 @@ const CURRENCY_SYMBOLS = { INR: '₹', USD: '$', AED: 'AED ', GBP: '£', EUR: '�
 const sym = (currency) => CURRENCY_SYMBOLS[currency] || `${currency} `;
 
 export async function mutatePaymentCapability(params, orgId, supabase, orgContext) {
-  const { customer: customerSelector = {}, amount, date, method, invoice_id } = params;
+  // Accept both nested { customer: { name } } and flat { customer_name } from planner
+  const customerSelectorRaw = params.customer || {};
+  const customerSelector = Object.keys(customerSelectorRaw).length > 0
+    ? customerSelectorRaw
+    : { name: params.customer_name };
+  const { amount, date, method, invoice_id } = params;
   const currency = orgContext?.currency || 'INR';
   const s = sym(currency);
 
