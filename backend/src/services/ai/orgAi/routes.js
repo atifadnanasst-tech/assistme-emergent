@@ -470,6 +470,9 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
       if (capability === 'mutate_product') {
         const { mutateProductCapability } = await import('../../capabilities/mutationCapabilities.js');
         executionResult = await mutateProductCapability(params, organisationId, supabase, { currency: orgCurrency });
+      } else if (capability === 'mutate_payment') {
+        const { mutatePaymentCapability } = await import('../../capabilities/paymentCapabilities.js');
+        executionResult = await mutatePaymentCapability(params, organisationId, supabase, { currency: orgCurrency });
       } else {
         await supabase.from('ai_actions').update({ status: 'failed' }).eq('id', claimedPlanId);
         claimedPlanId = null;

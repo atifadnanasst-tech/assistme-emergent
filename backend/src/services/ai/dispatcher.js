@@ -16,6 +16,7 @@
 import { getSuggestedNextActions } from './capabilityRegistry.js';
 import { dispatchMenuQuery } from '../ai/orgAi/index.js';
 import { mutateProductCapability } from '../capabilities/mutationCapabilities.js';
+import { mutatePaymentCapability } from '../capabilities/paymentCapabilities.js';
 
 const DISPATCH_MAP = {
 
@@ -67,6 +68,9 @@ const DISPATCH_MAP = {
 
   mutate_product: async (params, orgId, supabase, orgContext) =>
     mutateProductCapability(params, orgId, supabase, orgContext),
+
+  mutate_payment: async (params, orgId, supabase, orgContext) =>
+    mutatePaymentCapability(params, orgId, supabase, orgContext),
 };
 
 export async function dispatch({ capability, params, orgId, supabase, orgContext }) {

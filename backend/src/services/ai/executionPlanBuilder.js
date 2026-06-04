@@ -24,6 +24,10 @@ export async function buildExecutionPlanCard({ validPlan, orgId, supabase, orgCo
     return _buildProductMutationPlan({ params, orgId, supabase, orgContext, label, capability });
   }
 
+  if (capability === 'mutate_payment') {
+    return _buildPaymentPlan({ params, label, capability, orgContext });
+  }
+
   return _buildGenericPlan({ capability, params, label, orgContext });
 }
 
@@ -75,6 +79,31 @@ async function _buildProductMutationPlan({ params, orgId, supabase, orgContext, 
     affected_count: totalCount,
     preview_rows: previewRows,
     more_count: moreCount,
+    currency,
+    error: false,
+    empty: false,
+    _plan_steps: [{ capability, params, label }],
+  };
+}
+
+function _buildPaymentPlan({ params, label, capability, orgContext }) {
+  const { customer: customerSelector = {}, amount, date, method } = params;
+  const currency = orgContext?.currency || 'INR';
+  const s = currency === 'INR' ? '₹' : `${currency} `;
+  const numAmount = Number(amount);
+  const customerName = customerSelector.name || customerSelector.customer_name || 'the customer';
+  const paymentDate = date || new Date().toISOString().split('T')[0];
+  const methodLabel = method ? ` via ${method}` : '';
+
+  return {
+    capability,
+    label,
+    operation: `Record payment — ${s}${numAmount.toLocaleString('en-IN')}`,
+    operation_description: `${s}${numAmount.toLocaleString('en-IN')} from ${customerName}${methodLabel}`,
+    summary_text: `Record ${s}${numAmount.toLocaleString('en-IN')} payment from ${customerName}${methodLabel} (${paymentDate}). Confirm to proceed.`,
+    affected_count: 1,
+    preview_rows: [],
+    more_count: 0,
     currency,
     error: false,
     empty: false,
