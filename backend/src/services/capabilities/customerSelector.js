@@ -57,7 +57,6 @@ export async function resolveCustomerSelector({ selector = {}, orgId, supabase }
     if (exactMatches?.length > 1) return { customer: null, candidates: exactMatches, error: null };
 
     // Step 2: partial ILIKE search
-    // Future: add trigram fuzzy match here before returning candidates
     const { data: partialMatches, error: partialErr } = await supabase
       .from('customers')
       .select(baseSelect)
@@ -69,11 +68,33 @@ export async function resolveCustomerSelector({ selector = {}, orgId, supabase }
 
     if (partialErr) return { customer: null, candidates: [], error: partialErr.message };
 
-    const results = partialMatches || [];
-    if (results.length === 0) return { customer: null, candidates: [], error: null };
-    if (results.length === 1) return { customer: results[0], candidates: [], error: null };
+    const partialResults = partialMatches || [];
+    if (partialResults.length === 1) return { customer: partialResults[0], candidates: [], error: null };
+    if (partialResults.length > 1) return { customer: null, candidates: partialResults, error: null };
 
-    return { customer: null, candidates: results, error: null };
+    // Step 3: fuzzy trigram search via search_customers_fuzzy()
+    // Threshold 0.10 — tuned from production data (Jun 2026)
+    // Falls here when exact and partial ILIKE both return 0 results
+    // e.g. "noor" → "Noor Suppliers", "anea" → "Ania Adnan"
+    const { data: fuzzyMatches, error: fuzzyErr } = await supabase
+      .rpc('search_customers_fuzzy', {
+        p_organisation_id: orgId,
+        p_search_term: searchName,
+        p_limit: 5,
+        p_threshold: 0.10,
+      });
+
+    if (fuzzyErr) {
+      console.warn('[customerSelector] fuzzy search error:', fuzzyErr.message);
+      return { customer: null, candidates: [], error: null }; // graceful — don't fail hard on fuzzy error
+    }
+
+    const fuzzyResults = fuzzyMatches || [];
+    if (fuzzyResults.length === 0) return { customer: null, candidates: [], error: null };
+    if (fuzzyResults.length === 1) return { customer: fuzzyResults[0], candidates: [], error: null };
+
+    // Multiple fuzzy matches — return as candidates with similarity scores for clarification
+    return { customer: null, candidates: fuzzyResults, error: null };
   }
 
   // Priority 3: phone

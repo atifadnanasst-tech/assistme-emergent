@@ -66,7 +66,63 @@ export async function resolveProductSelector({
     return { products: [], error: dbError.message };
   }
 
-  return { products: data || [], error: null };
+  const results = data || [];
+
+  // Fuzzy fallback for single-product name lookups only
+  // Only when a name was provided and ILIKE returned 0 results
+  // Does NOT apply to category or all selectors — those are intentionally broad
+  const isSingleNameLookup = (
+    (selector.product_id && typeof selector.product_id === 'string') ||
+    selector.name ||
+    selector.name_contains
+  ) && !selector.category && !selector.all;
+
+  if (results.length === 0 && isSingleNameLookup) {
+    const searchTerm = selector.name || selector.name_contains || selector.product_id;
+
+    const { data: fuzzyMatches, error: fuzzyErr } = await supabase
+      .rpc('search_products_fuzzy', {
+        p_organisation_id: orgId,
+        p_search_term: searchTerm,
+        p_limit: 5,
+        p_threshold: 0.10,
+      });
+
+    if (fuzzyErr) {
+      console.warn('[resolveProductSelector] fuzzy search error:', fuzzyErr.message);
+      return { products: [], error: null };
+    }
+
+    const fuzzyResults = fuzzyMatches || [];
+    if (fuzzyResults.length === 0) return { products: [], error: null };
+
+    console.log('[resolveProductSelector] fuzzy:', searchTerm,
+      '→', fuzzyResults.length, 'match(es), top score:', fuzzyResults[0]?.similarity_score);
+
+    // Re-query full product records by ID — ensures consistent object shape for all callers
+    const fuzzyIds = fuzzyResults.map(p => p.id);
+    const { data: fullProducts, error: fullErr } = await supabase
+      .from('products')
+      .select('id, name, selling_price, cost_price, category, unit, is_active')
+      .eq('organisation_id', orgId)
+      .is('deleted_at', null)
+      .in('id', fuzzyIds);
+
+    if (fullErr) {
+      console.warn('[resolveProductSelector] fuzzy re-query error:', fullErr.message);
+      return { products: [], error: null };
+    }
+
+    // Restore fuzzy score ranking — .in() query doesn't guarantee order
+    const scoreOrder = new Map(fuzzyIds.map((id, idx) => [id, idx]));
+    const ranked = (fullProducts || []).sort(
+      (a, b) => (scoreOrder.get(a.id) ?? 999) - (scoreOrder.get(b.id) ?? 999)
+    );
+
+    return { products: ranked, error: null };
+  }
+
+  return { products: results, error: null };
 }
 
 export async function resolveProductSelectorCount({
