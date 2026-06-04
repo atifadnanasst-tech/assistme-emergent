@@ -745,9 +745,11 @@ export default function AIScreen() {
           Alert.alert('Could not execute', data.message || data.error || 'Execution failed. Please try again.');
           return;
         }
-        // Disable Confirm button on original plan card by nulling pending_plan_id
+        // Mark original plan card as executed — preserves pending_plan_id for reload enrichment
         setMessages(prev =>
-          prev.map(m => m.pending_plan_id === planId ? { ...m, pending_plan_id: null } : m)
+          prev.map(m => m.pending_plan_id === planId
+            ? { ...m, metadata: { ...(m as any).metadata, plan_status: 'executed' } }
+            : m)
         );
         // Prepend COO result — inverted FlatList, prepend = visually bottom
         const resultMsg: AIMessage = {
