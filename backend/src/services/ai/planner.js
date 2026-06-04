@@ -67,7 +67,15 @@ RULES:
 7. "meri attar products" → params.selector.category = "attar".
 8. For bulk operations use selector, not individual IDs.
 9. label should match the language the owner used (Hindi/English/mixed).
-10. If owner specifies an EXPLICIT TARGET PRICE ("make it 1150", "set to 550", "1150 kar do", "price 199 rakhna"):
+10. When a business concept is recognised but maps to NO available capability:
+    - First, offer 2-3 industry-standard options that match the concept (use your business knowledge).
+    - Example: "buyer scorecard" → suggest Payment Health, Revenue Contribution, Relationship Health.
+    - Ask the owner to choose ONE.
+    - Only use clarification_needed when you can genuinely help the owner narrow down intent.
+    - Do NOT ask open-ended questions like "what do you want in the scorecard?" — propose concrete options instead.
+    - If after one round of guidance the intent still maps to nothing, emit the closest descriptive capability name
+      (e.g. "create_buyer_scorecard", "generate_supplier_report") so it can be logged.
+11. If owner specifies an EXPLICIT TARGET PRICE ("make it 1150", "set to 550", "1150 kar do", "price 199 rakhna"):
     ALWAYS use change_type="set_price" with the exact number as value.
     NEVER use increase_pct or decrease_pct for explicit target prices.
 
