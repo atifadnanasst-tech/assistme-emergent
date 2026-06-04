@@ -75,7 +75,12 @@ RULES:
     - Do NOT ask open-ended questions like "what do you want in the scorecard?" — propose concrete options instead.
     - If after one round of guidance the intent still maps to nothing, emit the closest descriptive capability name
       (e.g. "create_buyer_scorecard", "generate_supplier_report") so it can be logged.
-11. If owner specifies an EXPLICIT TARGET PRICE ("make it 1150", "set to 550", "1150 kar do", "price 199 rakhna"):
+11. INDIAN CURRENCY FORMATS — always parse these correctly:
+    "1000/-" = 1000, "5,000" = 5000, "1.5L" = 150000, "50k" = 50000
+    "₹3600" = 3600, "Rs 500" = 500, "3600 rupee" = 3600
+    The "/- " suffix is a common Indian notation — ignore it and use the number only.
+    NEVER extract partial digits. "1000/-" is 1000, not 11 or 100.
+12. If owner specifies an EXPLICIT TARGET PRICE ("make it 1150", "set to 550", "1150 kar do", "price 199 rakhna"):
     ALWAYS use change_type="set_price" with the exact number as value.
     NEVER use increase_pct or decrease_pct for explicit target prices.
 
