@@ -723,6 +723,10 @@ export default function AIScreen() {
 
     const s = plan.currency_symbol ?? '₹';
     const isConfirming = confirmingPlanId === planId;
+    // plan_status injected by backend on load from ai_actions.status
+    // Backend is source of truth. Values: pending | approved | executed | rejected | failed
+    // On live messages (just created): backend hasn't enriched yet, default to 'pending'
+    const planStatus = (msg as any).metadata?.plan_status ?? 'pending';
 
     const handleConfirm = async () => {
       if (isConfirming || !planId) return;
@@ -795,23 +799,45 @@ export default function AIScreen() {
           </View>
         )}
 
-        <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
-          <TouchableOpacity
-            style={{ flex: 1, backgroundColor: '#B0BEC5', borderRadius: 8, paddingVertical: 10, alignItems: 'center', marginTop: 10 }}
-            onPress={() => Alert.alert('Not implemented', 'Cancellation will be available in Session I-B.')}
-          >
-            <Text style={{ color: '#FFFFFF', fontSize: 13, fontWeight: '700' }}>✗ Cancel</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.actionTriggerBtn, { flex: 1, opacity: isConfirming ? 0.6 : 1 }]}
-            onPress={handleConfirm}
-            disabled={isConfirming}
-          >
-            <Text style={styles.actionTriggerBtnText}>
-              {isConfirming ? 'Processing...' : '✓ Confirm'}
-            </Text>
-          </TouchableOpacity>
-        </View>
+        {planStatus === 'pending' && (
+          <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
+            <TouchableOpacity
+              style={{ flex: 1, backgroundColor: '#B0BEC5', borderRadius: 8, paddingVertical: 10, alignItems: 'center', marginTop: 10 }}
+              onPress={() => Alert.alert('Not implemented', 'Cancellation will be available in the next update.')}
+            >
+              <Text style={{ color: '#FFFFFF', fontSize: 13, fontWeight: '700' }}>✗ Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.actionTriggerBtn, { flex: 1, opacity: isConfirming ? 0.6 : 1 }]}
+              onPress={handleConfirm}
+              disabled={isConfirming}
+            >
+              <Text style={styles.actionTriggerBtnText}>
+                {isConfirming ? 'Processing...' : '✓ Confirm'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        )}
+        {planStatus === 'executed' && (
+          <View style={{ marginTop: 12, paddingVertical: 8, alignItems: 'center', backgroundColor: '#E8F5E9', borderRadius: 8 }}>
+            <Text style={{ color: '#2E7D32', fontSize: 13, fontWeight: '700' }}>✓ Executed</Text>
+          </View>
+        )}
+        {planStatus === 'approved' && (
+          <View style={{ marginTop: 12, paddingVertical: 8, alignItems: 'center', backgroundColor: '#FFF3E0', borderRadius: 8 }}>
+            <Text style={{ color: '#E65100', fontSize: 13, fontWeight: '700' }}>⏳ Processing...</Text>
+          </View>
+        )}
+        {planStatus === 'rejected' && (
+          <View style={{ marginTop: 12, paddingVertical: 8, alignItems: 'center', backgroundColor: '#FFF3E0', borderRadius: 8 }}>
+            <Text style={{ color: '#E65100', fontSize: 13, fontWeight: '700' }}>✗ Cancelled / Expired</Text>
+          </View>
+        )}
+        {planStatus === 'failed' && (
+          <View style={{ marginTop: 12, paddingVertical: 8, alignItems: 'center', backgroundColor: '#FFEBEE', borderRadius: 8 }}>
+            <Text style={{ color: '#C62828', fontSize: 13, fontWeight: '700' }}>✗ Failed</Text>
+          </View>
+        )}
 
         <Text style={styles.cardTimestamp}>{formatTime(msg.created_at)}</Text>
       </View>

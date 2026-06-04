@@ -145,6 +145,27 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
       const all = msgs || [];
       const has_more = all.length > LIMIT;
       const messages = has_more ? all.slice(0, LIMIT) : all;
+
+      // Enrich execution_plan messages with current ai_actions.status
+      // Prevents stale Confirm buttons on reload after execution/cancellation
+      const planMessages = messages.filter(m => m.metadata?.message_type === 'execution_plan' && m.metadata?.pending_plan_id);
+      if (planMessages.length > 0) {
+        const planIds = [...new Set(planMessages.map(m => m.metadata?.pending_plan_id).filter(Boolean))];
+        const { data: planStatuses } = await supabase
+          .from('ai_actions')
+          .select('id, status')
+          .in('id', planIds);
+
+        const statusMap = {};
+        for (const p of (planStatuses || [])) statusMap[p.id] = p.status;
+
+        for (const m of messages) {
+          if (m.metadata?.message_type === 'execution_plan' && m.metadata?.pending_plan_id) {
+            m.metadata.plan_status = statusMap[m.metadata.pending_plan_id] || 'pending';
+          }
+        }
+      }
+
       return c.json({ messages, has_more });
     } catch (error) {
       console.error('GET /api/home/ai-messages error:', error);
