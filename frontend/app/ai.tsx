@@ -811,7 +811,32 @@ export default function AIScreen() {
           <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
             <TouchableOpacity
               style={{ flex: 1, backgroundColor: '#B0BEC5', borderRadius: 8, paddingVertical: 10, alignItems: 'center', marginTop: 10 }}
-              onPress={() => Alert.alert('Not implemented', 'Cancellation will be available in the next update.')}
+              onPress={async () => {
+              if (!planId) return;
+              try {
+                const token = await getToken();
+                if (!token) return;
+                const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+                const res = await fetch(`${backendUrl}/api/home/cancel-plan`, {
+                  method: 'POST',
+                  headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ pending_plan_id: planId }),
+                });
+                if (res.ok) {
+                  setMessages(prev =>
+                    prev.map(m => m.pending_plan_id === planId
+                      ? { ...m, metadata: { ...(m.metadata || {}), plan_status: 'rejected' } }
+                      : m)
+                  );
+                } else {
+                  let data: any = {};
+                  try { data = await res.json(); } catch {}
+                  Alert.alert('Could not cancel', data.message || 'Plan could not be cancelled.');
+                }
+              } catch {
+                Alert.alert('Error', 'Something went wrong. Please try again.');
+              }
+            }}
             >
               <Text style={{ color: '#FFFFFF', fontSize: 13, fontWeight: '700' }}>✗ Cancel</Text>
             </TouchableOpacity>

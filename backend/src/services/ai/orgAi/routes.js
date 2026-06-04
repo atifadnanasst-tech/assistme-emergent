@@ -572,4 +572,40 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
       return c.json({ error: 'server_error' }, 500);
     }
   });
+
+  // ── POST /api/home/cancel-plan ────────────────────────────────
+  // Cancels a pending freeform plan. Only works if status = 'pending'.
+  // Sets status = 'rejected' (schema allows: pending/approved/rejected/executed/failed).
+  app.post('/api/home/cancel-plan', async (c) => {
+    try {
+      const auth = await authenticateChat(c);
+      if (!auth) return c.json({ error: 'unauthorized' }, 401);
+      const { organisationId } = auth;
+
+      const body = await c.req.json();
+      const { pending_plan_id } = body;
+      if (!pending_plan_id) return c.json({ error: 'pending_plan_id required' }, 400);
+
+      // Atomic cancel — only if still pending and owned by this org
+      const { data: cancelled, error: cancelErr } = await supabase
+        .from('ai_actions')
+        .update({ status: 'rejected' })
+        .eq('id', pending_plan_id)
+        .eq('organisation_id', organisationId)
+        .eq('status', 'pending')
+        .select('id')
+        .single();
+
+      if (cancelErr || !cancelled) {
+        return c.json({ error: 'plan_not_cancellable', message: 'This plan has already been executed, cancelled, or does not exist.' }, 409);
+      }
+
+      console.log('[cancel-plan]', { pending_plan_id, org: organisationId });
+      return c.json({ success: true });
+
+    } catch (error) {
+      console.error('POST /api/home/cancel-plan error:', error);
+      return c.json({ error: 'server_error' }, 500);
+    }
+  });
 }
