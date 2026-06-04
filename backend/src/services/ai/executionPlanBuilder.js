@@ -98,7 +98,28 @@ async function _buildPaymentPlan({ params, label, capability, orgContext, orgId,
   // Resolve customer name from DB so preview shows confirmed name, not raw planner input
   let customerName = customerSelector.name || customerSelector.customer_name || 'the customer';
   if (orgId && supabase && (customerSelector.name || customerSelector.customer_name)) {
-    const { customer } = await resolveCustomerSelector({ selector: customerSelector, orgId, supabase });
+    const { customer, candidates } = await resolveCustomerSelector({ selector: customerSelector, orgId, supabase });
+
+    // Multiple candidates — return structured clarification card before showing plan
+    if ((candidates || []).length > 1) {
+      return {
+        capability,
+        label,
+        clarification_needed: true,
+        clarification_type: 'customer_selection',
+        clarification_text: `I found ${candidates.length} customers matching that name. Which one did you mean?`,
+        options: candidates.slice(0, 5).map(c => ({
+          id: c.id,
+          label: c.name,
+          sublabel: c.outstanding_balance > 0
+            ? `Outstanding: ₹${Number(c.outstanding_balance).toLocaleString('en-IN')}`
+            : 'No outstanding',
+        })),
+        original_params: params,  // preserved for plan regeneration after selection
+        _plan_steps: [{ capability, params, label }],
+      };
+    }
+
     if (customer?.name) customerName = customer.name;
   }
 

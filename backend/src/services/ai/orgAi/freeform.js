@@ -84,6 +84,25 @@ export async function dispatchFreeform({
       return { response_text: planCard?.summary_text || 'No matching records found.', chart_data: null, next_action: null, message_type: 'ai_response', execution_plan: null, pending_plan_id: null };
     }
 
+    // Entity ambiguity — return clarification card with tappable options
+    // Owner selects the right entity via POST /api/home/select-entity
+    // No plan stored yet — plan regenerated after selection
+    if (planCard.clarification_needed) {
+      return {
+        response_text: planCard.clarification_text,
+        chart_data: null,
+        next_action: null,
+        message_type: 'entity_clarification',
+        clarification_type: planCard.clarification_type,
+        clarification_options: planCard.options,
+        original_params: planCard.original_params,
+        original_capability: planCard.capability,
+        original_label: planCard.label,
+        execution_plan: null,
+        pending_plan_id: null,
+      };
+    }
+
     // B2: Store plan server-side — client only gets UUID
     let pendingPlanId = null;
     try {

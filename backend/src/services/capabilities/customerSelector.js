@@ -39,8 +39,38 @@ export async function resolveCustomerSelector({ selector = {}, orgId, supabase }
     return { customer: data || null, candidates: [], error: null };
   }
 
-  // Priority 2: name resolution (exact first, then partial)
+  // Priority 1b: entity_aliases lookup — learned from owner selections (highest confidence)
+  // Checked before ILIKE/fuzzy. Normalised = lowercase trim of search term.
   const searchName = selector.name || selector.customer_name;
+  if (searchName) {
+    const normalised = searchName.toLowerCase().trim();
+    const { data: aliasMatch } = await supabase
+      .from('entity_aliases')
+      .select('entity_id')
+      .eq('organisation_id', orgId)
+      .eq('entity_type', 'customer')
+      .eq('normalised', normalised)
+      .eq('is_active', true)
+      .maybeSingle();
+
+    if (aliasMatch?.entity_id) {
+      const { data: aliasCustomer } = await supabase
+        .from('customers')
+        .select(baseSelect)
+        .eq('organisation_id', orgId)
+        .eq('id', aliasMatch.entity_id)
+        .eq('status', 'active')
+        .is('deleted_at', null)
+        .maybeSingle();
+
+      if (aliasCustomer) {
+        console.log('[customerSelector] alias hit:', normalised, '→', aliasCustomer.name);
+        return { customer: aliasCustomer, candidates: [], error: null };
+      }
+    }
+  }
+
+  // Priority 2: name resolution (exact first, then partial)
   if (searchName) {
     // Step 1: exact case-insensitive match (no wildcards)
     // Use array return — maybeSingle() fails if duplicate names exist in real MSME data

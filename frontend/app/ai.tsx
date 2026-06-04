@@ -36,6 +36,9 @@ interface AIMessage {
   execution_plan: Record<string, any> | null;
   pending_plan_id: string | null;
   metadata: Record<string, any> | null;
+  clarification_type: string | null;
+  clarification_options: Array<{id: string; label: string; sublabel?: string}> | null;
+  clarification_context: Record<string, any> | null;
   created_at: string;
 }
 
@@ -64,6 +67,7 @@ export default function AIScreen() {
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [aiRecording, setAiRecording] = useState<Audio.Recording | null>(null);
   const [confirmingPlanId, setConfirmingPlanId] = useState<string | null>(null);
+  const [selectingEntityId, setSelectingEntityId] = useState<string | null>(null);
 
   // TODO: consolidate handleMenuQuery + handleSendDirect into shared sendAiRequest helper
   // Pure helper — index-based dropdown positioning (no layout measurement needed)
@@ -167,6 +171,9 @@ export default function AIScreen() {
         execution_plan: data.execution_plan || null,
         pending_plan_id: data.pending_plan_id || null,
         metadata: data.metadata || null,
+        clarification_type: data.clarification_type || null,
+        clarification_options: data.clarification_options || null,
+        clarification_context: data.clarification_context || null,
         created_at: new Date().toISOString(),
       };
       setMessages(prev => [aiMsg, ...prev]); // inverted: prepend = visually bottom
@@ -275,6 +282,9 @@ export default function AIScreen() {
           execution_plan: m.metadata?.execution_plan || null,
           pending_plan_id: m.metadata?.pending_plan_id || null,
           metadata: m.metadata || null,
+          clarification_type: m.metadata?.clarification_type || null,
+          clarification_options: m.metadata?.clarification_options || null,
+          clarification_context: m.metadata?.clarification_context || null,
           created_at: m.created_at,
         }));
         // DESC order from backend + inverted FlatList = natural bottom anchoring (canonical chat pattern)
@@ -318,6 +328,9 @@ export default function AIScreen() {
     execution_plan: m.metadata?.execution_plan || null,
     pending_plan_id: m.metadata?.pending_plan_id || null,
     metadata: m.metadata || null,
+    clarification_type: m.metadata?.clarification_type || null,
+    clarification_options: m.metadata?.clarification_options || null,
+    clarification_context: m.metadata?.clarification_context || null,
     created_at: m.created_at,
   });
 
@@ -497,6 +510,9 @@ export default function AIScreen() {
         execution_plan: data.execution_plan || null,
         pending_plan_id: data.pending_plan_id || null,
         metadata: data.metadata || null,
+        clarification_type: data.clarification_type || null,
+        clarification_options: data.clarification_options || null,
+        clarification_context: data.clarification_context || null,
         created_at: new Date().toISOString(),
       };
       setMessages(prev => [aiMsg, ...prev]); // inverted: prepend = visually bottom
@@ -721,6 +737,107 @@ export default function AIScreen() {
     </View>
   );
 
+  const renderClarification = (msg: AIMessage) => {
+    const options = msg.clarification_options;
+    const context = msg.clarification_context;
+
+    // Extract original search term from clarification_context params
+    // This is what the owner typed (e.g. "Aanya") — stored as the alias
+    const originalSearchTerm = context?.params?.customer?.name
+      || context?.params?.customer?.customer_name
+      || context?.params?.selector?.name
+      || msg.content;
+
+    const handleSelect = async (option: {id: string; label: string; sublabel?: string}) => {
+      if (selectingEntityId || !context) return;
+      setSelectingEntityId(option.id);
+      try {
+        const token = await getToken();
+        if (!token) { setSelectingEntityId(null); return; }
+        const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+        const res = await fetch(`${backendUrl}/api/home/select-entity`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            entity_id: option.id,
+            entity_type: msg.clarification_type === 'customer_selection' ? 'customer' : 'product',
+            alias: originalSearchTerm,
+            clarification_context: context,
+            ai_conversation_id: conversationId,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          Alert.alert('Error', data.message || 'Could not process selection.');
+          setSelectingEntityId(null);
+          return;
+        }
+        // Mark clarification card as resolved — collapse options, show selection
+        setMessages(prev =>
+          prev.map(m => m.id === msg.id
+            ? { ...m, clarification_options: [], content: `Selected: ${option.label}` }
+            : m)
+        );
+        // Append execution plan card
+        const planMsg: AIMessage = {
+          id: `sel-${Date.now()}`,
+          role: 'assistant',
+          content: data.response,
+          card_type: data.message_type || 'execution_plan',
+          card_data: {},
+          chart_data: null,
+          next_action: null,
+          execution_plan: data.execution_plan || null,
+          pending_plan_id: data.pending_plan_id || null,
+          metadata: null,
+          clarification_type: null,
+          clarification_options: null,
+          clarification_context: null,
+          created_at: new Date().toISOString(),
+        };
+        setMessages(prev => [planMsg, ...prev]);
+      } catch {
+        Alert.alert('Error', 'Something went wrong. Please try again.');
+      } finally {
+        setSelectingEntityId(null);
+      }
+    };
+
+    return (
+      <View style={[styles.cardContainer, { borderLeftWidth: 3, borderLeftColor: '#075E54' }]}>
+        <Text style={{ fontSize: 14, color: '#333333', marginBottom: options && options.length > 0 ? 12 : 0 }}>
+          {msg.content}
+        </Text>
+        {options && options.length > 0 && (
+          <View style={{ gap: 8 }}>
+            {options.map((opt) => (
+              <TouchableOpacity
+                key={opt.id}
+                style={{
+                  backgroundColor: selectingEntityId === opt.id ? '#E8F5E9' : '#F5F5F5',
+                  borderRadius: 8,
+                  paddingVertical: 10,
+                  paddingHorizontal: 14,
+                  borderWidth: 1,
+                  borderColor: selectingEntityId === opt.id ? '#075E54' : '#E0E0E0',
+                  opacity: selectingEntityId && selectingEntityId !== opt.id ? 0.5 : 1,
+                }}
+                onPress={() => handleSelect(opt)}
+                disabled={!!selectingEntityId}
+              >
+                <Text style={{ fontSize: 14, fontWeight: '600', color: '#1A1A1A' }}>{opt.label}</Text>
+                {opt.sublabel && (
+                  <Text style={{ fontSize: 12, color: '#666666', marginTop: 2 }}>{opt.sublabel}</Text>
+                )}
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
+        <Text style={styles.cardTimestamp}>{formatTime(msg.created_at)}</Text>
+      </View>
+    );
+  };
+
   const renderExecutionPlan = (msg: AIMessage) => {
     const plan = msg.execution_plan;
     const planId = msg.pending_plan_id;
@@ -768,6 +885,9 @@ export default function AIScreen() {
           execution_plan: null,
           pending_plan_id: null,
           metadata: null,
+          clarification_type: null,
+          clarification_options: null,
+          clarification_context: null,
           created_at: new Date().toISOString(),
         };
         setMessages(prev => [resultMsg, ...prev]);
@@ -881,13 +1001,8 @@ export default function AIScreen() {
     if (item.role === 'user') return renderUserMessage(item);
 
     switch (item.card_type) {
-      case 'clarification': return (
-        <View style={styles.cardContainer}>
-          <Text style={{ fontSize: 14, color: '#333333', marginBottom: 8 }}>
-            {item.content || 'Which customer do you mean?'}
-          </Text>
-        </View>
-      );
+      case 'clarification':
+      case 'entity_clarification': return renderClarification(item);
       case 'daily_summary': return renderDailySummary(item);
       case 'payment_reminder': return renderPaymentReminder(item);
       case 'reorder_suggestion': return renderReorderSuggestion(item);

@@ -285,6 +285,13 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
             next_action: result.next_action || null,
             execution_plan: result.execution_plan || null,
             pending_plan_id: result.pending_plan_id || null,
+            clarification_type: result.clarification_type || null,
+            clarification_options: result.clarification_options || null,
+            clarification_context: result.original_capability ? {
+              capability: result.original_capability,
+              params: result.original_params,
+              label: result.original_label,
+            } : null,
             preview_text: result.response_text.substring(0, 50),
             read_by_owner: true,
             menu_id: menu_id || null,
@@ -309,6 +316,13 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
         message_type: result.message_type || 'ai_response',
         execution_plan: result.execution_plan || null,
         pending_plan_id: result.pending_plan_id || null,
+        clarification_type: result.clarification_type || null,
+        clarification_options: result.clarification_options || null,
+        clarification_context: result.original_capability ? {
+          capability: result.original_capability,
+          params: result.original_params,
+          label: result.original_label,
+        } : null,
       });
 
     } catch (error) {
@@ -605,6 +619,122 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
 
     } catch (error) {
       console.error('POST /api/home/cancel-plan error:', error);
+      return c.json({ error: 'server_error' }, 500);
+    }
+  });
+
+  // ── POST /api/home/select-entity ─────────────────────────────
+  // Owner selects the correct entity from a clarification card.
+  // Stores alias in entity_aliases, regenerates execution plan.
+  app.post('/api/home/select-entity', async (c) => {
+    try {
+      const auth = await authenticateChat(c);
+      if (!auth) return c.json({ error: 'unauthorized' }, 401);
+      const { organisationId } = auth;
+
+      const body = await c.req.json();
+      const { entity_id, entity_type, alias, clarification_context, ai_conversation_id } = body;
+
+      if (!entity_id || !entity_type || !alias || !clarification_context) {
+        return c.json({ error: 'missing required fields' }, 400);
+      }
+
+      // Store alias — owner's confirmed mapping
+      const normalised = alias.toLowerCase().trim();
+      const { error: aliasErr } = await supabase
+        .from('entity_aliases')
+        .upsert({
+          organisation_id: organisationId,
+          entity_type,
+          entity_id,
+          alias,
+          normalised,
+          source_type: 'owner_selection',
+          usage_count: 1,
+          confirmed_count: 1,
+          last_confirmed_at: new Date().toISOString(),
+        }, {
+          onConflict: 'organisation_id,entity_type,normalised',
+          ignoreDuplicates: false,
+        });
+
+      if (aliasErr) console.error('[select-entity] alias upsert failed:', aliasErr.message);
+      else console.log('[select-entity] alias stored:', normalised, '→', entity_id);
+
+      // Regenerate execution plan with confirmed entity injected into params
+      const { capability, params, label } = clarification_context;
+      const updatedParams = { ...params };
+
+      if (entity_type === 'customer') {
+        updatedParams.customer = { customer_id: entity_id };
+      } else if (entity_type === 'product') {
+        updatedParams.selector = { product_id: entity_id };
+      }
+
+      const { buildExecutionPlanCard } = await import('../executionPlanBuilder.js');
+      const { data: org } = await supabase.from('organisations').select('currency').eq('id', organisationId).maybeSingle();
+      const orgCurrency = org?.currency || 'INR';
+
+      const planCard = await buildExecutionPlanCard({
+        validPlan: [{ capability, params: updatedParams, label, _confirmation: 'always', _is_financial: true, _middleware_fn: null }],
+        orgId: organisationId,
+        supabase,
+        orgContext: { currency: orgCurrency },
+      });
+
+      if (!planCard || planCard.clarification_needed || planCard.empty || planCard.error) {
+        return c.json({ error: 'plan_generation_failed', message: planCard?.summary_text || 'Could not generate plan.' }, 422);
+      }
+
+      // Store plan in ai_actions
+      let pendingPlanId = null;
+      const { data: savedPlan, error: saveErr } = await supabase
+        .from('ai_actions')
+        .insert({
+          organisation_id: organisationId,
+          action_name: planCard.label || capability,
+          action_type: 'freeform_plan',
+          trigger_event: 'entity_selection',
+          trigger_entity: capability,
+          prompt_template: alias,
+          model: 'gpt-4o-mini',
+          parameters: {
+            plan_steps: planCard._plan_steps,
+            preview_count: planCard.affected_count,
+            ai_conversation_id,
+            org_context: { currency: orgCurrency },
+          },
+          status: 'pending',
+          confidence_score: 1.0,
+        })
+        .select('id')
+        .single();
+
+      if (saveErr) console.error('[select-entity] ai_actions save failed:', saveErr.message);
+      else pendingPlanId = savedPlan?.id || null;
+
+      const clientPlanCard = {
+        capability: planCard.capability,
+        label: planCard.label,
+        operation: planCard.operation,
+        operation_description: planCard.operation_description,
+        affected_count: planCard.affected_count,
+        preview_rows: planCard.preview_rows,
+        more_count: planCard.more_count,
+        currency: planCard.currency,
+      };
+
+      return c.json({
+        success: true,
+        alias_stored: !aliasErr,
+        message_type: 'execution_plan',
+        response: planCard.summary_text,
+        execution_plan: clientPlanCard,
+        pending_plan_id: pendingPlanId,
+      });
+
+    } catch (error) {
+      console.error('POST /api/home/select-entity error:', error);
       return c.json({ error: 'server_error' }, 500);
     }
   });
