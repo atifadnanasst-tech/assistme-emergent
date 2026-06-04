@@ -95,7 +95,7 @@ export async function mutatePaymentCapability(params, orgId, supabase, orgContex
   // ── Step 4: Handle all return statuses ───────────────────────
   if (result.status === 'failed') {
     const errMessages = {
-      no_unpaid_invoices:  `${customer.name} has no unpaid invoices to apply this payment to.`,
+      no_unpaid_invoices:  `${customer.name} has no unpaid invoices. If this is an advance payment, that feature is coming soon — note it manually for now.`,
       invoice_not_found:   'The specified invoice was not found.',
       invoice_already_paid:'That invoice is already fully paid.',
       amount_exceeds_due:  `Payment amount ${s}${numAmount.toLocaleString('en-IN')} exceeds the amount due (max: ${s}${(result.max_payable || 0).toLocaleString('en-IN')}).`,
