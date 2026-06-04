@@ -35,6 +35,7 @@ interface AIMessage {
   next_action: ActionData | null;
   execution_plan: Record<string, any> | null;
   pending_plan_id: string | null;
+  metadata: Record<string, any> | null;
   created_at: string;
 }
 
@@ -165,6 +166,7 @@ export default function AIScreen() {
         next_action: data.next_action || null,
         execution_plan: data.execution_plan || null,
         pending_plan_id: data.pending_plan_id || null,
+        metadata: data.metadata || null,
         created_at: new Date().toISOString(),
       };
       setMessages(prev => [aiMsg, ...prev]); // inverted: prepend = visually bottom
@@ -272,6 +274,7 @@ export default function AIScreen() {
           next_action: m.metadata?.next_action || null,
           execution_plan: m.metadata?.execution_plan || null,
           pending_plan_id: m.metadata?.pending_plan_id || null,
+          metadata: m.metadata || null,
           created_at: m.created_at,
         }));
         // DESC order from backend + inverted FlatList = natural bottom anchoring (canonical chat pattern)
@@ -314,6 +317,7 @@ export default function AIScreen() {
     next_action: m.metadata?.next_action || null,
     execution_plan: m.metadata?.execution_plan || null,
     pending_plan_id: m.metadata?.pending_plan_id || null,
+    metadata: m.metadata || null,
     created_at: m.created_at,
   });
 
@@ -492,6 +496,7 @@ export default function AIScreen() {
         next_action: data.next_action || null,
         execution_plan: data.execution_plan || null,
         pending_plan_id: data.pending_plan_id || null,
+        metadata: data.metadata || null,
         created_at: new Date().toISOString(),
       };
       setMessages(prev => [aiMsg, ...prev]); // inverted: prepend = visually bottom
@@ -762,6 +767,7 @@ export default function AIScreen() {
           next_action: data.next_action || null,
           execution_plan: null,
           pending_plan_id: null,
+          metadata: null,
           created_at: new Date().toISOString(),
         };
         setMessages(prev => [resultMsg, ...prev]);
