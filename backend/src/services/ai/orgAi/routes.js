@@ -627,6 +627,15 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
 
       console.log('[execute-plan]', { pending_plan_id, steps: plan_steps.length, executed: executedSteps, overall: overallDetail, execution_id });
 
+      // Complete failure — return error so frontend shows Alert not a message bubble
+      if (overallDetail === 'failed' && executedSteps === 0) {
+        const failedStep = stepResults[0];
+        return c.json({
+          error: 'execution_failed',
+          message: failedStep?.response_text || 'This plan could not be executed. The data may have changed — please make a fresh request.',
+        }, 400);
+      }
+
       // Save result message to DB so it survives reload
       if (ai_conversation_id) {
         await supabase.from('messages').insert({
@@ -754,7 +763,7 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
         updatedParams.selector = { product_id: entity_id };
       }
 
-      const { buildExecutionPlanCard } = await import('../executionPlanBuilder.js');
+      const { buildExecutionPlanCard, buildClientPlanCard } = await import('../executionPlanBuilder.js');
       const { data: org } = await supabase.from('organisations').select('currency').eq('id', organisationId).maybeSingle();
       const orgCurrency = org?.currency || 'INR';
 
@@ -796,18 +805,7 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
       if (saveErr) console.error('[select-entity] ai_actions save failed:', saveErr.message);
       else pendingPlanId = savedPlan?.id || null;
 
-      const clientPlanCard = {
-        capability: planCard.capability,
-        label: planCard.label,
-        operation: planCard.operation,
-        operation_description: planCard.operation_description,
-        affected_count: planCard.affected_count,
-        preview_rows: planCard.preview_rows,
-        more_count: planCard.more_count,
-        currency: planCard.currency,
-        is_multi_step: planCard.is_multi_step || false,
-        step_cards: planCard.step_cards || null,
-      };
+      const clientPlanCard = buildClientPlanCard(planCard);
 
       return c.json({
         success: true,

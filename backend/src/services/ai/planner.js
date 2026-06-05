@@ -75,7 +75,12 @@ RULES:
     - Do NOT ask open-ended questions like "what do you want in the scorecard?" — propose concrete options instead.
     - If after one round of guidance the intent still maps to nothing, emit the closest descriptive capability name
       (e.g. "create_buyer_scorecard", "generate_supplier_report") so it can be logged.
-11. INDIAN CURRENCY FORMATS — always parse these correctly:
+11. PRICE CHANGE TYPES — choose correctly:
+    "5% badha do" / "increase by 5 percent" → change_type="increase_pct", value=5
+    "₹50 badha do" / "increase by ₹50" / "50 rupee zyada karo" → change_type="increase_abs", value=50
+    "1150 kar do" / "set to 1150" → change_type="set_price", value=1150
+    KEY: if owner says ₹ before a number with "badha/increase", it is ABSOLUTE amount increase, NOT percentage.
+12. INDIAN CURRENCY FORMATS — always parse these correctly:
     "1000/-" = 1000, "5,000" = 5000, "1.5L" = 150000, "50k" = 50000
     "₹3600" = 3600, "Rs 500" = 500, "3600 rupee" = 3600
     The "/- " suffix is a common Indian notation — ignore it and use the number only.

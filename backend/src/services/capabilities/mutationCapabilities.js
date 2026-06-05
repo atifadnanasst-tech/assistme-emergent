@@ -73,6 +73,8 @@ async function _executeBulkPriceChange({ products, change_type, value, orgId, or
     if (change_type === 'increase_pct') newPrice = Math.round(oldPrice * (1 + numValue / 100) * 100) / 100;
     else if (change_type === 'decrease_pct') newPrice = Math.max(0, Math.round(oldPrice * (1 - numValue / 100) * 100) / 100);
     else if (change_type === 'set_price') newPrice = numValue;
+    else if (change_type === 'increase_abs') newPrice = Math.round((oldPrice + numValue) * 100) / 100;
+    else if (change_type === 'decrease_abs') newPrice = Math.max(0, Math.round((oldPrice - numValue) * 100) / 100);
     else continue;
 
     const result = await updateProduct(supabase, orgId, product.id, { sellingPrice: newPrice });

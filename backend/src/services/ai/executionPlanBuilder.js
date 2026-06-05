@@ -15,6 +15,23 @@ import { resolveCustomerSelector } from '../capabilities/customerSelector.js';
 const CURRENCY_SYMBOLS = { INR: '₹', USD: '$', AED: 'AED ', GBP: '£', EUR: '€' };
 const sym = (currency) => CURRENCY_SYMBOLS[currency] || `${currency} `;
 
+// Centralized client plan card builder — strips server-only fields (_plan_steps)
+// Single source of truth: add new client fields here only
+export function buildClientPlanCard(planCard) {
+  return {
+    capability: planCard.capability,
+    label: planCard.label,
+    operation: planCard.operation,
+    operation_description: planCard.operation_description,
+    affected_count: planCard.affected_count,
+    preview_rows: planCard.preview_rows,
+    more_count: planCard.more_count,
+    currency: planCard.currency,
+    is_multi_step: planCard.is_multi_step || false,
+    step_cards: planCard.step_cards || null,
+  };
+}
+
 export async function buildExecutionPlanCard({ validPlan, orgId, supabase, orgContext }) {
   if (!validPlan || validPlan.length === 0) return null;
 
@@ -110,12 +127,17 @@ async function _buildProductMutationPlan({ params, orgId, supabase, orgContext, 
   const moreCount = Math.max(0, totalCount - 5);
   const changeDesc = _describeChange({ change_type, value: numValue, operation, s });
 
+  // Show product name when only 1 matched — more informative for owner
+  const productLabel = totalCount === 1
+    ? allRows[0].name
+    : totalCount + ' product' + (totalCount !== 1 ? 's' : '');
+
   return {
     capability,
     label,
     operation: changeDesc,
-    operation_description: `${changeDesc} — ${totalCount} product${totalCount !== 1 ? 's' : ''}`,
-    summary_text: `I will update ${totalCount} product${totalCount !== 1 ? 's' : ''} (${changeDesc}). Confirm to proceed.`,
+    operation_description: changeDesc + ' — ' + productLabel,
+    summary_text: 'I will update ' + productLabel + ' (' + changeDesc + '). Confirm to proceed.',
     affected_count: totalCount,
     preview_rows: previewRows,
     more_count: moreCount,
@@ -208,9 +230,11 @@ function _emptyCard({ capability, label, params, summary_text }) {
 }
 
 function _describeChange({ change_type, value, operation, s }) {
-  if (change_type === 'increase_pct') return `+${value}% price increase`;
-  if (change_type === 'decrease_pct') return `-${value}% price decrease`;
-  if (change_type === 'set_price')    return `Set price to ${s}${value}`;
+  if (change_type === 'increase_pct') return '+' + value + '% price increase';
+  if (change_type === 'increase_abs') return '+' + s + value + ' price increase';
+  if (change_type === 'decrease_abs') return '-' + s + value + ' price decrease';
+  if (change_type === 'decrease_pct') return '-' + value + '% price decrease';
+  if (change_type === 'set_price')    return 'Set price to ' + s + value;
   if (operation === 'archive')        return 'Archive products';
   if (operation === 'restore')        return 'Restore products';
   if (operation === 'update')         return 'Update product details';

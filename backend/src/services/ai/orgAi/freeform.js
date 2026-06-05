@@ -15,7 +15,7 @@
 import { planExecution } from '../planner.js';
 import { validatePlan, classifyPlan } from '../validator.js';
 import { dispatch, dispatchPlan } from '../dispatcher.js';
-import { buildExecutionPlanCard } from '../executionPlanBuilder.js';
+import { buildExecutionPlanCard, buildClientPlanCard } from '../executionPlanBuilder.js';
 
 export async function dispatchFreeform({
   message,
@@ -139,16 +139,7 @@ export async function dispatchFreeform({
     }
 
     // B3: Strip _plan_steps before sending to client
-    const clientPlanCard = {
-      capability: planCard.capability,
-      label: planCard.label,
-      operation: planCard.operation,
-      operation_description: planCard.operation_description,
-      affected_count: planCard.affected_count,
-      preview_rows: planCard.preview_rows,
-      more_count: planCard.more_count,
-      currency: planCard.currency,
-    };
+    const clientPlanCard = buildClientPlanCard(planCard);
 
     return {
       response_text: planCard.summary_text,
