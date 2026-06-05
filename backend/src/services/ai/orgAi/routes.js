@@ -805,6 +805,8 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
         preview_rows: planCard.preview_rows,
         more_count: planCard.more_count,
         currency: planCard.currency,
+        is_multi_step: planCard.is_multi_step || false,
+        step_cards: planCard.step_cards || null,
       };
 
       return c.json({

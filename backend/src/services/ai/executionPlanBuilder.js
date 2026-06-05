@@ -57,7 +57,7 @@ export async function buildExecutionPlanCard({ validPlan, orgId, supabase, orgCo
     capability: 'multi_step',
     label: `${validPlan.length}-step plan`,
     operation: `${validPlan.length} actions`,
-    operation_description: stepCards.map((c, i) => `${i + 1}. ${c.operation_description || c.operation}`).join(' → '),
+    operation_description: stepCards.map((c, i) => (i + 1) + '. ' + (c.operation_description || c.operation)).join('\n'),
     summary_text: stepCards.map((c, i) => (i + 1) + '. ' + (c.operation_description || c.operation)).join('\n'),
     affected_count: null,
     preview_rows: [],
