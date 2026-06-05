@@ -589,13 +589,21 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
           _mutation_result: { affected_count: 0, operation: 'unknown' },
         };
       } else {
+        const summaryLine = overallDetail === 'completed'
+          ? 'Done. ' + executedSteps + ' of ' + plan_steps.length + ' steps completed.'
+          : executedSteps + ' of ' + plan_steps.length + ' steps completed. ' + (plan_steps.length - executedSteps) + ' failed.';
         executionResult = {
-          response_text: stepResults.map((s, i) =>
-            'Step ' + (i + 1) + ': ' + (s.failed ? '[Failed] ' : '') + s.response_text
-          ).join('\n'),
+          response_text: summaryLine,
           chart_data: null,
           next_action: null,
-          message_type: 'ai_response',
+          message_type: 'multi_step_result',
+          step_results: stepResults.map((s, i) => ({
+            step_index: i,
+            capability: s.capability,
+            response_text: s.response_text,
+            failed: s.failed,
+            affected_count: s.affected_count,
+          })),
           _mutation_result: { affected_count: null, operation: overallDetail },
         };
       }
@@ -651,9 +659,10 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
             message_type: executionResult.message_type || 'ai_response',
             chart_data: executionResult.chart_data || null,
             next_action: executionResult.next_action || null,
+            step_results: executionResult.step_results || null,
             execution_plan: null,
             pending_plan_id: null,
-            preview_text: executionResult.response_text.substring(0, 50),
+            preview_text: (executionResult.response_text || '').substring(0, 50),
             read_by_owner: true,
           },
         });
@@ -666,6 +675,7 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
         chart_data: executionResult.chart_data || null,
         next_action: executionResult.next_action || null,
         message_type: executionResult.message_type || 'ai_response',
+        step_results: executionResult.step_results || null,
         suggested_next_actions: suggested,
       });
 
