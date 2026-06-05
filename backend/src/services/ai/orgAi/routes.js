@@ -473,58 +473,139 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
         return c.json({ error: 'invalid_plan' }, 400);
       }
 
-      const step = plan_steps[0];
-      const { capability, params } = step;
-
       const { data: org } = await supabase.from('organisations').select('currency')
         .eq('id', organisationId).maybeSingle();
       const orgCurrency = org?.currency || org_context?.currency || 'INR';
 
-      if (capability === 'mutate_product' && preview_count !== null && preview_count !== undefined) {
-        const { resolveProductSelectorCount } = await import('../../capabilities/productSelector.js');
-        const { count: currentCount, error: countErr } = await resolveProductSelectorCount({
-          selector: params?.selector || {},
-          orgId: organisationId,
-          supabase,
+      const isMultiStep = plan_steps.length > 1;
+      const stepResults = [];
+      let stoppedAtStep = null;
+      const execution_id = randomUUID();
+
+      // Sequential execution — stop on first failure
+      // Failure = _mutation_result.operation === 'failed' OR is_success === false
+      for (let stepIdx = 0; stepIdx < plan_steps.length; stepIdx++) {
+        const step = plan_steps[stepIdx];
+        const { capability: stepCap, params: stepParams } = step;
+
+        // Drift detection — single-step mutate_product only
+        // Multi-step drift deferred: preview_count is aggregate, not per-step
+        // TODO: per-step drift detection in future session
+        if (!isMultiStep && stepCap === 'mutate_product' && preview_count !== null && preview_count !== undefined) {
+          const { resolveProductSelectorCount } = await import('../../capabilities/productSelector.js');
+          const { count: currentCount, error: countErr } = await resolveProductSelectorCount({
+            selector: stepParams?.selector || {},
+            orgId: organisationId,
+            supabase,
+          });
+          if (!countErr && currentCount !== preview_count) {
+            await supabase.from('ai_actions').update({ status: 'rejected' }).eq('id', claimedPlanId);
+            claimedPlanId = null;
+            return c.json({
+              error: 'plan_drifted',
+              message: 'Product list changed since preview. Previously ' + preview_count + ' products, now ' + currentCount + '. Please make your request again.',
+              preview_count, current_count: currentCount,
+            }, 409);
+          }
+        }
+
+        let stepResult;
+        if (stepCap === 'mutate_product') {
+          const { mutateProductCapability } = await import('../../capabilities/mutationCapabilities.js');
+          stepResult = await mutateProductCapability(stepParams, organisationId, supabase, { currency: orgCurrency });
+        } else if (stepCap === 'mutate_payment') {
+          const { mutatePaymentCapability } = await import('../../capabilities/paymentCapabilities.js');
+          stepResult = await mutatePaymentCapability(stepParams, organisationId, supabase, { currency: orgCurrency });
+        } else {
+          await supabase.from('ai_actions').update({ status: 'failed' }).eq('id', claimedPlanId);
+          claimedPlanId = null;
+          return c.json({ error: 'capability_not_implemented', message: 'Execution of "' + stepCap + '" is coming soon.' }, 501);
+        }
+
+        // Canonical failure detection using _mutation_result contract
+        const stepFailed = stepResult?._mutation_result?.operation === 'failed'
+          || stepResult?._mutation_result?.is_success === false;
+
+        stepResults.push({
+          stepIdx,
+          capability: stepCap,
+          response_text: stepResult?.response_text,
+          affected_count: stepResult?._mutation_result?.affected_count || 0,
+          operation: stepResult?._mutation_result?.operation,
+          is_success: !stepFailed,
+          failed: stepFailed,
+          raw_result: stepResult,
         });
 
-        if (!countErr && currentCount !== preview_count) {
-          await supabase.from('ai_actions').update({ status: 'rejected' }).eq('id', claimedPlanId);
-          claimedPlanId = null;
-          return c.json({
-            error: 'plan_drifted',
-            message: `Product list changed since preview. Previously ${preview_count} products, now ${currentCount}. Please make your request again.`,
-            preview_count,
-            current_count: currentCount,
-          }, 409);
+        if (stepFailed) {
+          stoppedAtStep = stepIdx;
+          console.warn('[execute-plan] step', stepIdx + 1, 'failed — stopping. operation:', stepResult?._mutation_result?.operation);
+          break;
         }
+
+        console.log('[execute-plan] step', stepIdx + 1, '/', plan_steps.length, stepCap, 'affected:', stepResult?._mutation_result?.affected_count);
       }
 
-      let executionResult;
+      // Overall status
+      const executedSteps = stepResults.filter(s => !s.failed).length;
+      const overallDetail = executedSteps === plan_steps.length ? 'completed'
+        : executedSteps > 0 ? 'partial' : 'failed';
+      const dbStatus = overallDetail === 'completed' ? 'executed' : 'failed';
+      // Note: partial stored as 'failed' in DB (schema constraint) — detail in execution_result JSONB
+      // TODO: future migration — add 'partially_executed' to ai_actions status CHECK constraint
 
-      if (capability === 'mutate_product') {
-        const { mutateProductCapability } = await import('../../capabilities/mutationCapabilities.js');
-        executionResult = await mutateProductCapability(params, organisationId, supabase, { currency: orgCurrency });
-      } else if (capability === 'mutate_payment') {
-        const { mutatePaymentCapability } = await import('../../capabilities/paymentCapabilities.js');
-        executionResult = await mutatePaymentCapability(params, organisationId, supabase, { currency: orgCurrency });
-      } else {
-        await supabase.from('ai_actions').update({ status: 'failed' }).eq('id', claimedPlanId);
-        claimedPlanId = null;
-        return c.json({ error: 'capability_not_implemented', message: `Execution of "${capability}" is coming soon.` }, 501);
-      }
-
+      // Persist status + step results
       await supabase.from('ai_actions')
-        .update({ status: 'executed', last_run_at: new Date().toISOString(), run_count: 1 })
+        .update({
+          status: dbStatus,
+          last_run_at: new Date().toISOString(),
+          run_count: executedSteps,
+          parameters: {
+            ...planRow.parameters,
+            execution_result: {
+              overall_status: overallDetail,
+              executed_steps: executedSteps,
+              total_steps: plan_steps.length,
+              stopped_at_step: stoppedAtStep,
+              step_results: stepResults,
+            },
+          },
+        })
         .eq('id', claimedPlanId);
       claimedPlanId = null;
 
-      const execution_id = randomUUID();
+      // Build COO response
+      // Single-step: preserve raw capability result unchanged
+      // Multi-step: synthesize combined response from step results
+      const primaryCapability = plan_steps[0]?.capability;
+      let executionResult;
+
+      if (!isMultiStep) {
+        executionResult = stepResults[0]?.raw_result || {
+          response_text: 'Done.',
+          chart_data: null,
+          next_action: null,
+          message_type: 'ai_response',
+          _mutation_result: { affected_count: 0, operation: 'unknown' },
+        };
+      } else {
+        executionResult = {
+          response_text: stepResults.map((s, i) =>
+            'Step ' + (i + 1) + ': ' + (s.failed ? '[Failed] ' : '') + s.response_text
+          ).join('\n'),
+          chart_data: null,
+          next_action: null,
+          message_type: 'ai_response',
+          _mutation_result: { affected_count: null, operation: overallDetail },
+        };
+      }
+
+      // Write action_log
       await supabase.from('action_log').insert({
         organisation_id: organisationId,
         entity_type: 'organisation',
         entity_id: organisationId,
-        action_type: capability,
+        action_type: isMultiStep ? 'multi_step' : primaryCapability,
         signal_type: 'freeform_execution',
         source_surface: 'org_ai_freeform',
         execution_id,
@@ -532,17 +613,19 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
         status: 'sent',
         metadata: {
           pending_plan_id,
-          capability,
-          affected_count: executionResult._mutation_result?.affected_count || 0,
-          operation: executionResult._mutation_result?.operation || null,
+          step_count: plan_steps.length,
+          executed_steps: executedSteps,
+          overall_status: overallDetail,
+          capabilities: plan_steps.map(s => s.capability),
         },
         actioned_at: new Date().toISOString(),
       });
 
+      // No suggested actions for multi-step
       const { getSuggestedNextActions } = await import('../../ai/capabilityRegistry.js');
-      const suggested = getSuggestedNextActions(capability);
+      const suggested = isMultiStep ? [] : getSuggestedNextActions(primaryCapability);
 
-      console.log('[execute-plan]', { pending_plan_id, capability, affected: executionResult._mutation_result?.affected_count, execution_id });
+      console.log('[execute-plan]', { pending_plan_id, steps: plan_steps.length, executed: executedSteps, overall: overallDetail, execution_id });
 
       // Save result message to DB so it survives reload
       if (ai_conversation_id) {

@@ -143,6 +143,7 @@ export async function mutatePaymentCapability(params, orgId, supabase, orgContex
     _mutation_result: {
       affected_count: invoicesAllocated.length,
       operation: 'record_payment',
+      is_success: true,
       customer_id: customer.id,
       customer_name: customer.name,
       amount: totalApplied,
