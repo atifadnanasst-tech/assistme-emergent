@@ -18,18 +18,57 @@ const sym = (currency) => CURRENCY_SYMBOLS[currency] || `${currency} `;
 export async function buildExecutionPlanCard({ validPlan, orgId, supabase, orgContext }) {
   if (!validPlan || validPlan.length === 0) return null;
 
-  const step = validPlan[0];
-  const { capability, params, label } = step;
-
-  if (capability === 'mutate_product') {
-    return _buildProductMutationPlan({ params, orgId, supabase, orgContext, label, capability });
+  // Single step — existing path unchanged
+  if (validPlan.length === 1) {
+    const step = validPlan[0];
+    const { capability, params, label } = step;
+    if (capability === 'mutate_product') return _buildProductMutationPlan({ params, orgId, supabase, orgContext, label, capability });
+    if (capability === 'mutate_payment') return _buildPaymentPlan({ params, label, capability, orgContext, orgId, supabase });
+    return _buildGenericPlan({ capability, params, label, orgContext });
   }
 
-  if (capability === 'mutate_payment') {
-    return _buildPaymentPlan({ params, label, capability, orgContext, orgId, supabase });
+  // Multi-step — build each step card individually, return as composite
+  const stepCards = [];
+  for (const step of validPlan) {
+    const { capability, params, label } = step;
+    let card;
+    if (capability === 'mutate_product') card = await _buildProductMutationPlan({ params, orgId, supabase, orgContext, label, capability });
+    else if (capability === 'mutate_payment') card = await _buildPaymentPlan({ params, label, capability, orgContext, orgId, supabase });
+    else card = _buildGenericPlan({ capability, params, label, orgContext });
+
+    // Surface clarification immediately — cannot proceed with multi-step if entity is ambiguous
+    if (card?.clarification_needed) return card;
+
+    // Hard stop on error only — empty (no matching records) is not a hard error
+    if (card?.error) {
+      return {
+        ...card,
+        error: true,
+        summary_text: `Step ${stepCards.length + 1} could not be prepared: ${card.summary_text}`,
+      };
+    }
+
+    stepCards.push(card);
   }
 
-  return _buildGenericPlan({ capability, params, label, orgContext });
+  // Composite card — step_cards preserved for frontend rendering
+  // No aggregate affected_count — misleading across different capability types
+  return {
+    capability: 'multi_step',
+    label: `${validPlan.length}-step plan`,
+    operation: `${validPlan.length} actions`,
+    operation_description: stepCards.map((c, i) => `${i + 1}. ${c.operation_description || c.operation}`).join(' → '),
+    summary_text: stepCards.map((c, i) => (i + 1) + '. ' + (c.operation_description || c.operation)).join('\n'),
+    affected_count: null,
+    preview_rows: [],
+    step_cards: stepCards,
+    more_count: 0,
+    currency: orgContext?.currency || 'INR',
+    error: false,
+    empty: false,
+    is_multi_step: true,
+    _plan_steps: validPlan.map(s => ({ capability: s.capability, params: s.params, label: s.label })),
+  };
 }
 
 async function _buildProductMutationPlan({ params, orgId, supabase, orgContext, label, capability }) {
