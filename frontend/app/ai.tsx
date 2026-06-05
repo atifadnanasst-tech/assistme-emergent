@@ -905,9 +905,43 @@ export default function AIScreen() {
           <Text style={styles.cardTitle}>Execution Plan</Text>
         </View>
 
-        <Text style={styles.cardBody}>{plan.operation_description}</Text>
+        {plan.is_multi_step && plan.step_cards && plan.step_cards.length > 0 ? (
+          <View style={{ marginTop: 4 }}>
+            {plan.step_cards.map((stepCard: any, idx: number) => (
+              <View key={idx} style={{ marginBottom: 10, paddingBottom: 8, borderBottomWidth: idx < plan.step_cards.length - 1 ? 1 : 0, borderBottomColor: '#F0F0F0' }}>
+                <Text style={{ fontSize: 12, color: '#075E54', fontWeight: '700', marginBottom: 4 }}>
+                  Step {idx + 1}
+                </Text>
+                <Text style={{ fontSize: 13, color: '#333333', marginBottom: 4 }}>
+                  {stepCard.operation_description || stepCard.operation}
+                </Text>
+                {stepCard.preview_rows && stepCard.preview_rows.length > 0 && (
+                  <View>
+                    <View style={{ flexDirection: 'row', marginBottom: 2 }}>
+                      <Text style={{ flex: 2, fontSize: 10, color: '#666666', fontWeight: '600' }}>PRODUCT</Text>
+                      <Text style={{ flex: 1, fontSize: 10, color: '#666666', fontWeight: '600', textAlign: 'right' }}>BEFORE</Text>
+                      <Text style={{ flex: 1, fontSize: 10, color: '#075E54', fontWeight: '600', textAlign: 'right' }}>AFTER</Text>
+                    </View>
+                    {stepCard.preview_rows.map((row: any, i: number) => (
+                      <View key={i} style={{ flexDirection: 'row', paddingVertical: 2 }}>
+                        <Text style={{ flex: 2, fontSize: 12, color: '#1A1A1A' }} numberOfLines={1}>{row.name}</Text>
+                        <Text style={{ flex: 1, fontSize: 12, color: '#666666', textAlign: 'right' }}>{s}{row.before?.toLocaleString('en-IN')}</Text>
+                        <Text style={{ flex: 1, fontSize: 12, color: '#075E54', fontWeight: '600', textAlign: 'right' }}>{s}{row.after?.toLocaleString('en-IN')}</Text>
+                      </View>
+                    ))}
+                    {stepCard.more_count > 0 && (
+                      <Text style={{ fontSize: 11, color: '#999999' }}>+{stepCard.more_count} more</Text>
+                    )}
+                  </View>
+                )}
+              </View>
+            ))}
+          </View>
+        ) : (
+          <Text style={styles.cardBody}>{plan.operation_description}</Text>
+        )}
 
-        {plan.preview_rows && plan.preview_rows.length > 0 && (
+        {!plan.is_multi_step && plan.preview_rows && plan.preview_rows.length > 0 && (
           <View style={{ marginTop: 8, marginBottom: 4 }}>
             <View style={{ flexDirection: 'row', marginBottom: 4 }}>
               <Text style={{ flex: 2, fontSize: 11, color: '#666666', fontWeight: '600' }}>PRODUCT</Text>
