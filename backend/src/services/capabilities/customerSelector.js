@@ -111,7 +111,7 @@ export async function resolveCustomerSelector({ selector = {}, orgId, supabase }
         p_organisation_id: orgId,
         p_search_term: searchName,
         p_limit: 5,
-        p_threshold: 0.10,
+        p_threshold: 0.06,
       });
 
     if (fuzzyErr) {
