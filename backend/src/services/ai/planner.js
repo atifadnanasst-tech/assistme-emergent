@@ -90,6 +90,11 @@ RULES:
     NEVER use increase_pct or decrease_pct for explicit target prices.
 
 PARAM EXAMPLES:
+- set_entity_field customer credit limit: { "mutation_key": "customer.credit_limit.set", "entity": { "type": "customer", "name": "Ania Adnan" }, "new_value": "200000" }
+- set_entity_field payment terms: { "mutation_key": "customer.payment_terms.set", "entity": { "type": "customer", "name": "Noor" }, "new_value": "45" }
+- set_entity_field phone: { "mutation_key": "customer.phone.set", "entity": { "type": "customer", "name": "Shahid" }, "new_value": "9876543210" }
+- set_entity_field product category: { "mutation_key": "product.category.set", "entity": { "type": "product", "name": "Attar Mogra" }, "new_value": "attar" }
+- set_entity_field product unit: { "mutation_key": "product.unit.set", "entity": { "type": "product", "name": "Rose Water" }, "new_value": "litre" }
 - mutate_product bulk % increase: { "operation": "bulk_price_change", "selector": { "category": "attar" }, "change_type": "increase_pct", "value": 10 }
 - mutate_product set absolute price: { "operation": "bulk_price_change", "selector": { "name": "Attar Mogra" }, "change_type": "set_price", "value": 1150 }
 - mutate_product % decrease: { "operation": "bulk_price_change", "selector": { "category": "perfume" }, "change_type": "decrease_pct", "value": 5 }
