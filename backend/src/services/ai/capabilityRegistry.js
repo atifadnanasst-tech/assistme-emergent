@@ -151,6 +151,16 @@ export const CAPABILITY_REGISTRY = {
     suggested_next_actions: ['query_customers', 'query_overdue_payments'],
   },
 
+  set_entity_field: {
+    version: 1,
+    description: 'Update a specific field on a customer or product record. Use mutation_key to identify field. Examples: credit limit, payment terms, phone, email, notes, product name, SKU, category, unit. NEVER use for financial fields like outstanding_balance, invoice amounts, or payment records.',
+    confirmation: 'always',
+    scope: ['org', 'customers', 'products'],
+    is_financial: false,
+    middleware_fn: 'setEntityField',
+    suggested_next_actions: ['query_customers', 'query_inventory'],
+  },
+
   mutate_invoice: {
     version: 1,
     description: 'Create, edit, cancel, or duplicate an invoice. Does NOT record payments — use mutate_payment for that.',
