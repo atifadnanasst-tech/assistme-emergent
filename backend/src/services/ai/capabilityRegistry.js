@@ -161,6 +161,17 @@ export const CAPABILITY_REGISTRY = {
     suggested_next_actions: ['query_customers', 'query_inventory'],
   },
 
+  set_business_profile: {
+    version: 1,
+    // Keep field list in sync with setBusinessProfileCapability.WRITABLE_FIELDS
+    description: 'Update a field on the owner business profile (company identity). Use field_key to identify field. Examples: business_name, gstin, phone, email, address_line1, address_line2, city, state, postal_code, logo_url, signature_url, terms_text. NEVER use for financial data.',
+    confirmation: 'always',
+    scope: ['org'],
+    is_financial: false,
+    middleware_fn: 'setBusinessProfile',
+    suggested_next_actions: ['set_business_profile'],
+  },
+
   mutate_invoice: {
     version: 1,
     description: 'Create, edit, cancel, or duplicate an invoice. Does NOT record payments — use mutate_payment for that.',
