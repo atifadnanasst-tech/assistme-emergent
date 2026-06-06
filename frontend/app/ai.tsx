@@ -865,17 +865,26 @@ export default function AIScreen() {
       {stepCard.preview_rows && stepCard.preview_rows.length > 0 && (
         <View>
           <View style={{ flexDirection: 'row', marginBottom: 2 }}>
-            <Text style={{ flex: 2, fontSize: 10, color: '#666666', fontWeight: '600' }}>PRODUCT</Text>
+            <Text style={{ flex: 2, fontSize: 10, color: '#666666', fontWeight: '600' }}>
+              {stepCard.capability === 'set_entity_field' ? 'FIELD' : 'PRODUCT'}
+            </Text>
             <Text style={{ flex: 1, fontSize: 10, color: '#666666', fontWeight: '600', textAlign: 'right' }}>BEFORE</Text>
             <Text style={{ flex: 1, fontSize: 10, color: '#075E54', fontWeight: '600', textAlign: 'right' }}>AFTER</Text>
           </View>
-          {stepCard.preview_rows.map((row: any, i: number) => (
+          {stepCard.preview_rows.map((row: any, i: number) => {
+            const isEntityField = stepCard.capability === 'set_entity_field';
+            return (
             <View key={i} style={{ flexDirection: 'row', paddingVertical: 2 }}>
               <Text style={{ flex: 2, fontSize: 12, color: '#1A1A1A' }} numberOfLines={1}>{row.name}</Text>
-              <Text style={{ flex: 1, fontSize: 12, color: '#666666', textAlign: 'right' }}>{s}{row.before?.toLocaleString('en-IN')}</Text>
-              <Text style={{ flex: 1, fontSize: 12, color: '#075E54', fontWeight: '600', textAlign: 'right' }}>{s}{row.after?.toLocaleString('en-IN')}</Text>
+              <Text style={{ flex: 1, fontSize: 12, color: '#666666', textAlign: 'right' }}>
+                {isEntityField ? row.before : s + (row.before?.toLocaleString('en-IN') ?? '')}
+              </Text>
+              <Text style={{ flex: 1, fontSize: 12, color: '#075E54', fontWeight: '600', textAlign: 'right' }}>
+                {isEntityField ? row.after : s + (row.after?.toLocaleString('en-IN') ?? '')}
+              </Text>
             </View>
-          ))}
+            );
+          })}
           {stepCard.more_count > 0 && (
             <Text style={{ fontSize: 11, color: '#999999' }}>+{stepCard.more_count} more</Text>
           )}
