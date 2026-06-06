@@ -424,7 +424,9 @@ function _buildSetBusinessProfilePlan({ params, label, capability, orgContext })
   const rawValue = String(new_value || '');
   const previewValue = rawValue.length > 80 ? rawValue.slice(0, 77) + '...' : rawValue;
 
-  const rawCard = {
+  // Return raw card — freeform.js reads summary_text and _plan_steps before stripping via buildClientPlanCard.
+  // Do NOT call buildClientPlanCard here — that strips server-only fields needed by freeform.js.
+  return {
     capability,
     label: label || `Update ${fieldLabel}`,
     operation: `Update ${fieldLabel}`,
@@ -436,8 +438,6 @@ function _buildSetBusinessProfilePlan({ params, label, capability, orgContext })
     currency: orgContext?.currency || 'INR',
     is_multi_step: false,
     step_cards: null,
-    // _plan_steps preserved by freeform.js for ai_actions storage — stripped by buildClientPlanCard
     _plan_steps: [{ capability, params, label: label || `Update ${fieldLabel}` }],
   };
-  return buildClientPlanCard(rawCard);
 }
