@@ -520,6 +520,9 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
         } else if (stepCap === 'mutate_invoice') {
           const { mutateInvoiceCapability } = await import('../../capabilities/invoiceCapabilities.js');
           stepResult = await mutateInvoiceCapability(stepParams, organisationId, supabase, { currency: orgCurrency }, ownerToken);
+        } else if (stepCap === 'set_entity_field') {
+          const { setEntityFieldCapability } = await import('../../capabilities/setEntityFieldCapability.js');
+          stepResult = await setEntityFieldCapability(stepParams, organisationId, supabase, { currency: orgCurrency });
         } else {
           await supabase.from('ai_actions').update({ status: 'failed' }).eq('id', claimedPlanId);
           claimedPlanId = null;
