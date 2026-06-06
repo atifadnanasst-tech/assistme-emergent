@@ -423,6 +423,7 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
     let claimedPlanId = null;
 
     try {
+      const ownerToken = c.req.header('Authorization')?.split(' ')[1] || null;
       const auth = await authenticateChat(c);
       if (!auth) return c.json({ error: 'unauthorized' }, 401);
       const { organisationId } = auth;
@@ -516,6 +517,9 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
         } else if (stepCap === 'mutate_payment') {
           const { mutatePaymentCapability } = await import('../../capabilities/paymentCapabilities.js');
           stepResult = await mutatePaymentCapability(stepParams, organisationId, supabase, { currency: orgCurrency });
+        } else if (stepCap === 'mutate_invoice') {
+          const { mutateInvoiceCapability } = await import('../../capabilities/invoiceCapabilities.js');
+          stepResult = await mutateInvoiceCapability(stepParams, organisationId, supabase, { currency: orgCurrency }, ownerToken);
         } else {
           await supabase.from('ai_actions').update({ status: 'failed' }).eq('id', claimedPlanId);
           claimedPlanId = null;
@@ -694,6 +698,7 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
   // Sets status = 'rejected' (schema allows: pending/approved/rejected/executed/failed).
   app.post('/api/home/cancel-plan', async (c) => {
     try {
+      const ownerToken = c.req.header('Authorization')?.split(' ')[1] || null;
       const auth = await authenticateChat(c);
       if (!auth) return c.json({ error: 'unauthorized' }, 401);
       const { organisationId } = auth;

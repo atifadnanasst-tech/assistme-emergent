@@ -200,6 +200,60 @@ async function _buildPaymentPlan({ params, label, capability, orgContext, orgId,
   };
 }
 
+async function _buildInvoicePlan({ params, label, capability, orgContext, orgId, supabase }) {
+  const { customer, items = [] } = params;
+  const s = orgContext?.currency === 'USD' ? '$' : '₹';
+
+  // Resolve customer name for preview
+  let customerName = customer?.name || customer?.customer_name || 'the customer';
+  if (orgId && supabase && (customer?.name || customer?.customer_name)) {
+    const { resolveCustomerSelector } = await import('../capabilities/customerSelector.js');
+    const { customer: resolved, candidates } = await resolveCustomerSelector({
+      selector: customer, orgId, supabase,
+    });
+
+    if ((candidates || []).length > 1) {
+      return {
+        capability,
+        label,
+        clarification_needed: true,
+        clarification_type: 'customer_selection',
+        clarification_text: 'I found ' + candidates.length + ' customers matching that name. Which one did you mean?',
+        options: candidates.slice(0, 5).map(c => ({
+          id: c.id,
+          label: c.name,
+          sublabel: c.outstanding_balance > 0
+            ? 'Outstanding: ' + s + Number(c.outstanding_balance).toLocaleString('en-IN')
+            : 'No outstanding',
+        })),
+        original_params: params,
+        _plan_steps: [{ capability, params, label }],
+      };
+    }
+    if (resolved?.name) customerName = resolved.name;
+  }
+
+  // Build item summary for preview
+  const itemCount = items.length;
+  const itemNames = items.slice(0, 3).map(i => i.name || i.product_name || 'item').join(', ');
+  const itemSummary = itemCount === 1 ? itemNames : itemCount + ' items (' + itemNames + (itemCount > 3 ? '...' : '') + ')';
+
+  return {
+    capability,
+    label,
+    operation: 'Create invoice',
+    operation_description: 'Invoice for ' + customerName + ' — ' + itemSummary,
+    summary_text: 'Create invoice for ' + customerName + ' with ' + itemSummary + '. Confirm to proceed.',
+    affected_count: 1,
+    preview_rows: [],
+    more_count: 0,
+    currency: orgContext?.currency || 'INR',
+    error: false,
+    empty: false,
+    _plan_steps: [{ capability, params, label }],
+  };
+}
+
 function _buildGenericPlan({ capability, params, label, orgContext }) {
   return {
     capability,

@@ -93,6 +93,9 @@ PARAM EXAMPLES:
 - mutate_product bulk % increase: { "operation": "bulk_price_change", "selector": { "category": "attar" }, "change_type": "increase_pct", "value": 10 }
 - mutate_product set absolute price: { "operation": "bulk_price_change", "selector": { "name": "Attar Mogra" }, "change_type": "set_price", "value": 1150 }
 - mutate_product % decrease: { "operation": "bulk_price_change", "selector": { "category": "perfume" }, "change_type": "decrease_pct", "value": 5 }
+- mutate_invoice create invoice: { "operation": "create_invoice", "customer": { "name": "Ania Adnan" }, "items": [{ "name": "Attar Mogra", "quantity": 2 }] }
+- mutate_invoice multiple items: { "operation": "create_invoice", "customer": { "name": "Noor Suppliers" }, "items": [{ "name": "Attar Rose", "quantity": 1 }, { "name": "Musk Al Tahara", "quantity": 3 }] }
+- mutate_invoice with quantity: { "operation": "create_invoice", "customer": { "name": "ABC Traders" }, "items": [{ "name": "Mogra", "quantity": 5 }] }
 - mutate_payment record payment: { "operation": "record_payment", "customer": { "name": "ABC Traders" }, "amount": 5000 }
 - mutate_payment with date: { "operation": "record_payment", "customer": { "name": "Ania" }, "amount": 3600, "date": "2026-06-04" }
 - mutate_payment with method: { "operation": "record_payment", "customer": { "name": "XYZ" }, "amount": 10000, "method": "upi" }
