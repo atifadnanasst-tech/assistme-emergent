@@ -95,6 +95,14 @@ export const authService = {
     }
   },
 
+  // Update tokens only — used by TOKEN_REFRESHED listener in AuthContext
+  // Does NOT touch org_id, user_id, role — only syncs access/refresh tokens
+  async updateTokens(accessToken: string, refreshToken: string): Promise<void> {
+    await secureSet(TOKEN_KEY, accessToken);
+    await secureSet(REFRESH_TOKEN_KEY, refreshToken);
+    console.log('[AUTH] Tokens updated after TOKEN_REFRESHED');
+  },
+
   // Refresh session
   async refreshSession(): Promise<boolean> {
     try {

@@ -70,6 +70,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     checkAuth();
+
+    // TOKEN_REFRESHED listener — syncs SecureStore after Supabase auto-refresh
+    // Root cause: Supabase refreshes its session internally but authService reads
+    // a separate SecureStore key. This keeps them in sync.
+    // Uses updateTokens() — does NOT overwrite org/user metadata.
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      async (event, session) => {
+        if (event === 'TOKEN_REFRESHED' && session) {
+          try {
+            await authService.updateTokens(
+              session.access_token,
+              session.refresh_token,
+            );
+            console.log('[AUTH_CONTEXT] TOKEN_REFRESHED — SecureStore synced');
+          } catch (err) {
+            console.warn('[AUTH_CONTEXT] Failed to sync refreshed tokens', err);
+          }
+        }
+      }
+    );
+
+    return () => subscription.unsubscribe();
   }, []);
 
   return (
