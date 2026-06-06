@@ -424,16 +424,20 @@ function _buildSetBusinessProfilePlan({ params, label, capability, orgContext })
   const rawValue = String(new_value || '');
   const previewValue = rawValue.length > 80 ? rawValue.slice(0, 77) + '...' : rawValue;
 
-  return buildClientPlanCard({
+  const rawCard = {
     capability,
     label: label || `Update ${fieldLabel}`,
     operation: `Update ${fieldLabel}`,
     operation_description: `Set ${fieldLabel} to "${previewValue}"`,
+    summary_text: `Update ${fieldLabel} to "${previewValue}". Confirm to proceed.`,
     affected_count: 1,
     preview_rows: [{ name: fieldLabel, before: '(current)', after: previewValue }],
     more_count: 0,
     currency: orgContext?.currency || 'INR',
     is_multi_step: false,
     step_cards: null,
-  });
+    // _plan_steps preserved by freeform.js for ai_actions storage — stripped by buildClientPlanCard
+    _plan_steps: [{ capability, params, label: label || `Update ${fieldLabel}` }],
+  };
+  return buildClientPlanCard(rawCard);
 }

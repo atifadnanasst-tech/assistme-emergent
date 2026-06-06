@@ -181,10 +181,10 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
       const { organisationId } = auth;
 
       const body = await c.req.json();
-      const { menu_id, message, ai_conversation_id } = body;
+      const { menu_id, message, ai_conversation_id, attachment } = body;
 
       if (!ai_conversation_id) return c.json({ error: 'missing_ai_conversation_id' }, 400);
-      if (!menu_id && !message) return c.json({ error: 'missing_menu_id_or_message' }, 400);
+      if (!menu_id && !message && !attachment) return c.json({ error: 'missing_menu_id_or_message' }, 400);
 
       // Validate menu_id against server-owned enum — reject unknown IDs
       if (menu_id && !MENU_LABELS[menu_id]) {
@@ -252,8 +252,29 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
         const conversationHistory = (recentMsgs || []).reverse();
 
         const openai = getOpenAI();
+
+        // Process attachment if present — org_ai purpose (business profile extraction)
+        // extractAttachmentContext always returns { contextString, inputModality } — never throws.
+        // contextString already leads with \n so no separator needed before concatenation.
+        let attachmentContext = '';
+        if (attachment) {
+          const { extractAttachmentContext } = await import('../extractAttachmentContext.js');
+          const extracted = await extractAttachmentContext({
+            attachment,
+            purpose: 'org_ai',
+            llmClient: openai,
+          });
+          attachmentContext = extracted.contextString;
+        }
+
+        const messageWithAttachment = (message || '') + attachmentContext;
+
+        if (!messageWithAttachment.trim()) {
+          return c.json({ error: 'empty_query', message: 'Could not extract content from attachment. Please describe what you need in text.' }, 400);
+        }
+
         result = await dispatchFreeform({
-          message,
+          message: messageWithAttachment,
           orgId: organisationId,
           orgContext: {
             currency: orgCurrency,
@@ -292,7 +313,7 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
               params: result.original_params,
               label: result.original_label,
             } : null,
-            preview_text: result.response_text.substring(0, 50),
+            preview_text: (result.response_text || '').substring(0, 50),
             read_by_owner: true,
             menu_id: menu_id || null,
           },
@@ -523,6 +544,9 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
         } else if (stepCap === 'set_entity_field') {
           const { setEntityFieldCapability } = await import('../../capabilities/setEntityFieldCapability.js');
           stepResult = await setEntityFieldCapability(stepParams, organisationId, supabase, { currency: orgCurrency });
+        } else if (stepCap === 'set_business_profile') {
+          const { setBusinessProfileCapability } = await import('../../capabilities/setBusinessProfileCapability.js');
+          stepResult = await setBusinessProfileCapability(stepParams, organisationId, supabase);
         } else {
           await supabase.from('ai_actions').update({ status: 'failed' }).eq('id', claimedPlanId);
           claimedPlanId = null;
