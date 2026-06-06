@@ -43,6 +43,7 @@ export async function buildExecutionPlanCard({ validPlan, orgId, supabase, orgCo
     if (capability === 'mutate_payment') return _buildPaymentPlan({ params, label, capability, orgContext, orgId, supabase });
     if (capability === 'mutate_invoice') return _buildInvoicePlan({ params, label, capability, orgContext, orgId, supabase });
     if (capability === 'set_entity_field') return _buildSetEntityFieldPlan({ params, label, capability, orgContext, orgId, supabase });
+    if (capability === 'set_business_profile') return _buildSetBusinessProfilePlan({ params, label, capability, orgContext });
     return _buildGenericPlan({ capability, params, label, orgContext });
   }
 
@@ -55,6 +56,7 @@ export async function buildExecutionPlanCard({ validPlan, orgId, supabase, orgCo
     else if (capability === 'mutate_payment') card = await _buildPaymentPlan({ params, label, capability, orgContext, orgId, supabase });
     else if (capability === 'mutate_invoice') card = await _buildInvoicePlan({ params, orgId, supabase, orgContext, label, capability });
     else if (capability === 'set_entity_field') card = await _buildSetEntityFieldPlan({ params, orgId, supabase, orgContext, label, capability });
+    else if (capability === 'set_business_profile') card = _buildSetBusinessProfilePlan({ params, label, capability, orgContext });
     else card = _buildGenericPlan({ capability, params, label, orgContext });
 
     // Surface clarification immediately — cannot proceed with multi-step if entity is ambiguous
@@ -394,4 +396,44 @@ function _describeChange({ change_type, value, operation, s }) {
   if (operation === 'restore')        return 'Restore products';
   if (operation === 'update')         return 'Update product details';
   return operation || 'Update';
+}
+
+// ── set_business_profile plan builder ────────────────────────────────────────
+// Synchronous — no DB lookup needed. Preview shows field label + new value.
+// PROFILE-PLAN-01 (post-v1): load current profile values so plan cards can
+// show true before→after previews instead of '(current)' placeholder.
+// Keep FIELD_LABELS in sync with setBusinessProfileCapability.WRITABLE_FIELDS
+function _buildSetBusinessProfilePlan({ params, label, capability, orgContext }) {
+  const { field_key, new_value } = params;
+
+  const FIELD_LABELS = {
+    business_name: 'Business Name', gstin: 'GSTIN',
+    phone: 'Phone', email: 'Email',
+    address_line1: 'Address Line 1', address_line2: 'Address Line 2',
+    city: 'City', state: 'State', postal_code: 'Postal Code',
+    logo_url: 'Logo', signature_url: 'Signature', terms_text: 'Terms & Conditions',
+  };
+
+  const fieldLabel = FIELD_LABELS[field_key] || field_key;
+
+  if (!field_key) {
+    return { error: true, summary_text: 'No field specified for business profile update.', capability, label };
+  }
+
+  // Truncate long values for preview only — actual value in params is untouched
+  const rawValue = String(new_value || '');
+  const previewValue = rawValue.length > 80 ? rawValue.slice(0, 77) + '...' : rawValue;
+
+  return buildClientPlanCard({
+    capability,
+    label: label || `Update ${fieldLabel}`,
+    operation: `Update ${fieldLabel}`,
+    operation_description: `Set ${fieldLabel} to "${previewValue}"`,
+    affected_count: 1,
+    preview_rows: [{ name: fieldLabel, before: '(current)', after: previewValue }],
+    more_count: 0,
+    currency: orgContext?.currency || 'INR',
+    is_multi_step: false,
+    step_cards: null,
+  });
 }
