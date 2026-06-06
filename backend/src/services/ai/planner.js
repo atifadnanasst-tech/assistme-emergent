@@ -105,7 +105,14 @@ PARAM EXAMPLES:
 - mutate_payment with date: { "operation": "record_payment", "customer": { "name": "Ania" }, "amount": 3600, "date": "2026-06-04" }
 - mutate_payment with method: { "operation": "record_payment", "customer": { "name": "XYZ" }, "amount": 10000, "method": "upi" }
 - query_customers: { "filter": "overdue" }
-- send_payment_reminder: { "target": "all_overdue" }`;
+- send_payment_reminder: { "target": "all_overdue" }
+- set_business_profile GSTIN: { "field_key": "gstin", "new_value": "27AAAAA0000A1Z5" }
+- set_business_profile name: { "field_key": "business_name", "new_value": "BW Solution Technologies" }
+- set_business_profile address: { "field_key": "address_line1", "new_value": "11/2A McLeod Street" }
+- set_business_profile city: { "field_key": "city", "new_value": "Kolkata" }
+- set_business_profile state: { "field_key": "state", "new_value": "West Bengal" }
+- set_business_profile phone: { "field_key": "phone", "new_value": "9007188402" }
+- set_business_profile email: { "field_key": "email", "new_value": "contact@mybusiness.com" }`;
 }
 
 export async function planExecution({ userMessage, scope = 'org', orgContext = {}, conversationHistory = [], openai }) {
