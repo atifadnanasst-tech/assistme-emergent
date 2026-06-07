@@ -24,6 +24,7 @@ import { supabase } from '../lib/supabase';
 import { authService } from '../lib/auth';
 import VisualizationCard from '../components/charts/VisualizationCard';
 import ActionExecutionModal, { ActionData, ActionEntity } from './components/ActionExecutionModal';
+import type { AiAttachment } from '../types/chat';
 
 interface AIMessage {
   id: string;
@@ -45,13 +46,6 @@ interface AIMessage {
 
 type SendingState = 'idle' | 'sending' | 'ai_responding';
 
-// Attachment shape — matches backend /api/home/ai-query contract (PATCH-6)
-type AiAttachment = {
-  type: 'image';
-  url: string;
-  mime_type: string;
-  name: string;
-};
 
 export default function AIScreen() {
   const router = useRouter();
