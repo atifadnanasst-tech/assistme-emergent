@@ -7,6 +7,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { registerAIRoutes, getOpenAI } from './ai-routes.js';
 import { registerOrgAiRoutes } from './services/ai/orgAi/routes.js';
+import { getBusinessProfile, updateBusinessProfileFields } from './services/capabilities/setBusinessProfileCapability.js';
 import { registerSupplierRoutes } from './services/business/supplierRoutes.js';
 import { recordPayment } from './services/business/recordPayment.js';
 import { extractVisualization } from './services/ai/visualizationParser.js';
@@ -5992,6 +5993,40 @@ export { supabase };
 // Register AI routes (Flow 2B)
 if (supabase) {
   registerAIRoutes(app, supabase);
+  // ── GET /api/business-profile ─────────────────────────────────────────────
+  // Returns default business profile for this org. Creates one if none exists.
+  app.get('/api/business-profile', async (c) => {
+    try {
+      const auth = await authenticateChat(c);
+      if (!auth) return c.json({ error: 'unauthorized' }, 401);
+      const profile = await getBusinessProfile(auth.organisationId, supabase);
+      if (!profile) return c.json({ error: 'profile_not_found' }, 404);
+      return c.json({ profile });
+    } catch (err) {
+      console.error('GET /api/business-profile error:', err);
+      return c.json({ error: 'server_error' }, 500);
+    }
+  });
+
+  // ── PATCH /api/business-profile ────────────────────────────────────────────
+  // Bulk update business profile fields. Used by BusinessProfileScreen form.
+  // Body: { [field_key]: value } — any subset of WRITABLE_FIELDS.
+  app.patch('/api/business-profile', async (c) => {
+    try {
+      const auth = await authenticateChat(c);
+      if (!auth) return c.json({ error: 'unauthorized' }, 401);
+      const body = await c.req.json();
+      const { success, error, profile } = await updateBusinessProfileFields(
+        auth.organisationId, body, supabase
+      );
+      if (!success) return c.json({ error: error || 'update_failed' }, 400);
+      return c.json({ profile });
+    } catch (err) {
+      console.error('PATCH /api/business-profile error:', err);
+      return c.json({ error: 'server_error' }, 500);
+    }
+  });
+
   registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI);
   registerSupplierRoutes(app, supabase, authenticateChat);
   console.log('✅ AI routes registered');
