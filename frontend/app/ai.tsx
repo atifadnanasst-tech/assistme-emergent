@@ -45,6 +45,14 @@ interface AIMessage {
 
 type SendingState = 'idle' | 'sending' | 'ai_responding';
 
+// Attachment shape — matches backend /api/home/ai-query contract (PATCH-6)
+type AiAttachment = {
+  type: 'image';
+  url: string;
+  mime_type: string;
+  name: string;
+};
+
 export default function AIScreen() {
   const router = useRouter();
   const { setIsAuthenticated } = useAuth();
@@ -67,6 +75,7 @@ export default function AIScreen() {
   const [actionModalData, setActionModalData] = useState<ActionData | null>(null);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [aiRecording, setAiRecording] = useState<Audio.Recording | null>(null);
+  const [aiAttachment, setAiAttachment] = useState<AiAttachment | null>(null);
   const [confirmingPlanId, setConfirmingPlanId] = useState<string | null>(null);
   const [selectingEntityId, setSelectingEntityId] = useState<string | null>(null);
 
@@ -437,14 +446,14 @@ export default function AIScreen() {
 
   const handleSend = async () => {
     const text = inputText.trim();
-    if (!text || sendingState !== 'idle' || !conversationId) return;
+    if ((!text && !aiAttachment) || sendingState !== 'idle' || !conversationId) return;
     Keyboard.dismiss();
     setInputText('');
-    await handleSendDirect(text);
+    await handleSendDirect(text, aiAttachment);
   };
 
-  const handleSendDirect = async (text: string) => {
-    if (!text || sendingState !== 'idle' || !conversationId) return;
+  const handleSendDirect = async (text: string, attachment?: AiAttachment | null) => {
+    if ((!text && !attachment) || sendingState !== 'idle' || !conversationId) return;
 
     // Optimistic render
     const tempId = `temp-${Date.now()}`;
@@ -472,7 +481,7 @@ export default function AIScreen() {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ message: text, ai_conversation_id: conversationId }),
+        body: JSON.stringify({ message: text, ai_conversation_id: conversationId, ...(attachment ? { attachment } : {}) }),
         signal: controller.signal,
       });
       clearTimeout(timeoutId);
@@ -521,6 +530,7 @@ export default function AIScreen() {
         created_at: new Date().toISOString(),
       };
       setMessages(prev => [aiMsg, ...prev]); // inverted: prepend = visually bottom
+      setAiAttachment(null); // clear on success only (PATCH-9A)
     } catch (error: any) {
       if (error.name === 'AbortError') {
         Alert.alert('Timeout', "AI took too long. Try again.");
