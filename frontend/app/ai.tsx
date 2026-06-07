@@ -5,7 +5,6 @@ import {
   StyleSheet,
   TouchableOpacity,
   FlatList,
-  TextInput,
   ActivityIndicator,
   Alert,
   Linking,
@@ -15,7 +14,7 @@ import {
   useWindowDimensions,
   ScrollView,
 } from 'react-native';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Audio } from 'expo-av';
@@ -25,6 +24,7 @@ import { authService } from '../lib/auth';
 import VisualizationCard from '../components/charts/VisualizationCard';
 import ActionExecutionModal, { ActionData, ActionEntity } from './components/ActionExecutionModal';
 import type { AiAttachment } from '../types/chat';
+import { ChatComposerInput } from '../components/chat/ChatComposerInput';
 
 interface AIMessage {
   id: string;
@@ -51,7 +51,6 @@ export default function AIScreen() {
   const router = useRouter();
   const { setIsAuthenticated } = useAuth();
   const flatListRef = useRef<FlatList>(null);
-  const insets = useSafeAreaInsets();
   // Pagination state — same pattern as customer chat (WhatsApp-style cursor pagination)
   const [hasMore, setHasMore] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
@@ -67,7 +66,6 @@ export default function AIScreen() {
   const [sentReminders, setSentReminders] = useState<Set<string>>(new Set());
   const [actionModalVisible, setActionModalVisible] = useState(false);
   const [actionModalData, setActionModalData] = useState<ActionData | null>(null);
-  const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [aiRecording, setAiRecording] = useState<Audio.Recording | null>(null);
   const [aiAttachment, setAiAttachment] = useState<AiAttachment | null>(null);
   const [confirmingPlanId, setConfirmingPlanId] = useState<string | null>(null);
@@ -202,13 +200,6 @@ export default function AIScreen() {
     }
   };
 
-  useEffect(() => {
-    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
-    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
-    const s1 = Keyboard.addListener(showEvent, () => setKeyboardVisible(true));
-    const s2 = Keyboard.addListener(hideEvent, () => setKeyboardVisible(false));
-    return () => { s1.remove(); s2.remove(); };
-  }, []);
 
   useFocusEffect(
     useCallback(() => {
@@ -1366,42 +1357,22 @@ keyboardVerticalOffset={80}
         )}
       </View>
 
-      {/* Input bar */}
-      <View style={[styles.inputBar, { paddingBottom: keyboardVisible ? 4 : insets.bottom + 4 }]}>
-        <TextInput
-          style={styles.textInput}
-          placeholder="Ask AI about your business..."
-          placeholderTextColor="#999999"
-          value={inputText}
-          onChangeText={setInputText}
-          editable={sendingState === 'idle'}
-          maxLength={2000}
-          multiline
-        />
-        <TouchableOpacity
-          onPress={handleAiMicPress}
-          style={[styles.sendButton, { marginRight: 6, backgroundColor: aiRecording ? '#e53935' : undefined }]}
-        >
-          <Ionicons
-            name={aiRecording ? 'stop' : 'mic'}
-            size={20}
-            color="#fff"
-          />
-        </TouchableOpacity>
-        {inputText.trim().length > 0 ? (
-          <TouchableOpacity
-            style={styles.sendButton}
-            onPress={handleSend}
-            disabled={sendingState !== 'idle'}
-          >
-            <Ionicons name="send" size={20} color="#FFFFFF" />
-          </TouchableOpacity>
-        ) : (
-          <View style={styles.micButtonDisabled}>
-            <Ionicons name="mic" size={20} color="#CCCCCC" />
-          </View>
-        )}
-      </View>
+      {/* Input bar — ChatComposerInput (PATCH-9C-B) */}
+      <ChatComposerInput
+        inputText={inputText}
+        onChangeText={setInputText}
+        attachment={aiAttachment}
+        onClearAttachment={() => setAiAttachment(null)}
+        onSend={handleSend}
+        onMicPress={handleAiMicPress}
+        onPickGallery={handlePickGallery}
+        onOpenCamera={handleOpenCamera}
+        isRecording={!!aiRecording}
+        disabled={sendingState !== 'idle'}
+        placeholder="Ask AI about your business..."
+        accentColor="#075E54"
+        leadingIcon={<Ionicons name="sparkles" size={18} color="#075E54" />}
+      />
     </KeyboardAvoidingView>
 
     <ActionExecutionModal
@@ -1621,37 +1592,4 @@ const styles = StyleSheet.create({
   dot3: { opacity: 0.8 },
 
   // ── Input bar ──────────────────────────────────────────
-  inputBar: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    backgroundColor: '#FFFFFF',
-    paddingHorizontal: 8,
-    paddingTop: 6,
-    borderTopWidth: 1,
-    borderTopColor: '#F0F0F0',
-    gap: 6,
-  },
-  textInput: {
-    flex: 1,
-    fontSize: 15,
-    color: '#333333',
-    maxHeight: 100,
-    paddingVertical: 8,
-  },
-  sendButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#075E54',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  micButtonDisabled: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#F0F0F0',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
 });
