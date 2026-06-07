@@ -1149,6 +1149,98 @@ export default function AIScreen() {
     }
   };
 
+  // ── Attach: Gallery picker (PATCH-9B) ───────────────────────────────────────
+  // Upload pattern copied verbatim from handleAiMicPress.
+  // COMPOSER-EXTRACT-01: post-v1, extract into components/chat/ChatComposerInput.tsx
+  const handlePickGallery = async () => {
+    try {
+      const ImagePicker = await import('expo-image-picker');
+      const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!permission.granted) {
+        Alert.alert('Permission Required', 'Please allow access to your photo library.');
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: 'images' as any,
+        quality: 0.8,
+      });
+      if (result.canceled) return;
+      if (!result.assets?.[0]) return;
+      const asset = result.assets[0];
+      const token = await getToken();
+      if (!token) return;
+      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+      const filename = asset.uri.split('/').pop() || 'image.jpg';
+      const ext = filename.split('.').pop()?.toLowerCase() || 'jpg';
+      const mime = ext === 'png' ? 'image/png' : 'image/jpeg';
+      const formData = new FormData();
+      formData.append('file', { uri: asset.uri, name: filename, type: mime } as any);
+      const res = await fetch(`${backendUrl}/api/upload`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: formData,
+      });
+      if (!res.ok) {
+        Alert.alert('Upload Failed', 'Could not upload image. Please try again.');
+        return;
+      }
+      const data = await res.json();
+      if (!data?.url) {
+        Alert.alert('Upload Failed', 'No URL returned. Please try again.');
+        return;
+      }
+      setAiAttachment({ type: 'image', url: data.url, mime_type: data.mime_type || mime, name: data.name || filename });
+    } catch (err) {
+      console.error('[handlePickGallery]', err);
+      Alert.alert('Upload Failed', 'Could not upload image. Please try again.');
+    }
+  };
+
+  // ── Attach: Camera (PATCH-9B) ─────────────────────────────────────────────
+  const handleOpenCamera = async () => {
+    try {
+      const ImagePicker = await import('expo-image-picker');
+      const permission = await ImagePicker.requestCameraPermissionsAsync();
+      if (!permission.granted) {
+        Alert.alert('Permission Required', 'Please allow camera access.');
+        return;
+      }
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: 'images' as any,
+        quality: 0.8,
+      });
+      if (result.canceled) return;
+      if (!result.assets?.[0]) return;
+      const asset = result.assets[0];
+      const token = await getToken();
+      if (!token) return;
+      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+      const filename = asset.uri.split('/').pop() || 'photo.jpg';
+      const ext = filename.split('.').pop()?.toLowerCase() || 'jpg';
+      const mime = ext === 'png' ? 'image/png' : 'image/jpeg';
+      const formData = new FormData();
+      formData.append('file', { uri: asset.uri, name: filename, type: mime } as any);
+      const res = await fetch(`${backendUrl}/api/upload`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: formData,
+      });
+      if (!res.ok) {
+        Alert.alert('Upload Failed', 'Could not upload image. Please try again.');
+        return;
+      }
+      const data = await res.json();
+      if (!data?.url) {
+        Alert.alert('Upload Failed', 'No URL returned. Please try again.');
+        return;
+      }
+      setAiAttachment({ type: 'image', url: data.url, mime_type: data.mime_type || mime, name: data.name || filename });
+    } catch (err) {
+      console.error('[handleOpenCamera]', err);
+      Alert.alert('Upload Failed', 'Could not upload image. Please try again.');
+    }
+  };
+
   // ── Loading state ──────────────────────────────────────
   if (loading) {
     return (
