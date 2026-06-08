@@ -265,7 +265,7 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
             llmClient: openai,
           });
           attachmentContext = extracted.contextString;
-        }
+          }
 
         const messageWithAttachment = (message || '') + attachmentContext;
 
