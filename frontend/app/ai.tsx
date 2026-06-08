@@ -25,6 +25,7 @@ import VisualizationCard from '../components/charts/VisualizationCard';
 import ActionExecutionModal, { ActionData, ActionEntity } from './components/ActionExecutionModal';
 import type { AiAttachment } from '../types/chat';
 import { ChatComposerInput } from '../components/chat/ChatComposerInput';
+import { AttachmentSheet } from '../components/chat/AttachmentSheet';
 
 interface AIMessage {
   id: string;
@@ -1365,13 +1366,20 @@ keyboardVerticalOffset={80}
         onClearAttachment={() => setAiAttachment(null)}
         onSend={handleSend}
         onMicPress={handleAiMicPress}
-        onPickGallery={handlePickGallery}
-        onOpenCamera={handleOpenCamera}
+        onAttachPress={() => setAttachSheetVisible(true)}
         isRecording={!!aiRecording}
         disabled={sendingState !== 'idle'}
         placeholder="Ask AI about your business..."
-        accentColor="#075E54"
-        leadingIcon={<Ionicons name="sparkles" size={18} color="#075E54" />}
+        accentColor="#E91E63"
+        leadingIcon={<Ionicons name="sparkles" size={18} color="#E91E63" />}
+      />
+
+      {/* Attachment sheet — 6-icon panel (PATCH-6A) */}
+      <AttachmentSheet
+        visible={attachSheetVisible}
+        onClose={() => setAttachSheetVisible(false)}
+        onPickGallery={() => { setAttachSheetVisible(false); handlePickGallery(); }}
+        onOpenCamera={() => { setAttachSheetVisible(false); handleOpenCamera(); }}
       />
     </KeyboardAvoidingView>
 
