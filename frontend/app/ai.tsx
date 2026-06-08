@@ -69,6 +69,7 @@ export default function AIScreen() {
   const [actionModalData, setActionModalData] = useState<ActionData | null>(null);
   const [aiRecording, setAiRecording] = useState<Audio.Recording | null>(null);
   const [aiAttachment, setAiAttachment] = useState<AiAttachment | null>(null);
+  const [attachSheetVisible, setAttachSheetVisible] = useState(false);
   const [confirmingPlanId, setConfirmingPlanId] = useState<string | null>(null);
   const [selectingEntityId, setSelectingEntityId] = useState<string | null>(null);
 
