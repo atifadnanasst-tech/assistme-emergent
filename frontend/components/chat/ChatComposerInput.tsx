@@ -14,12 +14,12 @@
  */
 import React, { useState, useEffect } from 'react';
 import {
-  View, TextInput, TouchableOpacity, Text,
-  Image, StyleSheet, Platform, Keyboard, ActivityIndicator,
+  View, TextInput, TouchableOpacity, StyleSheet, Platform, Keyboard, ActivityIndicator,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import type { AiAttachment } from '../../types/chat';
+import { AttachmentPreviewStrip } from './AttachmentPreviewStrip';
 
 export interface ChatComposerInputProps {
   inputText: string;
@@ -28,8 +28,7 @@ export interface ChatComposerInputProps {
   onClearAttachment: () => void;
   onSend: () => void;
   onMicPress: () => void;
-  onPickGallery: () => void;
-  onOpenCamera: () => void;
+  onAttachPress: () => void;
   isRecording: boolean;
   disabled: boolean;
   placeholder?: string;
@@ -44,8 +43,7 @@ export function ChatComposerInput({
   onClearAttachment,
   onSend,
   onMicPress,
-  onPickGallery,
-  onOpenCamera,
+  onAttachPress,
   isRecording,
   disabled,
   placeholder = 'Type a message...',
@@ -69,13 +67,11 @@ export function ChatComposerInput({
   return (
     <View style={{ backgroundColor: '#ECE5DD' }}>
       {attachment && (
-        <View style={styles.previewStrip}>
-          <Image source={{ uri: attachment.url }} style={styles.previewImg} resizeMode="cover" />
-          <Text style={styles.previewName} numberOfLines={1}>{attachment.name}</Text>
-          <TouchableOpacity onPress={onClearAttachment} style={styles.previewClear}>
-            <Ionicons name="close-circle" size={20} color="#666666" />
-          </TouchableOpacity>
-        </View>
+        <AttachmentPreviewStrip
+          mime_type={attachment.mime_type}
+          url={attachment.url}
+          onClear={onClearAttachment}
+        />
       )}
 
       <View style={[styles.composerRow, { paddingBottom: bottomPad }]}>
@@ -93,11 +89,8 @@ export function ChatComposerInput({
             maxLength={2000}
             editable={!disabled}
           />
-          <TouchableOpacity style={styles.iconBtn} onPress={onPickGallery} disabled={disabled}>
+          <TouchableOpacity style={styles.iconBtn} onPress={onAttachPress} disabled={disabled}>
             <Ionicons name="attach" size={22} color={disabled ? '#CCC' : accentColor} />
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.iconBtn} onPress={onOpenCamera} disabled={disabled}>
-            <Ionicons name="camera-outline" size={22} color={disabled ? '#CCC' : accentColor} />
           </TouchableOpacity>
         </View>
 
@@ -126,15 +119,7 @@ export function ChatComposerInput({
 }
 
 const styles = StyleSheet.create({
-  previewStrip: {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-    paddingHorizontal: 12, paddingVertical: 8,
-    backgroundColor: '#F8F8F8',
-    borderTopWidth: 1, borderTopColor: '#E0E0E0',
-  },
-  previewImg: { width: 48, height: 48, borderRadius: 6, backgroundColor: '#E0E0E0' },
-  previewName: { flex: 1, fontSize: 13, color: '#333333' },
-  previewClear: { padding: 4 },
+
   composerRow: {
     flexDirection: 'row', alignItems: 'flex-end',
     paddingHorizontal: 6, paddingTop: 4, gap: 6,
