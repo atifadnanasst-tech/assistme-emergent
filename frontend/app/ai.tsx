@@ -26,6 +26,7 @@ import ActionExecutionModal, { ActionData, ActionEntity } from './components/Act
 import type { AiAttachment } from '../types/chat';
 import { ChatComposerInput } from '../components/chat/ChatComposerInput';
 import { AttachmentSheet } from '../components/chat/AttachmentSheet';
+import { AttachmentMessageBubble } from '../components/chat/AttachmentMessageBubble';
 import { uploadFile } from '../lib/upload';
 
 interface AIMessage {
@@ -731,14 +732,29 @@ export default function AIScreen() {
     );
   };
 
-  const renderUserMessage = (msg: AIMessage) => (
-    <View style={styles.userBubbleContainer}>
-      <View style={styles.userBubble}>
-        <Text style={styles.userBubbleText}>{msg.content}</Text>
-        <Text style={styles.userTimestamp}>{formatTime(msg.created_at)}</Text>
+  const renderUserMessage = (msg: AIMessage) => {
+    const msgType = msg.metadata?.message_type;
+    const isAttachment = msgType === 'image' || msgType === 'audio' || msgType === 'file';
+    return (
+      <View style={styles.userBubbleContainer}>
+        <View style={styles.userBubble}>
+          {isAttachment ? (
+            <AttachmentMessageBubble
+              item={msg as any}
+              formatTime={formatTime}
+              captionStyle={styles.userBubbleText}
+              timeStyle={styles.userTimestamp}
+            />
+          ) : (
+            <>
+              <Text style={styles.userBubbleText}>{msg.content}</Text>
+              <Text style={styles.userTimestamp}>{formatTime(msg.created_at)}</Text>
+            </>
+          )}
+        </View>
       </View>
-    </View>
-  );
+    );
+  };
 
   const renderClarification = (msg: AIMessage) => {
     const options = msg.clarification_options;

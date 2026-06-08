@@ -215,7 +215,15 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
       // User bubble content — backend owns menu labels, never frontend
       const userContent = menu_id
         ? MENU_LABELS[menu_id]
-        : (message || '');
+        : (message || (attachment?.name) || 'Attachment');
+
+      // Derive input modality and message_type from attachment mime_type
+      const inputModality = attachment
+        ? (attachment.mime_type?.startsWith('image') ? 'image'
+          : attachment.mime_type?.startsWith('audio') ? 'audio'
+          : 'file')
+        : 'text';
+      const userMsgType = attachment ? inputModality : 'ai_query';
 
       // Save user message
       const { error: userMsgError } = await supabase
@@ -225,14 +233,15 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
           ai_conversation_id,
           role: 'user',
           content: userContent,
-          input_modality: 'text',
+          input_modality: inputModality,
           metadata: {
             sender_type: 'owner',
             visibility: 'owner_only',
-            message_type: 'ai_query',
+            message_type: userMsgType,
             preview_text: userContent.substring(0, 50),
             read_by_owner: true,
             menu_id: menu_id || null,
+            ...(attachment ? { attachment } : {}),
           },
         });
       if (userMsgError) console.error('[orgAi] user message insert failed:', userMsgError.message);
