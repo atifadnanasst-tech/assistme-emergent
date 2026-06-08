@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
   Text,
+  Image,
+  Modal,
   StyleSheet,
   TouchableOpacity,
   FlatList,
@@ -72,6 +74,8 @@ export default function AIScreen() {
   const [aiRecording, setAiRecording] = useState<Audio.Recording | null>(null);
   const [aiAttachment, setAiAttachment] = useState<AiAttachment | null>(null);
   const [attachSheetVisible, setAttachSheetVisible] = useState(false);
+  const [imageViewerVisible, setImageViewerVisible] = useState(false);
+  const [imageViewerUri, setImageViewerUri] = useState<string | null>(null);
   const [confirmingPlanId, setConfirmingPlanId] = useState<string | null>(null);
   const [selectingEntityId, setSelectingEntityId] = useState<string | null>(null);
 
@@ -446,14 +450,22 @@ export default function AIScreen() {
 
     // Optimistic render
     const tempId = `temp-${Date.now()}`;
+    const attachMsgType = attachment
+      ? (attachment.mime_type?.startsWith('image') ? 'image'
+        : attachment.mime_type?.startsWith('audio') ? 'audio'
+        : 'file')
+      : null;
     const userMsg: AIMessage = {
       id: tempId,
       role: 'user',
-      content: text,
+      content: text || (attachment?.name) || 'Attachment',
       card_type: null,
       card_data: {},
       created_at: new Date().toISOString(),
-    };
+      metadata: attachment
+        ? { message_type: attachMsgType, attachment: attachment }
+        : undefined,
+    } as any;
     setMessages(prev => [userMsg, ...prev]); // inverted: prepend = visually bottom
     setSendingState('sending');
 
@@ -744,6 +756,11 @@ export default function AIScreen() {
               formatTime={formatTime}
               captionStyle={styles.userBubbleText}
               timeStyle={styles.userTimestamp}
+              onImagePress={() => {
+                const uri = msg.metadata?.attachment?.url || msg.metadata?.attachment?.uri || null;
+                setImageViewerUri(uri);
+                setImageViewerVisible(true);
+              }}
             />
           ) : (
             <>
@@ -1372,6 +1389,18 @@ keyboardVerticalOffset={80}
         onOpenCamera={() => { setAttachSheetVisible(false); handleOpenCamera(); }}
       />
     </KeyboardAvoidingView>
+
+    {/* Image viewer — copied from customer chat */}
+    <Modal visible={imageViewerVisible} transparent animationType="fade" onRequestClose={() => setImageViewerVisible(false)}>
+      <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.95)', justifyContent: 'center', alignItems: 'center' }}>
+        <TouchableOpacity onPress={() => setImageViewerVisible(false)} style={{ position: 'absolute', top: 48, right: 20, zIndex: 10, padding: 8 }}>
+          <Ionicons name="close" size={28} color="#FFF" />
+        </TouchableOpacity>
+        {imageViewerUri && (
+          <Image source={{ uri: imageViewerUri }} style={{ width: '100%', height: '80%' }} resizeMode="contain" />
+        )}
+      </View>
+    </Modal>
 
     <ActionExecutionModal
       visible={actionModalVisible}
