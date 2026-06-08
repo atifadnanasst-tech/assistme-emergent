@@ -26,6 +26,7 @@ import ActionExecutionModal, { ActionData, ActionEntity } from './components/Act
 import type { AiAttachment } from '../types/chat';
 import { ChatComposerInput } from '../components/chat/ChatComposerInput';
 import { AttachmentSheet } from '../components/chat/AttachmentSheet';
+import { uploadFile } from '../lib/upload';
 
 interface AIMessage {
   id: string;
@@ -1154,29 +1155,15 @@ export default function AIScreen() {
       if (result.canceled) return;
       if (!result.assets?.[0]) return;
       const asset = result.assets[0];
-      const token = await getToken();
-      if (!token) return;
-      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
       const filename = asset.uri.split('/').pop() || 'image.jpg';
       const ext = filename.split('.').pop()?.toLowerCase() || 'jpg';
       const mime = ext === 'png' ? 'image/png' : 'image/jpeg';
-      const formData = new FormData();
-      formData.append('file', { uri: asset.uri, name: filename, type: mime } as any);
-      const res = await fetch(`${backendUrl}/api/upload`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-        body: formData,
-      });
-      if (!res.ok) {
+      const uploaded = await uploadFile(asset.uri, filename, mime);
+      if (!uploaded) {
         Alert.alert('Upload Failed', 'Could not upload image. Please try again.');
         return;
       }
-      const data = await res.json();
-      if (!data?.url) {
-        Alert.alert('Upload Failed', 'No URL returned. Please try again.');
-        return;
-      }
-      setAiAttachment({ type: 'image', url: data.url, mime_type: data.mime_type || mime, name: data.name || filename });
+      setAiAttachment({ type: 'image', url: uploaded.url, mime_type: uploaded.mime_type || mime, name: uploaded.name || filename });
     } catch (err) {
       console.error('[handlePickGallery]', err);
       Alert.alert('Upload Failed', 'Could not upload image. Please try again.');
@@ -1199,29 +1186,15 @@ export default function AIScreen() {
       if (result.canceled) return;
       if (!result.assets?.[0]) return;
       const asset = result.assets[0];
-      const token = await getToken();
-      if (!token) return;
-      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
       const filename = asset.uri.split('/').pop() || 'photo.jpg';
       const ext = filename.split('.').pop()?.toLowerCase() || 'jpg';
       const mime = ext === 'png' ? 'image/png' : 'image/jpeg';
-      const formData = new FormData();
-      formData.append('file', { uri: asset.uri, name: filename, type: mime } as any);
-      const res = await fetch(`${backendUrl}/api/upload`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-        body: formData,
-      });
-      if (!res.ok) {
+      const uploaded = await uploadFile(asset.uri, filename, mime);
+      if (!uploaded) {
         Alert.alert('Upload Failed', 'Could not upload image. Please try again.');
         return;
       }
-      const data = await res.json();
-      if (!data?.url) {
-        Alert.alert('Upload Failed', 'No URL returned. Please try again.');
-        return;
-      }
-      setAiAttachment({ type: 'image', url: data.url, mime_type: data.mime_type || mime, name: data.name || filename });
+      setAiAttachment({ type: 'image', url: uploaded.url, mime_type: uploaded.mime_type || mime, name: uploaded.name || filename });
     } catch (err) {
       console.error('[handleOpenCamera]', err);
       Alert.alert('Upload Failed', 'Could not upload image. Please try again.');
