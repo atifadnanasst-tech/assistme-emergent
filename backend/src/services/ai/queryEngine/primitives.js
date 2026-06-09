@@ -52,14 +52,17 @@ export async function getOrgSummary({ orgId, scope = { type: 'org' }, supabase }
       .slice(0, 3)
       .map(c => ({ name: c.name, outstanding: Math.round(parseFloat(c.outstanding_balance) * 100) / 100 }));
 
-    // 2. Suppliers — total payable (outstanding_payable added via migration)
-    const { data: suppliers } = await supabase
-      .from('suppliers')
-      .select('outstanding_payable')
+    // 2. Total payables — from purchase_bills.amount_due (is_historical=false, exclude cancelled/paid)
+    // NOTE: suppliers table is schema-only, never written to programmatically.
+    // All supplier entities live in customers table. Payables live in purchase_bills.
+    const { data: openBills } = await supabase
+      .from('purchase_bills')
+      .select('amount_due')
       .eq('organisation_id', orgId)
-      .eq('status', 'active');
+      .eq('is_historical', false)
+      .not('status', 'in', '("paid","cancelled")');
 
-    const totalPayables = suppliers?.reduce((s, sup) => s + parseFloat(sup.outstanding_payable || 0), 0) || 0;
+    const totalPayables = openBills?.reduce((s, b) => s + parseFloat(b.amount_due || 0), 0) || 0;
 
     // 3. Invoices billed this month (is_historical=false, exclude cancelled)
     const { data: invoicesThisMonth } = await supabase
@@ -142,4 +145,57 @@ export async function getOrgSummary({ orgId, scope = { type: 'org' }, supabase }
     console.error('[getOrgSummary] error:', err.message);
     return null;
   }
+}
+
+// ── P8: searchEntityByName ───────────────────────────────────────────────────
+// Unified entity name resolver. Routes to proven selectors — no new logic.
+//
+// Customers and suppliers both live in the customers table.
+// Products live in the products table.
+//
+// For customers/suppliers: delegates to resolveCustomerSelector
+//   (UUID → entity_aliases → ILIKE exact → ILIKE partial → trigram RPC, threshold 0.06)
+// For products: delegates to resolveProductSelector
+//   (UUID/category/name → ILIKE → trigram RPC, threshold 0.10)
+//
+// Returns:
+//   { entity, candidates, entityType, error }
+//   entity = single resolved record (null if ambiguous or not found)
+//   candidates = array when multiple matches found (for clarification)
+//
+// Scope: always org-level for name search. Entity scoping happens in callers.
+export async function searchEntityByName({ orgId, entityType, name, supabase }) {
+  if (!orgId || !name || !entityType) {
+    return { entity: null, candidates: [], entityType, error: 'orgId, name, entityType required' };
+  }
+
+  if (entityType === 'customer' || entityType === 'supplier') {
+    // Both customer and supplier entities live in customers table
+    const { resolveCustomerSelector } = await import(
+      '../../capabilities/customerSelector.js'
+    );
+    const { customer, candidates, error } = await resolveCustomerSelector({
+      selector: { name },
+      orgId,
+      supabase,
+    });
+    return { entity: customer, candidates: candidates || [], entityType, error };
+  }
+
+  if (entityType === 'product') {
+    const { resolveProductSelector } = await import(
+      '../../capabilities/productSelector.js'
+    );
+    const { products, error } = await resolveProductSelector({
+      selector: { name },
+      orgId,
+      supabase,
+    });
+    // Single match → entity. Multiple → candidates. Zero → null.
+    if (products?.length === 1) return { entity: products[0], candidates: [], entityType, error };
+    if (products?.length > 1) return { entity: null, candidates: products, entityType, error };
+    return { entity: null, candidates: [], entityType, error };
+  }
+
+  return { entity: null, candidates: [], entityType, error: `unsupported entityType: ${entityType}` };
 }
