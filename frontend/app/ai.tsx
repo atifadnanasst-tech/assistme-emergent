@@ -1142,17 +1142,9 @@ export default function AIScreen() {
         if (uri) {
           const fileName = `ai_audio_${Date.now()}.m4a`;
           const token = await getToken();
-          const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
-          const formData = new FormData();
-          formData.append('file', { uri, name: fileName, type: 'audio/x-m4a' } as any);
-          const res = await fetch(`${backendUrl}/api/upload`, {
-            method: 'POST',
-            headers: { Authorization: `Bearer ${token}` },
-            body: formData,
-          });
-          if (res.ok) {
-            const data = await res.json();
-            handleSendDirect(`[Voice note: ${data.url}]`);
+          const uploaded = await uploadFile(uri, fileName, 'audio/x-m4a');
+          if (uploaded) {
+            handleSendDirect('', { type: 'audio', url: uploaded.url, mime_type: 'audio/x-m4a', name: fileName });
           }
         }
       } else {
