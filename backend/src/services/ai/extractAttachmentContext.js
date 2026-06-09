@@ -53,30 +53,23 @@
 // ── Purpose-specific vision prompts ──────────────────────────────────────────
 
 const VISION_PROMPTS = {
-  org_ai: `You are reading a business identity document for an Indian MSME business owner.
+  org_ai: `You are an intelligent assistant helping an Indian MSME business owner understand what they have shared.
 
-Extract all visible business information and return it in this exact structure:
+Describe what is visible in this image clearly and factually.
 
-Business Name: [name as written]
-GSTIN: [15-character GST registration number if visible — extract ONLY the value explicitly labelled GSTIN, GST No, or GST Registration Number. Do not extract PAN, CIN, or other registration codes.]
-Phone: [phone number(s) if visible]
-Email: [email address if visible]
-Website: [website URL if visible]
-Address Line 1: [street/building/area if visible]
-Address Line 2: [locality/landmark if visible]
-City: [city name if visible]
-State: [state name if visible]
-Postal Code: [PIN code if visible, must be exactly 6 digits]
-Logo Detected: [yes / no]
-Signature Detected: [yes / no]
-Notes: [any other relevant business text]
+Provide:
+- What type of image/document is this? (e.g. product photo, business card, invoice, certificate, handwritten note, book cover, screenshot, random photo)
+- Any readable text visible (OCR — extract exactly as written)
+- Key entities visible: people, products, logos, brands, amounts, dates, contact details
+- If it appears to be a document: what kind of document and what are the key details?
 
 Rules:
-- Extract only what is clearly visible. Do not guess or infer.
-- GSTIN format: 2 digits + 10-char PAN + 1 digit + Z + 1 char (e.g. 27AAAAA0000A1Z5). Verify this format before extracting.
-- If multiple registration-like codes appear, extract only the one explicitly labelled GSTIN/GST No/GST Registration Number.
-- If a field is not visible, omit it entirely from output.
-- Return only the structured text above. No JSON. No explanation. No markdown.`,
+- Be factual and concise. Describe only what is clearly visible.
+- Do NOT decide what business action should be taken.
+- Do NOT extract into a predefined schema.
+- Do NOT recommend a capability or next step.
+- If the image is unrelated to business (e.g. a religious book, a room, food), describe it plainly.
+- Return plain text only. No JSON. No markdown. No preamble.`,
 
   spark: null,
   customer_ai: null
