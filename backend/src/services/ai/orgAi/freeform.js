@@ -16,6 +16,7 @@ import { planExecution } from '../planner.js';
 import { validatePlan, classifyPlan } from '../validator.js';
 import { dispatch, dispatchPlan } from '../dispatcher.js';
 import { buildExecutionPlanCard, buildClientPlanCard } from '../executionPlanBuilder.js';
+import { tryQueryRouter, classifyQuery } from '../queryEngine/queryRouter.js';
 
 export async function dispatchFreeform({
   message,
@@ -50,17 +51,50 @@ export async function dispatchFreeform({
   const { validPlan, unknownCapabilities } = await validatePlan({ plan: planResult.plan, userPrompt: message, orgId, scope, supabase });
 
   if (validPlan.length === 0) {
+    // BQE-4: Try queryRouter before giving up
+    const queryResult = await tryQueryRouter({ message, orgId, orgContext, supabase });
+    if (queryResult) return queryResult;
+
+    // Fall through: genuine unknown intent
     const intentDesc = unknownCapabilities.length > 0
       ? unknownCapabilities.slice(0, 2).map(c => `"${c.replace(/_/g, ' ')}"`).join(' or ')
       : 'that';
     return { response_text: `I understand what you're trying to do, but AssistMe can't perform ${intentDesc} yet. I've recorded this as a capability request so the AssistMe team can prioritise it in a future update. In the meantime, I can help you analyse your business data — try asking about sales, customers, products, invoices, or payments.`, chart_data: null, next_action: null, message_type: 'ai_response', execution_plan: null, pending_plan_id: null };
   }
-
   // Step 4: Classify
   const planClass = classifyPlan(validPlan);
 
   // PATH A: Query-only → execute immediately
   if (planClass === 'execute_immediately') {
+    // BQE-4.1 CONFIDENCE GUARD
+    // Tactical fix for planner misroutes on business intelligence questions.
+    // All three conditions required:
+    //   1. Single generic query capability (query_customers / query_invoices / query_suppliers)
+    //   2. Planner confidence < 0.9
+    //   3. Classifier confirms entity-specific question (named entity + entity/payment intent)
+    // "Show overdue customers"       → condition 3 fails → executes normally (2 GPT calls)
+    // "Ahmed ki payment kaisi hai?"  → all 3 true → queryRouter answers (3 GPT calls)
+    // Classifier result passed into tryQueryRouter — no duplicate GPT call.
+    //
+    // ARCHITECTURAL NOTE (Jun 2026):
+    // Long-term these should be four explicit layers before planner runs:
+    //   A) Mutations        → Planner
+    //   B) Menu Queries     → Menu functions
+    //   C) Business Intel   → QueryRouter directly
+    //   D) Open World       → LLM
+    // Revisit after BQE-11 when all 8 primitives are complete.
+    const _genericQueryCaps = new Set(['query_customers', 'query_invoices', 'query_suppliers']);
+    if (planResult.confidence < 0.9 && validPlan.length === 1 && _genericQueryCaps.has(validPlan[0].capability)) {
+      const _classification = await classifyQuery(message, orgContext.openai);
+      const _isEntityQuery = _classification &&
+        new Set(['entity_profile', 'payment_pattern']).has(_classification.queryType) &&
+        !!_classification.entityMention;
+      if (_isEntityQuery) {
+        const _queryResult = await tryQueryRouter({ message, orgId, orgContext, supabase, precomputedClassification: _classification });
+        if (_queryResult) return _queryResult;
+      }
+    }
+
     const results = await dispatchPlan({ validPlan, orgId, supabase, orgContext });
     const merged = results.length === 1
       ? _attachSuggestedActions(results[0].result, results[0].suggested_next_actions)
