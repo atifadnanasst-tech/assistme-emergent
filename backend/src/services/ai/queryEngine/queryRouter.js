@@ -93,9 +93,28 @@ EXAMPLES:
 "Pichle hafte payments?" -> {"queryType":"collections_date_range","entityMention":null}
 "Which customers are becoming risky?" -> {"queryType":"business_query_other","entityMention":null}
 "Who should I call today?" -> {"queryType":"business_query_other","entityMention":null}
-"What is GST?" -> {"queryType":"unknown","entityMention":null}`;
+"candidate_selection": owner is responding to a previous ambiguity list (typing "1", "2", or a name from that list)
+- "business_query_other": a business data question that does not fit the above types
+- "unknown": not a business data question
 
-export async function classifyQuery(message, openai) {
+OUTPUT FORMAT (strict JSON, no markdown):
+{"queryType":"<type>","entityMention":"<raw name or null>","selectionIndex":<1-based integer or null>,"selectedText":"<name typed for candidate_selection, or null>"}
+
+EXAMPLES:
+"Tell me about Ahmed" -> {"queryType":"entity_profile","entityMention":"Ahmed","selectionIndex":null,"selectedText":null}
+"Ahmed ke baare mein batao" -> {"queryType":"entity_profile","entityMention":"Ahmed","selectionIndex":null,"selectedText":null}
+"How is Ahmed paying?" -> {"queryType":"payment_pattern","entityMention":"Ahmed","selectionIndex":null,"selectedText":null}
+"Ahmed ki payment kaisi hai?" -> {"queryType":"payment_pattern","entityMention":"Ahmed","selectionIndex":null,"selectedText":null}
+"Collections last month" -> {"queryType":"collections_date_range","entityMention":null,"selectionIndex":null,"selectedText":null}
+"Is mahine kitna aaya?" -> {"queryType":"collections_date_range","entityMention":null,"selectionIndex":null,"selectedText":null}
+"1" [after assistant listed candidates] -> {"queryType":"candidate_selection","entityMention":null,"selectionIndex":1,"selectedText":null}
+"Ahmed Rashidi" [after assistant listed candidates] -> {"queryType":"candidate_selection","entityMention":null,"selectionIndex":null,"selectedText":"Ahmed Rashidi"}
+"Which customers are becoming risky?" -> {"queryType":"business_query_other","entityMention":null,"selectionIndex":null,"selectedText":null}
+"What is GST?" -> {"queryType":"unknown","entityMention":null,"selectionIndex":null,"selectedText":null}`;
+
+export async function classifyQuery(message, openai, conversationHistory = []) {
+  // CSF (BQE-4.2): history always injected — LLM determines relevance, not heuristics.
+  // Never revert to passing only the current message; that recreates stateless chat.
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 6000);
   try {
@@ -103,10 +122,28 @@ export async function classifyQuery(message, openai) {
       model: 'gpt-4o-mini',
       messages: [
         { role: 'system', content: CLASSIFIER_SYSTEM },
+        ...(conversationHistory || []).slice(-6).map(m => {
+          // CSF (BQE-4.2): surface pending_context to classifier for intent detection.
+          // Compact form only — candidate IDs excluded (resolution happens in tryQueryRouter).
+          // Classifier detects intent; tryQueryRouter resolves state from full metadata.
+          const pc = m.metadata?.pending_context;
+          const text = typeof m.content === 'string' ? m.content : '';
+          const ctx = pc ? JSON.stringify({
+            type: pc.type,
+            queryType: pc.queryType,
+            entityMention: pc.entityMention,
+            candidates: pc.candidates?.map(c => c.name),
+          }) : null;
+          return {
+            role: m.role === 'user' ? 'user' : 'assistant',
+            content: ctx ? `${text}
+[pending_context: ${ctx}]` : text,
+          };
+        }),
         { role: 'user', content: message },
       ],
       temperature: 0,
-      max_tokens: 60,
+      max_tokens: 80,
       response_format: { type: 'json_object' },
     }, { signal: controller.signal });
     clearTimeout(timeout);
@@ -159,32 +196,49 @@ function extractDateRange(message) {
 
 // ── Pattern handlers ──────────────────────────────────────────────────────────
 
-async function handleEntityQuestion({ message, orgId, supabase, openai, orgContext, entityMention, mode }) {
-  if (!entityMention) return null;
+async function handleEntityQuestion({ message, orgId, supabase, openai, orgContext, entityMention, mode, resolvedEntityId }) {
+  // CSF (BQE-4.2): resolvedEntityId bypass — when candidate is already known from
+  // pending_context, skip searchEntityByName entirely. Without this, candidate_selection
+  // would still trigger a second DB search, defeating the purpose of stored state.
+  // FUTURE: once CSF matures, candidate selections should resolve before the classifier
+  // entirely — "1" is deterministic and should not need a GPT call.
+  let entityId = resolvedEntityId || null;
 
-  const searchResult = await searchEntityByName({ orgId, entityType: 'customer', name: entityMention, supabase });
+  if (!entityId) {
+    if (!entityMention) return null;
 
-  // Multiple candidates → return clarification response (not null — owner needs guidance)
-  // candidates are full customer objects: { id, name, phone, outstanding_balance, ... }
-  if (!searchResult.entity && searchResult.candidates?.length > 0) {
-    const names = searchResult.candidates.slice(0, 4).map((c, i) => `${i + 1}. ${c.name}`).join('\n');
-    return {
-      response_text: `I found ${searchResult.candidates.length} customers matching "${entityMention}". Which one did you mean?\n\n${names}`,
-      chart_data: null,
-      next_action: null,
-      message_type: 'ai_response',
-      execution_plan: null,
-      pending_plan_id: null,
-    };
+    const searchResult = await searchEntityByName({ orgId, entityType: 'customer', name: entityMention, supabase });
+
+    if (!searchResult.entity && searchResult.candidates?.length > 0) {
+      const names = searchResult.candidates.slice(0, 4).map((c, i) => `${i + 1}. ${c.name}`).join('\n');
+      return {
+        response_text: `I found ${searchResult.candidates.length} customers matching "${entityMention}". Which one did you mean?\n\n${names}`,
+        chart_data: null,
+        next_action: null,
+        message_type: 'ai_response',
+        execution_plan: null,
+        pending_plan_id: null,
+        // CSF: persisted by routes.js into message metadata. Next turn reads candidates
+        // to resolve selection without re-querying DB. createdAt enables 30-min expiry.
+        // Future state types (date_clarification, invoice_selection, yes_no_confirmation)
+        // follow this same envelope — never add new top-level response fields for state.
+        _pending_context: {
+          type: 'candidate_selection',
+          queryType: mode,
+          entityMention,
+          candidates: searchResult.candidates.slice(0, 4).map(c => ({ id: c.id, name: c.name })),
+          createdAt: Date.now(),
+        },
+      };
+    }
+
+    if (!searchResult.entity) {
+      console.log('[queryRouter] entity not found:', entityMention);
+      return null;
+    }
+
+    entityId = searchResult.entity.id;
   }
-
-  // No match at all → fall through
-  if (!searchResult.entity) {
-    console.log('[queryRouter] entity not found:', entityMention);
-    return null;
-  }
-
-  const entityId = searchResult.entity.id;
   const scope = { type: 'customer', entityId };
 
   const { profile } = await getEntityProfile({ orgId, scope, supabase });
@@ -254,12 +308,67 @@ async function handleCollectionsQuestion({ message, orgId, supabase, openai, org
   };
 }
 
+// ── Candidate selection handler (CSF v1) ─────────────────────────────────────
+// Resolves owner selection after an ambiguity response ("1", "Rashidi", "first one").
+// This is the first implementation of the Conversation State Framework.
+// Resolution order: index match → name fragment match → fresh search fallback.
+// Fresh search handles "actually Ahmed Enterprise" (name not in original candidate list).
+//
+// FUTURE: candidate selections are deterministic ("1", "2", ordinals, name fragments).
+// Once CSF matures, resolve pending_context BEFORE the classifier to remove one GPT call.
+// The classifier should only run when no pending_context exists.
+async function handleCandidateSelection({ orgId, supabase, openai, orgContext, conversationHistory, classification }) {
+  const EXPIRY_MS = 30 * 60 * 1000; // 30 min — long enough for a work session, avoids Monday→Tuesday stale state
+
+  const pendingMsg = [...conversationHistory].reverse().find(m =>
+    m.role === 'assistant' && m.metadata?.pending_context?.type === 'candidate_selection'
+  );
+
+  if (!pendingMsg) {
+    console.log('[queryRouter] candidate_selection: no pending_context in history');
+    return null;
+  }
+
+  const pc = pendingMsg.metadata.pending_context;
+
+  if (pc.createdAt && Date.now() - pc.createdAt > EXPIRY_MS) {
+    console.log('[queryRouter] candidate_selection: pending_context expired');
+    return null;
+  }
+
+  const { candidates, queryType, entityMention } = pc;
+  const { selectionIndex, selectedText } = classification;
+  let resolved = null;
+
+  if (selectionIndex >= 1 && selectionIndex <= candidates.length) {
+    resolved = candidates[selectionIndex - 1];
+  }
+  if (!resolved && selectedText) {
+    const norm = selectedText.toLowerCase().trim();
+    resolved = candidates.find(c =>
+      c.name.toLowerCase().includes(norm) || norm.includes(c.name.toLowerCase())
+    );
+  }
+  // Fallback: name not in list → treat as fresh entity query, not an error
+  if (!resolved && selectedText) {
+    console.log('[queryRouter] candidate_selection: name not in list, fresh search:', selectedText);
+    return handleEntityQuestion({ message: selectedText, orgId, supabase, openai, orgContext, entityMention: selectedText, mode: queryType });
+  }
+  if (!resolved) {
+    console.log('[queryRouter] candidate_selection: could not resolve');
+    return null;
+  }
+
+  console.log('[queryRouter] candidate_selection resolved:', resolved.name, 'queryType:', queryType);
+  return handleEntityQuestion({ orgId, supabase, openai, orgContext, mode: queryType, resolvedEntityId: resolved.id });
+}
+
 // ── Main export ───────────────────────────────────────────────────────────────
 // Called by freeform.js at validPlan.length === 0 only.
 // Returns response object if pattern matched, null if not.
 // Never throws — always falls through on any error.
 
-export async function tryQueryRouter({ message, orgId, orgContext, supabase, precomputedClassification }) {
+export async function tryQueryRouter({ message, orgId, orgContext, supabase, precomputedClassification, conversationHistory = [] }) {
   if (!message || !orgId) return null;
 
   const openai = orgContext?.openai;
@@ -269,7 +378,7 @@ export async function tryQueryRouter({ message, orgId, orgContext, supabase, pre
   }
 
   try {
-    const classification = precomputedClassification ?? await classifyQuery(message, openai);
+    const classification = precomputedClassification ?? await classifyQuery(message, openai, conversationHistory);
 
     if (!classification) {
       // Classifier failed (timeout/parse error) — fall through silently, never break existing behavior
@@ -292,7 +401,9 @@ export async function tryQueryRouter({ message, orgId, orgContext, supabase, pre
 
     let result = null;
 
-    if (queryType === 'entity_profile') {
+    if (queryType === 'candidate_selection') {
+      result = await handleCandidateSelection({ orgId, supabase, openai, orgContext, conversationHistory, classification });
+    } else if (queryType === 'entity_profile') {
       result = await handleEntityQuestion({ message, orgId, supabase, openai, orgContext, entityMention, mode: 'entity_profile' });
     } else if (queryType === 'payment_pattern') {
       result = await handleEntityQuestion({ message, orgId, supabase, openai, orgContext, entityMention, mode: 'payment_pattern' });

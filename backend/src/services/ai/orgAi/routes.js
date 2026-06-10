@@ -254,7 +254,9 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
       } else {
         const { data: recentMsgs } = await supabase
           .from('messages')
-          .select('role, content')
+          .select('role, content, metadata')
+          // CSF (BQE-4.2): metadata included so _pending_context from prior assistant
+          // turns survives into the next turn. Never revert to 'role, content'.
           .eq('ai_conversation_id', ai_conversation_id)
           .order('created_at', { ascending: false })
           .limit(8);
@@ -315,6 +317,11 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
             next_action: result.next_action || null,
             execution_plan: result.execution_plan || null,
             pending_plan_id: result.pending_plan_id || null,
+            // CSF (BQE-4.2): Conversation state object. Carried across turns via conversationHistory.
+            // Shape today: { type, queryType, entityMention, candidates, createdAt }
+            // Future types: date_clarification, invoice_selection, yes_no_confirmation
+            // All future states use this same envelope — never add new top-level fields.
+            pending_context: result._pending_context || null,
             clarification_type: result.clarification_type || null,
             clarification_options: result.clarification_options || null,
             clarification_context: result.original_capability ? {
