@@ -254,9 +254,7 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
       } else {
         const { data: recentMsgs } = await supabase
           .from('messages')
-          .select('role, content, metadata')
-          // CSF (BQE-4.2): metadata included so _pending_context from prior assistant
-          // turns survives into the next turn. Never revert to 'role, content'.
+          .select('role, content, metadata') // CSF (BQE-4.2): metadata preserves _pending_context across turns
           .eq('ai_conversation_id', ai_conversation_id)
           .order('created_at', { ascending: false })
           .limit(8);

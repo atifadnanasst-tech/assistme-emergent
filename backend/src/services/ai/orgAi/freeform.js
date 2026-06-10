@@ -40,6 +40,20 @@ export async function dispatchFreeform({
 
   // Step 2: Clarification needed?
   if (planResult.clarification_needed) {
+    // CSF owns entity ambiguity. Planner owns intent ambiguity.
+    // Do not route all clarification_needed through queryRouter.
+    // Only intercept when classifier confirms entity-specific question (entity_profile, payment_pattern).
+    // Those get queryRouter's numbered candidate list instead of planner's open-ended question.
+    // Intent clarifications ("which month?", "which customer for this payment?") fall through
+    // to planner — Type B clarifications owned by planner, not CSF.
+    const _clarifyClassification = await classifyQuery(message, orgContext.openai, conversationHistory);
+    const _isEntityClarification = _clarifyClassification &&
+      new Set(['entity_profile', 'payment_pattern']).has(_clarifyClassification.queryType) &&
+      !!_clarifyClassification.entityMention;
+    if (_isEntityClarification) {
+      const _clarifyResult = await tryQueryRouter({ message, orgId, orgContext, supabase, conversationHistory, precomputedClassification: _clarifyClassification });
+      if (_clarifyResult) return _clarifyResult;
+    }
     return { response_text: planResult.clarification_needed, chart_data: null, next_action: null, message_type: 'ai_response', execution_plan: null, pending_plan_id: null };
   }
 
