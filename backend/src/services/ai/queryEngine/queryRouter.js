@@ -371,6 +371,7 @@ async function handleCandidateSelection({ orgId, supabase, openai, orgContext, c
 export async function tryQueryRouter({ message, orgId, orgContext, supabase, precomputedClassification, conversationHistory = [] }) {
   if (!message || !orgId) return null;
 
+  console.log('[queryRouter entry]', message?.substring(0, 40), 'history:', conversationHistory?.length);
   const openai = orgContext?.openai;
   if (!openai) {
     console.warn('[queryRouter] no openai instance — skipping');
@@ -380,6 +381,7 @@ export async function tryQueryRouter({ message, orgId, orgContext, supabase, pre
   try {
     const classification = precomputedClassification ?? await classifyQuery(message, openai, conversationHistory);
 
+    console.log('[queryRouter classification]', JSON.stringify(classification));
     if (!classification) {
       // Classifier failed (timeout/parse error) — fall through silently, never break existing behavior
       return null;

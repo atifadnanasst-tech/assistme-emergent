@@ -80,6 +80,16 @@ export async function dispatchFreeform({
 
   // PATH A: Query-only → execute immediately
   if (planClass === 'execute_immediately') {
+    console.log('[CSF]', 'history:', conversationHistory.length, 'pending:', conversationHistory.some(m => m.metadata?.pending_context));
+    // CSF: pending_context precheck — owner may be selecting from a prior candidate list.
+    // Must run before capability filtering — planner maps "1" to unpredictable capabilities.
+    const _hasPendingContext = conversationHistory.slice(-4).some(
+      m => m.role === 'assistant' && m.metadata?.pending_context?.type === 'candidate_selection'
+    );
+    if (_hasPendingContext) {
+      const _pendingResult = await tryQueryRouter({ message, orgId, orgContext, supabase, conversationHistory });
+      if (_pendingResult) return _pendingResult;
+    }
     // BQE-4.1 CONFIDENCE GUARD
     // Tactical fix for planner misroutes on business intelligence questions.
     // All three conditions required:
@@ -99,7 +109,8 @@ export async function dispatchFreeform({
     // Revisit after BQE-11 when all 8 primitives are complete.
     const _genericQueryCaps = new Set(['query_customers', 'query_invoices', 'query_suppliers']);
     if (planResult.confidence < 0.9 && validPlan.length === 1 && _genericQueryCaps.has(validPlan[0].capability)) {
-      const _classification = await classifyQuery(message, orgContext.openai);
+      const _classification = await classifyQuery(message, orgContext.openai, conversationHistory);
+      console.log('[CSF DEBUG]', JSON.stringify(_classification));
       const _isEntityQuery = _classification &&
         new Set(['entity_profile', 'payment_pattern']).has(_classification.queryType) &&
         !!_classification.entityMention;
