@@ -26,7 +26,7 @@
  * Modifies existing production surface: NO — new file only
  */
 
-import { getOrgSummary, searchEntityByName, getEntityProfile, getEntityTransactions } from './primitives.js';
+import { getOrgSummary, searchEntityByName, getEntityProfile, getEntityTransactions, getRelationshipSignals, classifyRelationship } from './primitives.js';
 import { narrate } from '../orgAi/narration.js';
 
 // ── Telemetry ─────────────────────────────────────────────────────────────────
@@ -65,6 +65,7 @@ async function logQueryRouterEvent({ supabase, orgId, userPrompt, event }) {
 //   entity_profile        — about a specific customer/supplier
 //   payment_pattern       — how a specific customer pays
 //   collections_date_range— money collected over a time period
+//   risky_customer        — which customers are at risk / going silent
 //   business_query_other  — business question but no primitive yet (logged, falls through)
 //   unknown               — not a business data question (falls through silently)
 
@@ -75,6 +76,7 @@ QUERY TYPES:
 - "entity_profile": owner asking about a specific customer or supplier (who they are, status, details, history)
 - "payment_pattern": owner asking about a specific customer payment behaviour or track record
 - "collections_date_range": owner asking about money collected/received over a time period (not one specific customer)
+- "risky_customer": owner asking which customers are at risk, going silent, or need follow-up (no specific customer named)
 - "business_query_other": a business data question that does not fit the above three
 - "unknown": not a business data question (weather, definitions, general knowledge)
 
@@ -91,9 +93,12 @@ EXAMPLES:
 "Collections last month" -> {"queryType":"collections_date_range","entityMention":null}
 "Is mahine kitna aaya?" -> {"queryType":"collections_date_range","entityMention":null}
 "Pichle hafte payments?" -> {"queryType":"collections_date_range","entityMention":null}
-"Which customers are becoming risky?" -> {"queryType":"business_query_other","entityMention":null}
-"Who should I call today?" -> {"queryType":"business_query_other","entityMention":null}
+"Which customers are becoming risky?" -> {"queryType":"risky_customer","entityMention":null}
+"Kaun at risk hai?" -> {"queryType":"risky_customer","entityMention":null}
+"Kaun haath se nikal raha hai?" -> {"queryType":"risky_customer","entityMention":null}
+"Who should I follow up with?" -> {"queryType":"risky_customer","entityMention":null}
 "candidate_selection": owner is responding to a previous ambiguity list (typing "1", "2", or a name from that list)
+- "risky_customer": owner asking which customers are at risk, going silent, or need follow-up (no specific customer named)
 - "business_query_other": a business data question that does not fit the above types
 - "unknown": not a business data question
 
@@ -109,7 +114,10 @@ EXAMPLES:
 "Is mahine kitna aaya?" -> {"queryType":"collections_date_range","entityMention":null,"selectionIndex":null,"selectedText":null}
 "1" [after assistant listed candidates] -> {"queryType":"candidate_selection","entityMention":null,"selectionIndex":1,"selectedText":null}
 "Ahmed Rashidi" [after assistant listed candidates] -> {"queryType":"candidate_selection","entityMention":null,"selectionIndex":null,"selectedText":"Ahmed Rashidi"}
-"Which customers are becoming risky?" -> {"queryType":"business_query_other","entityMention":null,"selectionIndex":null,"selectedText":null}
+"Which customers are becoming risky?" -> {"queryType":"risky_customer","entityMention":null,"selectionIndex":null,"selectedText":null}
+"Kaun at risk hai?" -> {"queryType":"risky_customer","entityMention":null,"selectionIndex":null,"selectedText":null}
+"Kaun haath se nikal raha hai?" -> {"queryType":"risky_customer","entityMention":null,"selectionIndex":null,"selectedText":null}
+"Who should I follow up with?" -> {"queryType":"risky_customer","entityMention":null,"selectionIndex":null,"selectedText":null}
 "What is GST?" -> {"queryType":"unknown","entityMention":null,"selectionIndex":null,"selectedText":null}`;
 
 export async function classifyQuery(message, openai, conversationHistory = []) {
@@ -363,6 +371,80 @@ async function handleCandidateSelection({ orgId, supabase, openai, orgContext, c
   return handleEntityQuestion({ orgId, supabase, openai, orgContext, mode: queryType, resolvedEntityId: resolved.id });
 }
 
+// ── P5: handleRiskyCustomers ─────────────────────────────────────────────────
+// BQE-5, Jun 2026. Consumes getRelationshipSignals() + classifyRelationship().
+// Keeps at_risk and gone_silent separate — different urgency, different actions.
+// Sort: severity DESC (gone_silent=2, at_risk=1) then lastActivityDays DESC.
+// value = totalRevenueL90d (current commercial importance, not last invoice amount).
+// Modifies existing production surface: NO — new function only
+
+async function handleRiskyCustomers({ orgId, supabase, openai, orgContext }) {
+  const { signals, error } = await getRelationshipSignals({ orgId, scope: { type: 'org' }, supabase });
+  if (error || !signals) return null;
+
+  const classified = signals
+    .map(s => ({ ...s, ...classifyRelationship(s) }))
+    .filter(s => ['at_risk', 'gone_silent'].includes(s.relationshipStatus) && !s.inCooldown);
+
+  const severityScore = (status) => status === 'gone_silent' ? 2 : status === 'at_risk' ? 1 : 0;
+  classified.sort((a, b) => {
+    const sd = severityScore(b.relationshipStatus) - severityScore(a.relationshipStatus);
+    if (sd !== 0) return sd;
+    return (b.lastActivityDays || 0) - (a.lastActivityDays || 0);
+  });
+
+  const top = classified.slice(0, 8);
+  const atRiskGroup = top.filter(s => s.relationshipStatus === 'at_risk');
+  const goneSilentGroup = top.filter(s => s.relationshipStatus === 'gone_silent');
+  const atRiskCount = atRiskGroup.length;
+  const goneSilentCount = goneSilentGroup.length;
+  const orgCurrency = orgContext?.currency || 'INR';
+
+  if (top.length === 0) {
+    const chart_data = { type: 'insight', title: 'Customers Needing Attention', text: 'All customers are actively engaged. No at-risk or silent accounts detected.', level: 'info' };
+    const next_action = { text: 'All customers are actively engaged.', type: 'none', signal_type: null, source_surface: 'risky_customer', execution_mode: null, entities: [], prefill: null };
+    const response_text = await narrate({ atRiskCount: 0, goneSilentCount: 0, topName: null, topReason: null, currency: orgCurrency }, 'risky_customer', openai);
+    return { response_text, chart_data, next_action, message_type: 'ai_response', execution_plan: null, pending_plan_id: null };
+  }
+
+  const chart_data = {
+    type: 'ranked_list', title: 'Customers Needing Attention', currency: orgCurrency,
+    series: top.map(s => ({
+      label: s.entityName || s.entityId,
+      value: s.totalRevenueL90d || 0,
+      sublabel: `${s.relationshipStatus === 'gone_silent' ? 'Gone Silent' : 'At Risk'} — ${s.relationshipReason || (s.lastActivityDays + ' days inactive')}`,
+    })),
+    highlight: `${atRiskCount} at risk, ${goneSilentCount} gone silent`,
+    level: 'warning',
+  };
+
+  const topEntity = top[0];
+  const next_action = {
+    text: goneSilentCount > 0
+      ? `${goneSilentGroup[0].entityName}${goneSilentCount > 1 ? ' and ' + (goneSilentCount - 1) + ' others' : ''} need reactivation outreach before the relationship cools further.`
+      : `${atRiskGroup[0].entityName}${atRiskCount > 1 ? ' and ' + (atRiskCount - 1) + ' others' : ''} are showing early risk signals — schedule a follow-up call.`,
+    type: 'reactivate_customer', signal_type: 'risky_customer_reactivation', source_surface: 'risky_customer',
+    execution_mode: top.length > 1 ? 'bulk' : 'single',
+    entities: top.map(s => ({ customer_id: s.entityId, customer_name: s.entityName, customer_phone: s.phone || null, invoice_id: null, invoice_number: '', amount: s.totalRevenueL90d || 0, days_inactive: s.lastActivityDays, relationship_status: s.relationshipStatus })),
+    prefill: top.length === 1 ? {
+      message: topEntity.relationshipStatus === 'gone_silent'
+        ? `${topEntity.entityName}, it has been a while since we last connected. We value your business and would love to reconnect — is there anything we can help you with?`
+        : `${topEntity.entityName}, just checking in to see how things are going. Would love to discuss your next order when you are ready.`,
+      language: 'en',
+    } : null,
+  };
+
+  const response_text = await narrate({
+    atRiskCount, goneSilentCount, topName: top[0]?.entityName, topReason: top[0]?.relationshipReason,
+    topDaysInactive: top[0]?.lastActivityDays, currency: orgCurrency,
+    atRiskList: atRiskGroup.map(s => ({ name: s.entityName, reason: s.relationshipReason, days: s.lastActivityDays })),
+    goneSilentList: goneSilentGroup.map(s => ({ name: s.entityName, reason: s.relationshipReason, days: s.lastActivityDays })),
+  }, 'risky_customer', openai);
+
+  console.log('[queryRouter] risky_customer', { atRiskCount, goneSilentCount, total: top.length });
+  return { response_text, chart_data, next_action, message_type: 'ai_response', execution_plan: null, pending_plan_id: null };
+}
+
 // ── Main export ───────────────────────────────────────────────────────────────
 // Called by freeform.js at validPlan.length === 0 only.
 // Returns response object if pattern matched, null if not.
@@ -411,6 +493,8 @@ export async function tryQueryRouter({ message, orgId, orgContext, supabase, pre
       result = await handleEntityQuestion({ message, orgId, supabase, openai, orgContext, entityMention, mode: 'payment_pattern' });
     } else if (queryType === 'collections_date_range') {
       result = await handleCollectionsQuestion({ message, orgId, supabase, openai, orgContext });
+    } else if (queryType === 'risky_customer') {
+      result = await handleRiskyCustomers({ orgId, supabase, openai, orgContext });
     }
 
     if (result) {

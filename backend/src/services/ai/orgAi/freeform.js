@@ -47,10 +47,15 @@ export async function dispatchFreeform({
     // Intent clarifications ("which month?", "which customer for this payment?") fall through
     // to planner — Type B clarifications owned by planner, not CSF.
     const _clarifyClassification = await classifyQuery(message, orgContext.openai, conversationHistory);
+    // Type A: Entity-specific clarifications — require entityMention (CSF candidate list)
     const _isEntityClarification = _clarifyClassification &&
       new Set(['entity_profile', 'payment_pattern']).has(_clarifyClassification.queryType) &&
       !!_clarifyClassification.entityMention;
-    if (_isEntityClarification) {
+    // Type C: Org-level query types — no entityMention needed, queryRouter answers directly
+    // NOTE: collections_date_range intentionally excluded — date clarifications belong to planner.
+    const _isOrgQueryClarification = _clarifyClassification &&
+      new Set(['risky_customer']).has(_clarifyClassification.queryType);
+    if (_isEntityClarification || _isOrgQueryClarification) {
       const _clarifyResult = await tryQueryRouter({ message, orgId, orgContext, supabase, conversationHistory, precomputedClassification: _clarifyClassification });
       if (_clarifyResult) return _clarifyResult;
     }

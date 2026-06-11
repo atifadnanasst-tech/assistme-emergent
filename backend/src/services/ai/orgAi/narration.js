@@ -26,6 +26,7 @@ const PROMPTS = {
   top_supplier:           'You are a business assistant for an MSME trader. Summarize top suppliers by payment this month in 2-3 lines. No preamble.',
   entity_profile:         'You are a CFO briefing the business owner about a customer. 2-3 crisp sentences. State the outstanding balance, payment terms, and customer since date. Mention memory signals if present (avg_payment_days, last_payment_date). If data is sparse, say so. No preamble, no markdown. Grounded ONLY in provided data.',
   payment_pattern:        'You are a CFO briefing the business owner on a customer payment behaviour. 2-3 crisp sentences. Lead with avg payment days if known. If fewer than 2 payments exist, say history is too limited to show a trend. Otherwise report trend (improving/worsening/stable) based on invoice vs payment dates. Name the most recent payment amount and date. No preamble, no markdown. Grounded ONLY in provided data.',
+  risky_customer:         'You are a COO briefing the business owner on customer relationship risk. 2-3 crisp sentences. Lead with total count split between at-risk and gone-silent. Name the most urgent customer and why — include the reason field if present. Recommend action: follow-up call for at-risk, reactivation outreach for gone-silent. No preamble, no markdown. Grounded ONLY in provided data.',
   collections_date_range: 'You are a CFO briefing the business owner on collections for a date period. 2-3 crisp sentences. Lead with total collected and count of payments. If payments array is empty, say no collections recorded for this period. No preamble, no markdown. Grounded ONLY in provided data.',
 };
 
@@ -50,6 +51,7 @@ const FALLBACKS = {
   top_supplier:           (d) => `Top supplier this month: ${d.topName || 'None'}.`,
   entity_profile:         (d) => `${d.profile?.name || 'Customer'}: ₹${d.profile?.outstandingReceivable || 0} outstanding.`,
   payment_pattern:        (d) => `${d.profile?.name || 'Customer'}: avg payment days ${d.profile?.memory?.avg_payment_days?.value || 'unknown'}.`,
+  risky_customer:         (d) => `${d.atRiskCount || 0} at-risk, ${d.goneSilentCount || 0} gone silent. Prioritize reactivation outreach for the silent group.`,
   collections_date_range: (d) => `Collected ₹${(d.payments || []).reduce((s, p) => s + parseFloat(p.amount || 0), 0)} in this period.`,
 };
 
@@ -102,6 +104,7 @@ const FUNCTION_PERSPECTIVE = {
   top_supplier:           'payable',
   entity_profile:         'receivable',
   payment_pattern:        'receivable',
+  risky_customer:         'receivable', // P5: receivable lens (owner as creditor tracking engagement risk). Future: dedicated relationship-health perspective when added.
   collections_date_range: 'receivable',
 };
 const normalizeLanguage = (lang) => {
