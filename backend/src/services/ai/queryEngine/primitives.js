@@ -407,3 +407,277 @@ export async function getEntityTransactions({ orgId, scope, filters = {}, supaba
     return { transactions: {}, error: err.message };
   }
 }
+
+
+// ── P5: getRelationshipSignals + classifyRelationship ─────────────────────────
+// BQE-5, Jun 2026
+//
+// getRelationshipSignals — pure data primitive, no classification, no narration.
+// classifyRelationship   — pure function, no DB. Accepts signals + optional thresholds.
+//
+// Data sources (all verified against schema_sql_v3):
+//   invoices          → daysSinceLastInvoice (all-time), totalRevenueL90d (windowed)
+//   payments          → daysSinceLastPayment (payments.is_historical confirmed)
+//   messages          → daysSinceLastInteraction via conversations.entity_id
+//   action_log        → inCooldown (signal_type, actioned_at, entity_id confirmed)
+//   customer_addresses → city/state for geographic queries ("Pune meetings")
+//
+// WHY messages, not ai_conversations:
+//   ai_conversations.last_message_at only updates when owner opens the AI tab.
+//   It does NOT update for owner<->customer WhatsApp messages.
+//   messages table via conversations.entity_id is the canonical interaction source.
+//
+// Modifies existing production surface: NO — additive only
+
+export const DEFAULT_RELATIONSHIP_THRESHOLDS = {
+  activeDays: 30,
+  atRiskDays: 60,
+  goneSilentDays: 90,
+  // Future: load from ai_context or organisation.settings per org
+  // (daily supplier: activeDays=7; seasonal contractor: activeDays=180)
+};
+
+export async function getRelationshipSignals({ orgId, scope, supabase }) {
+  if (!orgId || !scope) return { signals: null, error: 'orgId and scope required' };
+
+  const today = new Date();
+  const ninetyDaysAgo = new Date(today.getTime() - 90 * 86400000).toISOString().split('T')[0];
+  const thirtyDaysAgo = new Date(today.getTime() - 30 * 86400000).toISOString().split('T')[0];
+  const sevenDaysAgo = new Date(today.getTime() - 7 * 86400000).toISOString();
+
+  try {
+    let customerIds = [];
+    let customerMap = {};
+
+    if (scope.type === 'customer' && scope.entityId) {
+      customerIds = [scope.entityId];
+      const { data: c } = await supabase.from('customers')
+        .select('id, name, phone').eq('id', scope.entityId).eq('organisation_id', orgId).maybeSingle();
+      if (c) customerMap[c.id] = c;
+    } else if (scope.type === 'org') {
+      const { data: customers } = await supabase.from('customers')
+        .select('id, name, phone').eq('organisation_id', orgId).eq('status', 'active').is('deleted_at', null);
+      for (const c of customers || []) { customerIds.push(c.id); customerMap[c.id] = c; }
+    } else {
+      return { signals: null, error: `unsupported scope type: ${scope.type}` };
+    }
+
+    if (customerIds.length === 0) return { signals: [], error: null };
+
+    // ── Query A: All-time invoices (no date window) ───────────────────────────
+    // Used for: daysSinceLastInvoice, lastOrderAmount, hasEverInvoiced, totalRevenueL90d
+    // Supabase does not support GROUP BY MAX — fetch all and reduce in JS.
+    // P5 PERFORMANCE NOTE:
+    // Org-scope currently loads all historical invoices and reduces in JS.
+    // Future optimization: move latest-invoice and L90d revenue aggregation
+    // into SQL/RPC to avoid loading full invoice history for large orgs.
+    const { data: allTimeInvs } = await supabase.from('invoices')
+      .select('customer_id, total_amount, issue_date')
+      .eq('organisation_id', orgId).eq('is_historical', false)
+      .not('status', 'in', '("draft","cancelled")')
+      .gt('total_amount', 0).is('deleted_at', null)
+      .in('customer_id', customerIds)
+      .order('issue_date', { ascending: false });
+
+    // Single pass: build latestInvoiceMap (all-time) and revenueMap (L90d window)
+    const latestInvoiceMap = {};
+    const revenueMap = {};
+    for (const inv of allTimeInvs || []) {
+      if (!latestInvoiceMap[inv.customer_id]) {
+        latestInvoiceMap[inv.customer_id] = {
+          lastInvoiceDate: inv.issue_date,
+          lastOrderAmount: Number(inv.total_amount || 0),
+          hasEverInvoiced: true,
+        };
+      }
+      if (inv.issue_date >= ninetyDaysAgo) {
+        if (!revenueMap[inv.customer_id]) revenueMap[inv.customer_id] = { totalL90d: 0, isActiveL30d: false };
+        revenueMap[inv.customer_id].totalL90d += Number(inv.total_amount || 0);
+        if (inv.issue_date >= thirtyDaysAgo) revenueMap[inv.customer_id].isActiveL30d = true;
+      }
+    }
+
+    // ── Payment signals ───────────────────────────────────────────────────────
+    const { data: recentPayments } = await supabase.from('payments')
+      .select('customer_id, payment_date')
+      .eq('organisation_id', orgId).eq('is_historical', false)
+      .in('customer_id', customerIds).order('payment_date', { ascending: false });
+    const paymentMap = {};
+    for (const p of recentPayments || []) {
+      if (!paymentMap[p.customer_id]) paymentMap[p.customer_id] = p.payment_date;
+    }
+
+    // ── Interaction signals (messages via conversations.entity_id) ────────────
+    // P5 OPTIMIZATION NOTE (future): replace with SQL MAX(created_at) GROUP BY
+    // conversation_id via supabase.rpc() for large orgs (10k+ customers).
+    const { data: convRows } = await supabase.from('conversations')
+      .select('entity_id, id').eq('organisation_id', orgId).eq('entity_type', 'customer')
+      .in('entity_id', customerIds);
+    const convIdToCustomer = {};
+    for (const c of convRows || []) convIdToCustomer[c.id] = c.entity_id;
+    const convIds = Object.keys(convIdToCustomer);
+
+    const interactionMap = {};
+    if (convIds.length > 0) {
+      const { data: lastMsgs } = await supabase.from('messages')
+        .select('conversation_id, created_at').in('conversation_id', convIds)
+        .order('created_at', { ascending: false });
+      const seenConv = new Set();
+      for (const m of lastMsgs || []) {
+        if (seenConv.has(m.conversation_id)) continue;
+        seenConv.add(m.conversation_id);
+        const customerId = convIdToCustomer[m.conversation_id];
+        if (!customerId) continue;
+        if (!interactionMap[customerId] || m.created_at > interactionMap[customerId])
+          interactionMap[customerId] = m.created_at;
+      }
+    }
+
+    // ── Cooldown (action_log) ─────────────────────────────────────────────────
+    const { data: recentActions } = await supabase.from('action_log')
+      .select('entity_id').eq('organisation_id', orgId).eq('entity_type', 'customer')
+      .eq('signal_type', 'gone_silent_reactivation').gte('actioned_at', sevenDaysAgo)
+      .in('entity_id', customerIds);
+    const cooldownSet = new Set((recentActions || []).map(a => a.entity_id));
+
+    // ── City (customer_addresses) ─────────────────────────────────────────────
+    const { data: addresses } = await supabase.from('customer_addresses')
+      .select('customer_id, city, state').eq('organisation_id', orgId).eq('is_default', true)
+      .in('customer_id', customerIds);
+    const cityMap = {};
+    for (const a of addresses || []) cityMap[a.customer_id] = { city: a.city, state: a.state };
+
+    // ── Assemble signals ──────────────────────────────────────────────────────
+    const daysDiff = (dateStr) => dateStr ? Math.floor((today - new Date(dateStr)) / 86400000) : null;
+
+    const signals = customerIds.map(customerId => {
+      const latest = latestInvoiceMap[customerId] || null;
+      const revenue = revenueMap[customerId] || null;
+      const lastPaymentDate = paymentMap[customerId] || null;
+      const lastInteractionDate = interactionMap[customerId] || null;
+      const loc = cityMap[customerId] || null;
+      const customer = customerMap[customerId] || {};
+
+      const candidates = [
+        { type: 'message', date: lastInteractionDate },
+        { type: 'payment', date: lastPaymentDate },
+        { type: 'invoice', date: latest?.lastInvoiceDate || null },
+      ].filter(c => c.date).sort((a, b) => new Date(b.date) - new Date(a.date));
+
+      return {
+        entityId: customerId,
+        entityName: customer.name || null,
+        phone: customer.phone || null,
+        city: loc?.city || null,
+        state: loc?.state || null,
+        daysSinceLastInvoice: daysDiff(latest?.lastInvoiceDate),
+        daysSinceLastPayment: daysDiff(lastPaymentDate),
+        daysSinceLastInteraction: daysDiff(lastInteractionDate),
+        lastOrderAmount: latest?.lastOrderAmount || 0,
+        totalRevenueL90d: revenue?.totalL90d || 0,
+        isActiveL30d: revenue?.isActiveL30d || false,
+        hasEverInvoiced: latest?.hasEverInvoiced || false,
+        inCooldown: cooldownSet.has(customerId),
+        lastInteractionType: candidates[0]?.type || null,
+        lastInteractionDate: candidates[0]?.date || null,
+      };
+    });
+
+    return { signals, error: null };
+
+  } catch (err) {
+    console.error('[getRelationshipSignals] error:', err.message);
+    return { signals: null, error: err.message };
+  }
+}
+
+// ── classifyRelationship ──────────────────────────────────────────────────────
+// Pure function — no DB.
+// Classification source: most recent relationship signal wins across message, payment, invoice.
+// We do not hard-prioritize channels — recency is the deciding factor.
+// 'new' = hasEverInvoiced is false (never purchased — NOT "purchased long ago").
+// Thresholds configurable — pass overrides for per-org customization.
+//
+// Returns:
+//   { relationshipStatus, relationshipReason, lastInteractionType, lastInteractionDate, lastActivityDays }
+//   relationshipStatus: 'new' | 'active' | 'at_risk' | 'gone_silent' | 'inactive'
+
+export function classifyRelationship(signals, thresholds = {}) {
+  const { activeDays, atRiskDays, goneSilentDays } = {
+    ...DEFAULT_RELATIONSHIP_THRESHOLDS,
+    ...thresholds,
+  };
+
+  const {
+    daysSinceLastInvoice, daysSinceLastPayment, daysSinceLastInteraction,
+    lastInteractionType, lastInteractionDate, hasEverInvoiced,
+  } = signals;
+
+  // 'new' = never purchased (not "purchased long ago")
+  if (!hasEverInvoiced) {
+    return {
+      relationshipStatus: 'new',
+      relationshipReason: 'No purchase history on record',
+      lastInteractionType,
+      lastInteractionDate,
+      lastActivityDays: null,
+    };
+  }
+
+  // Most recent signal across all channels wins
+  const bestDays = Math.min(
+    daysSinceLastInteraction ?? Infinity,
+    daysSinceLastPayment ?? Infinity,
+    daysSinceLastInvoice ?? Infinity,
+  );
+
+  if (bestDays === Infinity) {
+    return {
+      relationshipStatus: 'inactive',
+      relationshipReason: 'No recent activity found',
+      lastInteractionType,
+      lastInteractionDate,
+      lastActivityDays: null,
+    };
+  }
+
+  if (bestDays <= activeDays) {
+    const label = lastInteractionType === 'message' ? 'Customer messaged'
+      : lastInteractionType === 'payment' ? 'Payment received' : 'Invoice issued';
+    return {
+      relationshipStatus: 'active',
+      relationshipReason: `${label} ${bestDays} day${bestDays === 1 ? '' : 's'} ago`,
+      lastInteractionType,
+      lastInteractionDate,
+      lastActivityDays: bestDays,
+    };
+  }
+
+  if (bestDays <= atRiskDays) {
+    return {
+      relationshipStatus: 'at_risk',
+      relationshipReason: `No significant activity in ${bestDays} days`,
+      lastInteractionType,
+      lastInteractionDate,
+      lastActivityDays: bestDays,
+    };
+  }
+
+  if (bestDays <= goneSilentDays) {
+    return {
+      relationshipStatus: 'gone_silent',
+      relationshipReason: `Relationship cooling — inactive for ${bestDays} days`,
+      lastInteractionType,
+      lastInteractionDate,
+      lastActivityDays: bestDays,
+    };
+  }
+
+  return {
+    relationshipStatus: 'inactive',
+    relationshipReason: `No activity for over ${goneSilentDays} days`,
+    lastInteractionType,
+    lastInteractionDate,
+    lastActivityDays: bestDays,
+  };
+}
