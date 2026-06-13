@@ -681,3 +681,348 @@ export function classifyRelationship(signals, thresholds = {}) {
     lastActivityDays: bestDays,
   };
 }
+
+
+// ── P3: getFinancialPosition + classifyFinancialRisk ─────────────────────────
+// BQE-6, Jun 2026
+//
+// getFinancialPosition — pure data primitive, no classification, no narration.
+// classifyFinancialRisk — pure function, no DB. Mirrors P5 classifyRelationship() pattern.
+//
+// CANONICAL SOURCE RULE (ChatGPT audit, Jun 2026):
+//   totalReceivables uses invoices.amount_due — NOT customers.outstanding_balance.
+//   customers.outstanding_balance is derived/cached and can become stale.
+//   invoices.amount_due is transactional truth.
+//   customers.outstanding_balance retained for largestDebtors ranking (fast path only).
+//   shareOfReceivables denominator = invoice-based totalReceivables (canonical).
+//   receivableConcentration numerator = customers.outstanding_balance (fast path, close enough for v1).
+//   FUTURE: replace concentration numerator with sum(invoices.amount_due) per customer.
+//
+// cashGap = collectionsL30d - purchasesL30d (operating velocity — NOT totalPayables).
+//   totalPayables = balance-sheet exposure (all unpaid regardless of timing).
+//   purchasesL30d = what was purchased in last 30 days (cash velocity signal).
+//
+// purchase_bills uses customer_id (canonical per Finding 4 — supplier_id is legacy).
+//
+// concentrationRisk is separate from financialRiskLevel (customer scope):
+//   financialRiskLevel = payment risk ("will this customer pay?")
+//   concentrationRisk  = portfolio exposure ("do I depend too much on this customer?")
+//   A customer can be low financial risk but high concentration risk.
+//   Never merge into a single label — they require different owner actions.
+//
+// OPTIMIZATION NOTE (future):
+//   _getCustomerFinancialPosition() re-queries all org invoices for shareOfReceivables.
+//   If called in a loop (top_debtors, entity_profile enrichment), extract org total
+//   as a shared parameter to avoid N+1 invoice scans.
+//
+// Modifies existing production surface: NO — additive only
+
+export const DEFAULT_FINANCIAL_RISK_THRESHOLDS = {
+  // Overdue ratio thresholds (overdueReceivables / totalReceivables)
+  overdueCritical:             0.50,
+  overdueHigh:                 0.30,
+  overdueMedium:               0.15,
+  // Concentration thresholds (customer shareOfReceivables)
+  concentrationCritical:       0.40,
+  concentrationHigh:           0.25,
+  concentrationMedium:         0.15,
+  // Credit utilization thresholds (outstandingBalance / creditLimit)
+  creditUtilizationCritical:   1.0,
+  creditUtilizationHigh:       0.8,
+  // Org concentration (single customer / totalReceivables)
+  orgConcentrationCritical:    0.60,
+  orgConcentrationHigh:        0.40,
+  // Future: load from ai_context or organisation.settings per org
+};
+
+export async function getFinancialPosition({ orgId, scope, supabase }) {
+  if (!orgId || !scope) return { position: null, error: 'orgId and scope required' };
+
+  const today = new Date().toISOString().slice(0, 10);
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+
+  try {
+    if (scope.type === 'org') {
+      return await _getOrgFinancialPosition({ orgId, supabase, today, thirtyDaysAgo });
+    } else if (scope.type === 'customer' && scope.entityId) {
+      return await _getCustomerFinancialPosition({ orgId, entityId: scope.entityId, supabase, today });
+    } else {
+      return { position: null, error: `unsupported scope type: ${scope.type}` };
+    }
+  } catch (err) {
+    console.error('[getFinancialPosition] error:', err.message);
+    return { position: null, error: err.message };
+  }
+}
+
+async function _getOrgFinancialPosition({ orgId, supabase, today, thirtyDaysAgo }) {
+  // ── Receivables: canonical = invoices.amount_due ──────────────────────────
+  const { data: unpaidInvs } = await supabase.from('invoices')
+    .select('customer_id, amount_due, due_date')
+    .eq('organisation_id', orgId)
+    .eq('is_historical', false)
+    .in('status', ['sent', 'viewed', 'partial', 'overdue'])
+    .gt('amount_due', 0)
+    .is('deleted_at', null);
+
+  const allUnpaid = unpaidInvs || [];
+  const totalReceivables = allUnpaid.reduce((s, i) => s + Number(i.amount_due || 0), 0);
+  const overdueInvs = allUnpaid.filter(i => i.due_date && i.due_date < today);
+  const overdueReceivables = overdueInvs.reduce((s, i) => s + Number(i.amount_due || 0), 0);
+  const overdueInvoiceCount = overdueInvs.length;
+
+  // ── Collections L30d (for receivableDays + cashGap) ──────────────────────
+  const { data: recentPayments } = await supabase.from('payments')
+    .select('amount')
+    .eq('organisation_id', orgId)
+    .eq('is_historical', false)
+    .gte('payment_date', thirtyDaysAgo)
+    .is('deleted_at', null);
+  const collectionsL30d = (recentPayments || []).reduce((s, p) => s + Number(p.amount || 0), 0);
+
+  // receivableDays = DSO approximation
+  const avgDailyCollections = collectionsL30d / 30;
+  const receivableDays = avgDailyCollections > 0
+    ? Math.round(totalReceivables / avgDailyCollections)
+    : null;
+
+  // ── Payables: purchase_bills.amount_due (balance-sheet exposure) ──────────
+  const { data: bills } = await supabase.from('purchase_bills')
+    .select('customer_id, amount_due, due_date, total_amount, issue_date')
+    .eq('organisation_id', orgId)
+    .eq('is_historical', false)
+    .not('status', 'in', '("paid","cancelled")')
+    .gt('amount_due', 0)
+    .is('deleted_at', null);
+
+  const allBills = bills || [];
+  const totalPayables = allBills.reduce((s, b) => s + Number(b.amount_due || 0), 0);
+  const overdueBills = allBills.filter(b => b.due_date && b.due_date < today);
+  const overduePayables = overdueBills.reduce((s, b) => s + Number(b.amount_due || 0), 0);
+  const overduePayableCount = overdueBills.length;
+
+  // purchasesL30d = operating cash velocity (cashGap numerator)
+  const purchasesL30d = allBills
+    .filter(b => b.issue_date && b.issue_date >= thirtyDaysAgo)
+    .reduce((s, b) => s + Number(b.total_amount || 0), 0);
+
+  const cashGap = Math.round((collectionsL30d - purchasesL30d) * 100) / 100;
+
+  // ── Largest debtors (ranking: customers.outstanding_balance — fast path) ──
+  const { data: topCusts } = await supabase.from('customers')
+    .select('id, name, outstanding_balance, credit_limit')
+    .eq('organisation_id', orgId)
+    .eq('status', 'active')
+    .gt('outstanding_balance', 0)
+    .is('deleted_at', null)
+    .order('outstanding_balance', { ascending: false })
+    .limit(5);
+
+  const largestDebtors = (topCusts || []).map(c => ({
+    entityId: c.id,
+    name: c.name,
+    amount: Number(c.outstanding_balance || 0),
+    shareOfReceivables: totalReceivables > 0
+      ? Math.round((Number(c.outstanding_balance || 0) / totalReceivables) * 100) / 100
+      : null,
+    creditUtilization: (c.credit_limit && Number(c.credit_limit) > 0)
+      ? Math.round((Number(c.outstanding_balance || 0) / Number(c.credit_limit)) * 100) / 100
+      : null,
+  }));
+
+  // ── Largest creditors (purchase_bills grouped by customer_id per Finding 4) ─
+  const billsBySupplier = {};
+  for (const b of allBills) {
+    if (!b.customer_id) continue;
+    if (!billsBySupplier[b.customer_id]) billsBySupplier[b.customer_id] = 0;
+    billsBySupplier[b.customer_id] += Number(b.amount_due || 0);
+  }
+  const supplierIds = Object.keys(billsBySupplier);
+  const { data: supplierNames } = supplierIds.length > 0
+    ? await supabase.from('customers').select('id, name').in('id', supplierIds).eq('organisation_id', orgId)
+    : { data: [] };
+  const supplierNameMap = {};
+  for (const s of supplierNames || []) supplierNameMap[s.id] = s.name;
+
+  const largestCreditors = Object.entries(billsBySupplier)
+    .map(([id, amount]) => ({ entityId: id, name: supplierNameMap[id] || id, amount: Math.round(amount * 100) / 100 }))
+    .sort((a, b) => b.amount - a.amount)
+    .slice(0, 5);
+
+  // receivableConcentration: top debtor (cached) / totalReceivables (invoice-based)
+  const topDebtorAmount = largestDebtors[0]?.amount || 0;
+  const receivableConcentration = totalReceivables > 0
+    ? Math.round((topDebtorAmount / totalReceivables) * 100) / 100
+    : 0;
+
+  return {
+    position: {
+      totalReceivables: Math.round(totalReceivables * 100) / 100,
+      overdueReceivables: Math.round(overdueReceivables * 100) / 100,
+      overdueInvoiceCount,
+      collectionsL30d: Math.round(collectionsL30d * 100) / 100,
+      purchasesL30d: Math.round(purchasesL30d * 100) / 100,
+      receivableDays,
+      totalPayables: Math.round(totalPayables * 100) / 100,
+      overduePayables: Math.round(overduePayables * 100) / 100,
+      overduePayableCount,
+      cashGap,
+      receivableConcentration,
+      largestDebtors,
+      largestCreditors,
+    },
+    error: null,
+  };
+}
+
+async function _getCustomerFinancialPosition({ orgId, entityId, supabase, today }) {
+  // ── Unpaid invoices (canonical) ───────────────────────────────────────────
+  const { data: custInvs } = await supabase.from('invoices')
+    .select('amount_due, due_date')
+    .eq('organisation_id', orgId).eq('customer_id', entityId)
+    .eq('is_historical', false)
+    .in('status', ['sent', 'viewed', 'partial', 'overdue'])
+    .gt('amount_due', 0).is('deleted_at', null);
+
+  const unpaid = custInvs || [];
+  const outstandingBalance = unpaid.reduce((s, i) => s + Number(i.amount_due || 0), 0);
+  const overdueInvs = unpaid.filter(i => i.due_date && i.due_date < today);
+  const overdueAmount = overdueInvs.reduce((s, i) => s + Number(i.amount_due || 0), 0);
+  const overdueInvoiceCount = overdueInvs.length;
+
+  // ── Last invoice + payment dates ──────────────────────────────────────────
+  const { data: lastInv } = await supabase.from('invoices')
+    .select('issue_date').eq('organisation_id', orgId).eq('customer_id', entityId)
+    .eq('is_historical', false).is('deleted_at', null)
+    .order('issue_date', { ascending: false }).limit(1);
+  const lastInvoiceDate = lastInv?.[0]?.issue_date || null;
+
+  const { data: lastPay } = await supabase.from('payments')
+    .select('payment_date').eq('organisation_id', orgId).eq('customer_id', entityId)
+    .eq('is_historical', false).order('payment_date', { ascending: false }).limit(1);
+  const lastPaymentDate = lastPay?.[0]?.payment_date || null;
+
+  // ── Credit info ───────────────────────────────────────────────────────────
+  const { data: custRow } = await supabase.from('customers')
+    .select('credit_limit, payment_terms_days')
+    .eq('id', entityId).eq('organisation_id', orgId).maybeSingle();
+  const creditLimit = Number(custRow?.credit_limit || 0);
+  const creditUtilization = (creditLimit > 0 && outstandingBalance > 0)
+    ? Math.round((outstandingBalance / creditLimit) * 100) / 100
+    : null;
+
+  // ── avg_payment_days from entity_memory ───────────────────────────────────
+  const { data: memRow } = await supabase.from('entity_memory')
+    .select('memory_value').eq('organisation_id', orgId).eq('entity_type', 'customer')
+    .eq('entity_id', entityId).eq('memory_key', 'avg_payment_days').is('deleted_at', null).maybeSingle();
+  const _memVal = Number(memRow?.memory_value);
+const averagePaymentDelay = memRow?.memory_value && !isNaN(_memVal) ? _memVal : null;
+
+  // ── shareOfReceivables: invoice-based denominator (canonical) ─────────────
+  // OPTIMIZATION NOTE: re-queries all org invoices. If called in a loop,
+  // pass orgTotalReceivables as a parameter to avoid N+1 scans.
+  const { data: orgUnpaid } = await supabase.from('invoices')
+    .select('amount_due').eq('organisation_id', orgId).eq('is_historical', false)
+    .in('status', ['sent', 'viewed', 'partial', 'overdue']).gt('amount_due', 0).is('deleted_at', null);
+  const orgTotalReceivables = (orgUnpaid || []).reduce((s, i) => s + Number(i.amount_due || 0), 0);
+  const shareOfReceivables = orgTotalReceivables > 0
+    ? Math.round((outstandingBalance / orgTotalReceivables) * 100) / 100
+    : 0;
+
+  return {
+    position: {
+      entityId,
+      outstandingBalance: Math.round(outstandingBalance * 100) / 100,
+      overdueAmount: Math.round(overdueAmount * 100) / 100,
+      overdueInvoiceCount,
+      lastInvoiceDate,
+      lastPaymentDate,
+      averagePaymentDelay,
+      creditLimit,
+      creditUtilization,
+      shareOfReceivables,
+      paymentTermsDays: custRow?.payment_terms_days || 30,
+    },
+    error: null,
+  };
+}
+
+// ── classifyFinancialRisk ─────────────────────────────────────────────────────
+// Pure function — no DB. Mirrors classifyRelationship() from P5.
+// Accepts position from getFinancialPosition() + optional threshold overrides.
+//
+// Customer scope returns: financialRiskLevel + financialRiskReason + concentrationRisk
+// Org scope returns: cashRiskLevel + cashRiskReason
+//
+// financialRiskLevel  = payment risk only ("will this customer pay?")
+// concentrationRisk   = portfolio exposure ("do I depend too much on this customer?")
+// These are separate dimensions. Never merge. Different owner actions required.
+
+export function classifyFinancialRisk(position, thresholds = {}) {
+  const t = { ...DEFAULT_FINANCIAL_RISK_THRESHOLDS, ...thresholds };
+  if (!position) return {
+    financialRiskLevel: 'unknown', financialRiskReason: 'No data',
+    cashRiskLevel: null, cashRiskReason: null, concentrationRisk: null,
+  };
+
+  // ── Customer scope ────────────────────────────────────────────────────────
+  if (position.entityId) {
+    const { outstandingBalance, overdueAmount, creditUtilization, shareOfReceivables } = position;
+    const overdueRatio = outstandingBalance > 0 ? overdueAmount / outstandingBalance : 0;
+
+    let financialRiskLevel, financialRiskReason;
+    if (creditUtilization >= t.creditUtilizationCritical || overdueRatio > t.overdueCritical) {
+      financialRiskLevel = 'critical';
+      financialRiskReason = creditUtilization >= t.creditUtilizationCritical
+        ? `Credit limit exceeded — ${Math.round(creditUtilization * 100)}% utilized`
+        : `Over ${Math.round(t.overdueCritical * 100)}% of outstanding balance is overdue`;
+    } else if (creditUtilization >= t.creditUtilizationHigh || overdueRatio > t.overdueHigh) {
+      financialRiskLevel = 'high';
+      financialRiskReason = creditUtilization >= t.creditUtilizationHigh
+        ? `Credit utilization at ${Math.round(creditUtilization * 100)}% — approaching limit`
+        : `${Math.round(overdueRatio * 100)}% of outstanding balance is overdue`;
+    } else if (overdueAmount > 0) {
+      financialRiskLevel = 'medium';
+      financialRiskReason = 'Some overdue amount present — monitor closely';
+    } else {
+      financialRiskLevel = 'low';
+      financialRiskReason = 'No overdue amounts. Payment health is good.';
+    }
+
+    // concentrationRisk: separate portfolio exposure dimension
+    let concentrationRisk;
+    if (shareOfReceivables > t.concentrationCritical) concentrationRisk = 'critical';
+    else if (shareOfReceivables > t.concentrationHigh) concentrationRisk = 'high';
+    else if (shareOfReceivables > t.concentrationMedium) concentrationRisk = 'medium';
+    else concentrationRisk = 'low';
+
+    return { financialRiskLevel, financialRiskReason, concentrationRisk, cashRiskLevel: null, cashRiskReason: null };
+  }
+
+  // ── Org scope ─────────────────────────────────────────────────────────────
+  const { totalReceivables, overdueReceivables, receivableConcentration, cashGap } = position;
+  const overdueRatio = totalReceivables > 0 ? overdueReceivables / totalReceivables : 0;
+
+  let cashRiskLevel, cashRiskReason;
+  if (overdueRatio > t.overdueCritical || receivableConcentration > t.orgConcentrationCritical) {
+    cashRiskLevel = 'critical';
+    cashRiskReason = overdueRatio > t.overdueCritical
+      ? `Over ${Math.round(t.overdueCritical * 100)}% of receivables overdue — immediate collection action needed`
+      : `Single customer holds ${Math.round(receivableConcentration * 100)}% of receivables — extreme concentration risk`;
+  } else if (overdueRatio > t.overdueHigh || receivableConcentration > t.orgConcentrationHigh) {
+    cashRiskLevel = 'high';
+    cashRiskReason = overdueRatio > t.overdueHigh
+      ? `${Math.round(overdueRatio * 100)}% of receivables overdue — escalate collections`
+      : `Top customer holds ${Math.round(receivableConcentration * 100)}% of receivables`;
+  } else if (overdueRatio > t.overdueMedium) {
+    cashRiskLevel = 'medium';
+    cashRiskReason = `${Math.round(overdueRatio * 100)}% of receivables overdue — monitor and follow up`;
+  } else {
+    cashRiskLevel = 'low';
+    cashRiskReason = cashGap < 0
+      ? `Collections healthy but purchases exceeded collections this month — watch cash timing`
+      : 'Receivables healthy. Overdue ratio within acceptable range.';
+  }
+
+  return { cashRiskLevel, cashRiskReason, financialRiskLevel: null, financialRiskReason: null, concentrationRisk: null };
+}
