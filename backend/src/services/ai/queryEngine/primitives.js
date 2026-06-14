@@ -1026,3 +1026,200 @@ export function classifyFinancialRisk(position, thresholds = {}) {
 
   return { cashRiskLevel, cashRiskReason, financialRiskLevel: null, financialRiskReason: null, concentrationRisk: null };
 }
+
+
+// ── Brain 2.5: getConversationMemory + refreshConversationSummary ────────────
+// Jun 2026
+//
+// Conversation Memory = rolling SEMANTIC summary (not transcript compression) of
+// everything OLDER than the last 8 messages. Mirrors human memory: recent =
+// verbatim, older = compressed into facts/decisions/objectives.
+//
+// SCOPE (v1): Org AI only (ai_conversations table, messages.ai_conversation_id).
+// Customer AI / Customer DM not wired this session — primitive is reusable via
+// a thin wrapper later. No premature abstraction now.
+//
+// STORAGE:
+//   ai_conversations.summary — semantic summary text (sectioned, hard-capped 4000 chars)
+//   ai_conversations.custom_fields.conversation_memory = {
+//     summary_version: 1,
+//     summary_generated_at: ISO timestamp,
+//     summary_through_count: integer,        — TELEMETRY ONLY, not used for trigger logic
+//     summary_through_message_id: uuid       — CANONICAL CURSOR for slicing AND trigger
+//   }
+//
+// CORRECTNESS NOTES:
+// - message_count column is NOT trusted (can drift from seed inconsistencies,
+//   deletions, retries). actualMessageCount always computed from messages table.
+// - summary_through_message_id is the SINGLE canonical cursor. Both the slice
+//   (which messages to summarize) and the trigger (whether to refresh) derive
+//   from this same anchor — prevents drift if messages are ever deleted.
+// - messages.ai_conversation_id has no dedicated index as of v1.3.267. Acceptable
+//   for current conversation sizes — revisit if conversations grow large.
+//
+// TRIGGER: refresh when messagesSinceAnchor (eligible messages after the anchor) >= 4
+//
+// SUMMARY FORMAT (semantic, not transcript):
+//   Current Objectives / Key Facts / Decisions Made / Open Questions / Preferences
+//   Dramatically more useful to Brain 3 than compressed chat logs.
+//
+// Conversation Memory is session-scoped (this conversation only).
+// Entity Memory is entity-scoped (a person/product, survives across conversations).
+// Organization Memory is organization-scoped (the business itself).
+// Conversation Memory may expire or be deleted without affecting Entity Memory —
+// independent layers, independent lifetimes.
+//
+// Modifies existing production surface: NO — additive only
+
+export async function getConversationMemory({ conversationId, supabase }) {
+  if (!conversationId) return { conversationSummary: null, summaryThroughCount: 0, error: 'conversationId required' };
+
+  try {
+    const { data, error } = await supabase.from('ai_conversations')
+      .select('summary, custom_fields')
+      .eq('id', conversationId)
+      .maybeSingle();
+
+    if (error) return { conversationSummary: null, summaryThroughCount: 0, error: error.message };
+    if (!data) return { conversationSummary: null, summaryThroughCount: 0, error: 'conversation not found' };
+
+    const mem = data.custom_fields?.conversation_memory || {};
+    return {
+      conversationSummary: data.summary || null,
+      summaryThroughCount: mem.summary_through_count || 0,
+      error: null,
+    };
+  } catch (err) {
+    console.error('[getConversationMemory] error:', err.message);
+    return { conversationSummary: null, summaryThroughCount: 0, error: err.message };
+  }
+}
+
+export async function refreshConversationSummary({ conversationId, orgId, supabase, openai }) {
+  if (!conversationId || !orgId) return { refreshed: false, reason: 'conversationId and orgId required' };
+
+  try {
+    // ── Read current state ────────────────────────────────────────────────
+    const { data: convo, error: convoErr } = await supabase.from('ai_conversations')
+      .select('summary, custom_fields')
+      .eq('id', conversationId)
+      .eq('organisation_id', orgId)
+      .maybeSingle();
+
+    if (convoErr || !convo) return { refreshed: false, reason: convoErr?.message || 'conversation not found' };
+
+    const mem = convo.custom_fields?.conversation_memory || {};
+    const anchorMessageId = mem.summary_through_message_id || null;
+    // summary_through_count retained for telemetry/debugging only — NOT used for trigger logic.
+    // The message-id anchor is the single canonical cursor.
+
+    // ── Source of truth: actual messages, not cached message_count ──────────
+    const { data: allMsgs, error: msgErr } = await supabase.from('messages')
+      .select('id, role, content, created_at')
+      .eq('organisation_id', orgId)
+      .eq('ai_conversation_id', conversationId)
+      .is('deleted_at', null)
+      .order('created_at', { ascending: true });
+    // NOTE: messages.ai_conversation_id has no dedicated index as of v1.3.267.
+    // Acceptable for current conversation sizes — revisit if conversations grow large.
+
+    if (msgErr) return { refreshed: false, reason: msgErr.message };
+    const actualMessageCount = (allMsgs || []).length;
+
+    const eligibleCount = Math.max(0, actualMessageCount - 8);
+    if (eligibleCount <= 0) return { refreshed: false, reason: 'conversation too short (<=8 messages)' };
+
+    // ── Slice: eligible messages newer than anchor, excluding last-8 window ──
+    const eligibleMsgs = allMsgs.slice(0, eligibleCount); // first eligibleCount messages = everything older than last-8
+
+    // Anchor by message id — deterministic, survives duplicate timestamps/backfills/deletions
+    const anchorIndex = anchorMessageId
+      ? eligibleMsgs.findIndex(m => m.id === anchorMessageId)
+      : -1;
+    const newSlice = anchorIndex >= 0
+      ? eligibleMsgs.slice(anchorIndex + 1)
+      : eligibleMsgs;
+
+    // CANONICAL TRIGGER: derived from the same anchor used for slicing.
+    // Prevents drift between trigger count and slice content if messages are
+    // ever deleted (an independently-tracked count could desync from the anchor).
+    const messagesSinceAnchor = newSlice.length;
+    if (messagesSinceAnchor < 4) return { refreshed: false, reason: `only ${messagesSinceAnchor} new messages since anchor, threshold is 4` };
+
+    const sliceText = newSlice.map(m => `${m.role}: ${m.content}`).join('\n');
+    const oldSummary = convo.summary || '(none — this is the first summary)';
+    const newAnchorMessageId = newSlice[newSlice.length - 1].id;
+
+    // ── GPT call: semantic memory compression (not transcript compression) ──
+    const systemPrompt = `MEMORY FORMAT VERSION: 1
+
+You maintain a rolling SEMANTIC conversation memory for a business AI assistant.
+Given the PREVIOUS MEMORY and NEW MESSAGES, produce an UPDATED MEMORY that replaces the previous one entirely.
+
+Output in these exact sections (omit a section if empty):
+
+Current Objectives:
+- ...
+
+Key Facts:
+- ...
+
+Decisions Made:
+- ...
+
+Open Questions:
+- ...
+
+Preferences:
+- ...
+
+RULES:
+- This is SEMANTIC memory, not a transcript. Do NOT write "Owner asked... AI replied...".
+  Instead extract durable facts, decisions, objectives, and preferences.
+- Merge new information with previous memory — update facts, resolve open questions
+  that are now answered, add new objectives, remove obsolete/resolved items.
+- Maximum 500 words total.
+- Output only the sectioned memory, no preamble, no extra commentary.`;
+
+    const userPrompt = `PREVIOUS MEMORY:\n${oldSummary}\n\nNEW MESSAGES:\n${sliceText}\n\nProduce the updated memory.`;
+
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+      max_tokens: 800,
+      temperature: 0.3,
+    });
+
+    let newSummary = completion.choices?.[0]?.message?.content?.trim() || oldSummary;
+
+    // Hard size guard — never trust the model's word-count compliance
+    if (newSummary.length > 4000) newSummary = newSummary.slice(0, 4000);
+
+    // ── Write back ────────────────────────────────────────────────────────
+    const newCustomFields = {
+      ...(convo.custom_fields || {}),
+      conversation_memory: {
+        summary_version: 1,
+        summary_generated_at: new Date().toISOString(),
+        summary_through_count: eligibleCount,
+        summary_through_message_id: newAnchorMessageId,
+      },
+    };
+
+    const { error: updateErr } = await supabase.from('ai_conversations')
+      .update({ summary: newSummary, custom_fields: newCustomFields })
+      .eq('id', conversationId)
+      .eq('organisation_id', orgId);
+
+    if (updateErr) return { refreshed: false, reason: updateErr.message };
+
+    console.log('[refreshConversationSummary]', { conversationId, eligibleCount, messagesSinceAnchor, summaryLength: newSummary.length });
+    return { refreshed: true, summary: newSummary, summaryThroughCount: eligibleCount };
+  } catch (err) {
+    console.error('[refreshConversationSummary] error:', err.message);
+    return { refreshed: false, reason: err.message };
+  }
+}
