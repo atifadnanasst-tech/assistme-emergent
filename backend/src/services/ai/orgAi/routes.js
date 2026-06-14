@@ -22,6 +22,7 @@
 
 import { dispatchMenuQuery } from './index.js';
 import { dispatchFreeform } from './freeform.js';
+import { getConversationMemory, refreshConversationSummary } from '../queryEngine/primitives.js';
 import { randomUUID } from 'crypto';
 
 // ── Server-owned menu labels ──────────────────────────────────
@@ -247,9 +248,11 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
       if (userMsgError) console.error('[orgAi] user message insert failed:', userMsgError.message);
 
       // Dispatch
+      // openai hoisted above if/else — needed in scope for Brain 2.5 fire-and-forget
+      // refresh after this block (see PATCH 3d near the response return).
+      const openai = getOpenAI();
       let result;
       if (menu_id) {
-        const openai = getOpenAI();
         result = await dispatchMenuQuery(menu_id, supabase, organisationId, orgCurrency, openai, orgLanguage);
       } else {
         const { data: recentMsgs } = await supabase
@@ -260,7 +263,9 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
           .limit(8);
         const conversationHistory = (recentMsgs || []).reverse();
 
-        const openai = getOpenAI();
+        // Brain 2.5: read rolling conversation memory (older context, ≤500 words).
+        // null on first 8 messages of a conversation — expected, not an error.
+        const { conversationSummary } = await getConversationMemory({ conversationId: ai_conversation_id, supabase });
 
         // Process attachment if present — org_ai purpose (business profile extraction)
         // extractAttachmentContext always returns { contextString, inputModality } — never throws.
@@ -294,6 +299,7 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
           supabase,
           scope: 'org',
           conversationHistory,
+          conversationSummary, // Brain 2.5: reasoning context for classification/entity resolution only
         });
       }
 
@@ -342,6 +348,15 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
         .update({ last_message_at: new Date().toISOString() })
         .eq('id', ai_conversation_id);
       if (convUpdateError) console.error('[orgAi] conversation update failed:', convUpdateError.message);
+
+      // Brain 2.5: fire-and-forget summary refresh — never blocks the response.
+      // No-op if <4 new eligible messages since last anchor (see primitives.js).
+      // menu_id path has no conversationHistory/conversationSummary need — skip it there.
+      if (!menu_id) {
+        refreshConversationSummary({ conversationId: ai_conversation_id, orgId: organisationId, supabase, openai })
+          .then(r => { if (r.refreshed) console.log('[Brain2.5] summary refreshed', { ai_conversation_id, ...r }); })
+          .catch(err => console.error('[Brain2.5] refresh error:', err.message));
+      }
 
       return c.json({
         message_id: savedMsg?.id,
