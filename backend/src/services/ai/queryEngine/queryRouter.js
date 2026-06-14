@@ -148,6 +148,13 @@ export async function classifyQuery(message, openai, conversationHistory = [], c
       model: 'gpt-4o-mini',
       messages: [
         { role: 'system', content: CLASSIFIER_SYSTEM },
+        // Brain 2.5 (v1.3.270): conversation memory as a separate system message —
+        // preserves instruction hierarchy (Classifier Instructions → Conversation
+        // Memory → Recent Messages → Current Message). Only included when present.
+        ...(conversationSummary ? [{
+          role: 'system',
+          content: `Conversation memory (older context, for entity and reference resolution only):\n${conversationSummary}`,
+        }] : []),
         ...(conversationHistory || []).slice(-6).map(m => {
           // CSF (BQE-4.2): surface pending_context to classifier for intent detection.
           // Compact form only — candidate IDs excluded (resolution happens in tryQueryRouter).
