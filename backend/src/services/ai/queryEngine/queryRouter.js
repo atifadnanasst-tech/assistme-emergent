@@ -133,7 +133,12 @@ EXAMPLES:
 "Which invoices are overdue?" -> {"queryType":"financial_health","entityMention":null,"selectionIndex":null,"selectedText":null}
 "What is GST?" -> {"queryType":"unknown","entityMention":null,"selectionIndex":null,"selectedText":null}`;
 
-export async function classifyQuery(message, openai, conversationHistory = []) {
+// Brain 2.5 (v1.3.269): conversationSummary param added — plumbing only, not yet
+// injected into the prompt. Will be wired in v1.3.270 after smoke testing.
+// REASONING CONTEXT for classification/entity resolution only. Do NOT use for
+// narration or business metric generation — structured primitives (P1-P9) remain
+// the source of truth for facts/numbers.
+export async function classifyQuery(message, openai, conversationHistory = [], conversationSummary = null) {
   // CSF (BQE-4.2): history always injected — LLM determines relevance, not heuristics.
   // Never revert to passing only the current message; that recreates stateless chat.
   const controller = new AbortController();
@@ -538,7 +543,7 @@ async function handleFinancialHealth({ orgId, supabase, openai, orgContext }) {
 // Returns response object if pattern matched, null if not.
 // Never throws — always falls through on any error.
 
-export async function tryQueryRouter({ message, orgId, orgContext, supabase, precomputedClassification, conversationHistory = [] }) {
+export async function tryQueryRouter({ message, orgId, orgContext, supabase, precomputedClassification, conversationHistory = [], conversationSummary = null }) {
   if (!message || !orgId) return null;
 
   console.log('[queryRouter entry]', message?.substring(0, 40), 'history:', conversationHistory?.length);
@@ -549,7 +554,7 @@ export async function tryQueryRouter({ message, orgId, orgContext, supabase, pre
   }
 
   try {
-    const classification = precomputedClassification ?? await classifyQuery(message, openai, conversationHistory);
+    const classification = precomputedClassification ?? await classifyQuery(message, openai, conversationHistory, conversationSummary);
 
     console.log('[queryRouter classification]', JSON.stringify(classification));
     if (!classification) {

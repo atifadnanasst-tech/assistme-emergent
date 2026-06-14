@@ -26,6 +26,7 @@ export async function dispatchFreeform({
   supabase,
   scope = 'org',
   conversationHistory = [],
+  conversationSummary = null, // Brain 2.5 (v1.3.269): plumbing only, not yet used in prompts
 }) {
   const openai = orgContext.openai;
 
@@ -46,7 +47,7 @@ export async function dispatchFreeform({
     // Those get queryRouter's numbered candidate list instead of planner's open-ended question.
     // Intent clarifications ("which month?", "which customer for this payment?") fall through
     // to planner — Type B clarifications owned by planner, not CSF.
-    const _clarifyClassification = await classifyQuery(message, orgContext.openai, conversationHistory);
+    const _clarifyClassification = await classifyQuery(message, orgContext.openai, conversationHistory, conversationSummary);
     // Type A: Entity-specific clarifications — require entityMention (CSF candidate list)
     const _isEntityClarification = _clarifyClassification &&
       new Set(['entity_profile', 'payment_pattern']).has(_clarifyClassification.queryType) &&
@@ -114,7 +115,7 @@ export async function dispatchFreeform({
     // Revisit after BQE-11 when all 8 primitives are complete.
     const _genericQueryCaps = new Set(['query_customers', 'query_invoices', 'query_suppliers']);
     if (planResult.confidence < 0.9 && validPlan.length === 1 && _genericQueryCaps.has(validPlan[0].capability)) {
-      const _classification = await classifyQuery(message, orgContext.openai, conversationHistory);
+      const _classification = await classifyQuery(message, orgContext.openai, conversationHistory, conversationSummary);
       console.log('[CSF DEBUG]', JSON.stringify(_classification));
       const _isEntityQuery = _classification &&
         new Set(['entity_profile', 'payment_pattern']).has(_classification.queryType) &&
