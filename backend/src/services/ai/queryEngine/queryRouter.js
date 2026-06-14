@@ -26,7 +26,7 @@
  * Modifies existing production surface: NO — new file only
  */
 
-import { getOrgSummary, searchEntityByName, getEntityProfile, getEntityTransactions, getRelationshipSignals, classifyRelationship } from './primitives.js';
+import { getOrgSummary, searchEntityByName, getEntityProfile, getEntityTransactions, getRelationshipSignals, classifyRelationship, getFinancialPosition, classifyFinancialRisk } from './primitives.js';
 import { narrate } from '../orgAi/narration.js';
 
 // ── Telemetry ─────────────────────────────────────────────────────────────────
@@ -66,6 +66,7 @@ async function logQueryRouterEvent({ supabase, orgId, userPrompt, event }) {
 //   payment_pattern       — how a specific customer pays
 //   collections_date_range— money collected over a time period
 //   risky_customer        — which customers are at risk / going silent
+//   financial_health      — org financial position, receivables, cash risk
 //   business_query_other  — business question but no primitive yet (logged, falls through)
 //   unknown               — not a business data question (falls through silently)
 
@@ -77,6 +78,7 @@ QUERY TYPES:
 - "payment_pattern": owner asking about a specific customer payment behaviour or track record
 - "collections_date_range": owner asking about money collected/received over a time period (not one specific customer)
 - "risky_customer": owner asking which customers are at risk, going silent, or need follow-up (no specific customer named)
+- "financial_health": owner asking how much customers owe them, receivables health, overdue invoices, which customers have not paid — NOT bank balance questions
 - "business_query_other": a business data question that does not fit the above three
 - "unknown": not a business data question (weather, definitions, general knowledge)
 
@@ -97,8 +99,14 @@ EXAMPLES:
 "Kaun at risk hai?" -> {"queryType":"risky_customer","entityMention":null}
 "Kaun haath se nikal raha hai?" -> {"queryType":"risky_customer","entityMention":null}
 "Who should I follow up with?" -> {"queryType":"risky_customer","entityMention":null}
+"Customers se humko kitna milega?" -> {"queryType":"financial_health","entityMention":null}
+"Mujhe kitna milna baaki hai?" -> {"queryType":"financial_health","entityMention":null}
+"How much do customers owe me?" -> {"queryType":"financial_health","entityMention":null}
+"What is my receivables situation?" -> {"queryType":"financial_health","entityMention":null}
+"Which invoices are overdue?" -> {"queryType":"financial_health","entityMention":null}
 "candidate_selection": owner is responding to a previous ambiguity list (typing "1", "2", or a name from that list)
 - "risky_customer": owner asking which customers are at risk, going silent, or need follow-up (no specific customer named)
+- "financial_health": owner asking how much customers owe them, receivables health, overdue invoices, which customers have not paid — NOT bank balance questions
 - "business_query_other": a business data question that does not fit the above types
 - "unknown": not a business data question
 
@@ -118,6 +126,11 @@ EXAMPLES:
 "Kaun at risk hai?" -> {"queryType":"risky_customer","entityMention":null,"selectionIndex":null,"selectedText":null}
 "Kaun haath se nikal raha hai?" -> {"queryType":"risky_customer","entityMention":null,"selectionIndex":null,"selectedText":null}
 "Who should I follow up with?" -> {"queryType":"risky_customer","entityMention":null,"selectionIndex":null,"selectedText":null}
+"Customers se humko kitna milega?" -> {"queryType":"financial_health","entityMention":null,"selectionIndex":null,"selectedText":null}
+"Mujhe kitna milna baaki hai?" -> {"queryType":"financial_health","entityMention":null,"selectionIndex":null,"selectedText":null}
+"How much do customers owe me?" -> {"queryType":"financial_health","entityMention":null,"selectionIndex":null,"selectedText":null}
+"What is my receivables situation?" -> {"queryType":"financial_health","entityMention":null,"selectionIndex":null,"selectedText":null}
+"Which invoices are overdue?" -> {"queryType":"financial_health","entityMention":null,"selectionIndex":null,"selectedText":null}
 "What is GST?" -> {"queryType":"unknown","entityMention":null,"selectionIndex":null,"selectedText":null}`;
 
 export async function classifyQuery(message, openai, conversationHistory = []) {
@@ -445,6 +458,81 @@ async function handleRiskyCustomers({ orgId, supabase, openai, orgContext }) {
   return { response_text, chart_data, next_action, message_type: 'ai_response', execution_plan: null, pending_plan_id: null };
 }
 
+// ── P3: handleFinancialHealth ─────────────────────────────────────────────────
+// BQE-6, Jun 2026. First consumer of getFinancialPosition() + classifyFinancialRisk().
+// Answers: "What is my financial position?", "Mere paas kitna paisa baaki hai?"
+// Modifies existing production surface: NO — new function only
+
+async function handleFinancialHealth({ orgId, supabase, openai, orgContext }) {
+  const { position, error } = await getFinancialPosition({ orgId, scope: { type: 'org' }, supabase });
+  if (error || !position) return null;
+
+  const risk = classifyFinancialRisk(position);
+  const orgCurrency = orgContext?.currency || 'INR';
+
+  const {
+    totalReceivables, overdueReceivables, overdueInvoiceCount,
+    collectionsL30d, receivableDays, cashGap,
+    totalPayables, largestDebtors, receivableConcentration,
+  } = position;
+
+  const overduePercent = totalReceivables > 0
+    ? Math.round((overdueReceivables / totalReceivables) * 100)
+    : 0;
+
+  const topDebtor = largestDebtors?.[0];
+
+  // Chart: ranked list of largest debtors
+  const chart_data = {
+    type: 'ranked_list',
+    title: 'Top Outstanding Customers',
+    currency: orgCurrency,
+    series: (largestDebtors || []).map(d => ({
+      label: d.name,
+      value: d.amount,
+      sublabel: d.shareOfReceivables > 1
+        ? `${Math.round(d.shareOfReceivables * 100)}% of invoiced receivables`
+        : `${Math.round((d.shareOfReceivables || 0) * 100)}% of receivables`,
+    })),
+    highlight: `${overdueInvoiceCount} invoices overdue`,
+    level: risk.cashRiskLevel === 'critical' ? 'danger'
+         : risk.cashRiskLevel === 'high' ? 'warning' : 'info',
+  };
+
+  // Next action
+  const next_action = {
+    text: risk.cashRiskLevel === 'critical' || risk.cashRiskLevel === 'high'
+      ? `${overduePercent}% overdue. ${topDebtor ? topDebtor.name + ' and ' + (largestDebtors.length - 1) + ' others' : 'Key accounts'} — send reminders immediately.`
+      : `Collections healthy. ${receivableDays ? 'Carrying ' + receivableDays + ' days of receivables.' : ''}`,
+    type: 'send_reminder',
+    signal_type: 'financial_health_review',
+    source_surface: 'financial_health',
+    execution_mode: 'bulk',
+    entities: (largestDebtors || []).map(d => ({
+      customer_id: d.entityId,
+      customer_name: d.name,
+      customer_phone: null,
+      invoice_id: null, invoice_number: '',
+      amount: d.amount,
+    })),
+    prefill: null,
+  };
+
+  const response_text = await narrate({
+    totalReceivables, overdueReceivables, overduePercent, overdueInvoiceCount,
+    collectionsL30d, receivableDays, cashGap,
+    totalPayables, topDebtorName: topDebtor?.name,
+    topDebtorAmount: topDebtor?.amount,
+    topDebtorShare: topDebtor?.shareOfReceivables,
+    cashRiskLevel: risk.cashRiskLevel,
+    cashRiskReason: risk.cashRiskReason,
+    currency: orgCurrency,
+  }, 'financial_health', openai);
+
+  console.log('[queryRouter] financial_health', { cashRiskLevel: risk.cashRiskLevel, overduePercent, totalReceivables });
+  return { response_text, chart_data, next_action, message_type: 'ai_response', execution_plan: null, pending_plan_id: null };
+}
+
 // ── Main export ───────────────────────────────────────────────────────────────
 // Called by freeform.js at validPlan.length === 0 only.
 // Returns response object if pattern matched, null if not.
@@ -495,6 +583,8 @@ export async function tryQueryRouter({ message, orgId, orgContext, supabase, pre
       result = await handleCollectionsQuestion({ message, orgId, supabase, openai, orgContext });
     } else if (queryType === 'risky_customer') {
       result = await handleRiskyCustomers({ orgId, supabase, openai, orgContext });
+    } else if (queryType === 'financial_health') {
+      result = await handleFinancialHealth({ orgId, supabase, openai, orgContext });
     }
 
     if (result) {

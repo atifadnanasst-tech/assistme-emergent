@@ -54,7 +54,7 @@ export async function dispatchFreeform({
     // Type C: Org-level query types — no entityMention needed, queryRouter answers directly
     // NOTE: collections_date_range intentionally excluded — date clarifications belong to planner.
     const _isOrgQueryClarification = _clarifyClassification &&
-      new Set(['risky_customer']).has(_clarifyClassification.queryType);
+      new Set(['risky_customer', 'financial_health']).has(_clarifyClassification.queryType);
     if (_isEntityClarification || _isOrgQueryClarification) {
       const _clarifyResult = await tryQueryRouter({ message, orgId, orgContext, supabase, conversationHistory, precomputedClassification: _clarifyClassification });
       if (_clarifyResult) return _clarifyResult;
