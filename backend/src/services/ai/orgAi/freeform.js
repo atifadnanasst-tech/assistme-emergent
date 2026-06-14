@@ -60,11 +60,21 @@ export async function dispatchFreeform({
       const _clarifyResult = await tryQueryRouter({ message, orgId, orgContext, supabase, conversationHistory, precomputedClassification: _clarifyClassification });
       if (_clarifyResult) return _clarifyResult;
     }
+    // Brain 3: third dead-end. Planner's clarification_needed is a generic
+    // "please specify what action" prompt — useless for greetings, world
+    // knowledge, coaching, or advice questions (Type A/C didn't match above).
+    // Only genuine Type B intent-ambiguity for an EXECUTABLE action should
+    // echo planner's clarification; everything else goes to Brain 3.
+    if (_clarifyClassification?.queryType === 'business_query_other' || _clarifyClassification?.queryType === 'unknown' || !_clarifyClassification) {
+      return await handleWorldIntelligence({ message, orgId, supabase, orgContext, conversationHistory, conversationSummary, trigger: 'clarification_non_action' });
+    }
     return { response_text: planResult.clarification_needed, chart_data: null, next_action: null, message_type: 'ai_response', execution_plan: null, pending_plan_id: null };
   }
 
   if (!planResult.plan || planResult.plan.length === 0) {
-    return { response_text: "I'm not sure how to help with that. Try asking about your sales, customers, products, or payments — or use the menu categories above.", chart_data: null, next_action: null, message_type: 'ai_response', execution_plan: null, pending_plan_id: null };
+    // Brain 3: no dead-end — unified world intelligence fallback (greeting,
+    // coaching, world knowledge, business advice, general conversation).
+    return await handleWorldIntelligence({ message, orgId, supabase, orgContext, conversationHistory, conversationSummary, trigger: 'empty_plan' });
   }
 
   // Step 3: Validate
@@ -72,14 +82,13 @@ export async function dispatchFreeform({
 
   if (validPlan.length === 0) {
     // BQE-4: Try queryRouter before giving up
-    const queryResult = await tryQueryRouter({ message, orgId, orgContext, supabase });
+    const queryResult = await tryQueryRouter({ message, orgId, orgContext, supabase, conversationHistory, conversationSummary });
     if (queryResult) return queryResult;
 
-    // Fall through: genuine unknown intent
-    const intentDesc = unknownCapabilities.length > 0
-      ? unknownCapabilities.slice(0, 2).map(c => `"${c.replace(/_/g, ' ')}"`).join(' or ')
-      : 'that';
-    return { response_text: `I understand what you're trying to do, but AssistMe can't perform ${intentDesc} yet. I've recorded this as a capability request so the AssistMe team can prioritise it in a future update. In the meantime, I can help you analyse your business data — try asking about sales, customers, products, invoices, or payments.`, chart_data: null, next_action: null, message_type: 'ai_response', execution_plan: null, pending_plan_id: null };
+    // Brain 3: no dead-end — genuine unknown intent goes to unified world
+    // intelligence fallback. unknownCapabilities available here for Phase 2
+    // capability-gap logging (not used yet — see handleWorldIntelligence header).
+    return await handleWorldIntelligence({ message, orgId, supabase, orgContext, conversationHistory, conversationSummary, trigger: 'queryrouter_null' });
   }
   // Step 4: Classify
   const planClass = classifyPlan(validPlan);
@@ -241,4 +250,134 @@ function _mergeQueryResults(results) {
 
 function _fallback(message) {
   return { response_text: message, chart_data: null, next_action: null, message_type: 'ai_response', execution_plan: null, pending_plan_id: null };
+}
+
+// ── Brain 3: World Intelligence (unified open-world fallback) ────────────────
+// Jun 2026
+//
+// ONE unified engine for everything that isn't a structured business query
+// (Layer 1: QueryRouter) or an executable action (Layer 2: Planner).
+//
+// Covers (via ONE prompt — no sub-classification):
+//   - Greetings / social ("Hi", "Hello", "Thanks")
+//   - AssistMe coaching ("How do I record a payment?")
+//   - World knowledge ("What is GST?", "What is a proforma invoice?")
+//   - Business advice ("Customer hasn't paid in 60 days, what should I do?")
+//   - Genuinely unknown intents that don't map to any capability
+//
+// NEVER says "I can't help" / "I'm not sure how to help". If a capability is
+// genuinely missing, explains honestly + offers alternatives + continues helping.
+//
+// POLYGLOT: responds in whatever language the owner's message uses — detected
+// by the model itself, not hardcoded to org default language.
+//
+// MEMORY HIERARCHY (explicit precedence when information conflicts):
+//   1. Current user message
+//   2. Recent conversation messages (last 8, verbatim)
+//   3. Conversation memory summary (Brain 2.5, older context)
+//   4. Organization context (currency, business name)
+//
+// OUTPUT CONTRACT (Option C — server-side gating, not GPT-driven telemetry):
+//   { response_text, message_type: 'world_intelligence', capability_gap, normalized_intent }
+//   Phase 1 (this session): capability_gap always false, normalized_intent always null.
+//   Phase 2 (future): server-side rules will set these based on structured signals.
+//
+// orgId + supabase accepted now (unused in Phase 1) to avoid a second plumbing
+// patch when Phase 2 (capability-gap logging to missing_capabilities) lands.
+//
+// Modifies existing production surface: NO — new function, called from new
+// fallback paths only (does not change any existing capability/queryRouter flow)
+
+const BRAIN3_SYSTEM_PROMPT = `You are AssistMe's business operating partner — a knowledgeable COO/CFO-level assistant for a small business owner (Indian MSME trader).
+
+You understand sales, collections, procurement, finance, operations, customer relationships, and small business growth. You also know how AssistMe works — a WhatsApp-style business assistant where owners manage customers, invoices, payments, deliveries, and reminders through natural conversation.
+
+YOUR ROLE:
+- If the owner asks how to use AssistMe → explain clearly and simply, as if teaching a friend.
+- If the owner asks a business or world-knowledge question (GST, proforma invoice, payment terms, negotiation, etc.) → answer it well.
+- If the owner asks for advice (e.g. "customer hasn't paid in 60 days, what should I do?") → give practical, actionable advice.
+- If the owner is just greeting or making conversation → respond warmly and briefly, then offer to help.
+- If AssistMe genuinely cannot do something the owner asked for → say so honestly, explain what AssistMe can do instead, and continue being helpful.
+
+CRITICAL RULES:
+- NEVER say "I can't help with that" or "I'm not sure how to help" or similar dead-end phrases.
+- ALWAYS respond in the SAME LANGUAGE the owner used in their current message (Hindi, Urdu, Gujarati, Tamil, English, Hinglish, or any mix — match it naturally).
+- Keep responses concise and conversational — this is a chat interface, not a report. 2-5 sentences for most answers.
+- No markdown headers. Light formatting (bullets, bold) only when it genuinely aids clarity.
+
+MEMORY HIERARCHY — when information conflicts, prioritize in this order:
+1. The owner's CURRENT message (highest priority — always address this directly)
+2. RECENT MESSAGES (last 8 turns, verbatim — immediate conversation context)
+3. CONVERSATION MEMORY (older context, summarized — background only)
+4. ORGANIZATION CONTEXT (business name, currency — for personalization only)
+
+Do not over-index on conversation memory if it conflicts with what the owner is asking right now.`;
+
+export async function handleWorldIntelligence({ message, orgId, supabase, orgContext, conversationHistory = [], conversationSummary = null, trigger = 'unknown' }) {
+  const openai = orgContext?.openai;
+  console.log('[Brain3]', { trigger, messagePreview: message?.substring(0, 40) });
+
+  if (!openai) {
+    return { response_text: "Could you tell me a bit more about what you're trying to do? I can help with business questions, customers, payments, products, sales, or how to use AssistMe.", message_type: 'world_intelligence', capability_gap: false, normalized_intent: null, chart_data: null, next_action: null, execution_plan: null, pending_plan_id: null };
+  }
+
+  try {
+    const orgContextLine = orgContext?.currency
+      ? `\n\nORGANIZATION CONTEXT: Currency is ${orgContext.currency}.`
+      : '';
+
+    const messages = [
+      { role: 'system', content: BRAIN3_SYSTEM_PROMPT + orgContextLine },
+    ];
+
+    if (conversationSummary) {
+      messages.push({
+        role: 'system',
+        content: `CONVERSATION MEMORY (older context, background only — see memory hierarchy above):\n${conversationSummary}`,
+      });
+    }
+
+    for (const m of (conversationHistory || []).slice(-8)) {
+      if (m.role === 'user' || m.role === 'assistant') {
+        messages.push({ role: m.role, content: String(m.content || '').slice(0, 1000) });
+      }
+    }
+
+    messages.push({ role: 'user', content: message });
+
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages,
+      max_tokens: 500,
+      temperature: 0.5,
+    });
+
+    const response_text = completion.choices?.[0]?.message?.content?.trim()
+      || "Could you tell me a bit more about what you're trying to do? I can help with business questions, customers, payments, products, sales, or how to use AssistMe.";
+
+    console.log('[Brain3]', { trigger, responseLength: response_text.length, hasSummary: !!conversationSummary });
+
+    return {
+      response_text,
+      message_type: 'world_intelligence',
+      capability_gap: false,
+      normalized_intent: null,
+      chart_data: null,
+      next_action: null,
+      execution_plan: null,
+      pending_plan_id: null,
+    };
+  } catch (err) {
+    console.error('[Brain3] error:', { trigger, error: err.message });
+    return {
+      response_text: "Could you tell me a bit more about what you're trying to do? I can help with business questions, customers, payments, products, sales, or how to use AssistMe.",
+      message_type: 'world_intelligence',
+      capability_gap: false,
+      normalized_intent: null,
+      chart_data: null,
+      next_action: null,
+      execution_plan: null,
+      pending_plan_id: null,
+    };
+  }
 }
