@@ -3557,6 +3557,11 @@ async function executeAiQueryTool(toolName, args, supabase, organisationId, cust
       let q = supabase.from('invoices').select('invoice_number, status, total_amount, amount_paid, amount_due, issue_date, due_date')
         .eq('organisation_id', organisationId).eq('customer_id', customerId).order('issue_date', { ascending: false }).limit(20);
       if (!includeHistorical) q = q.eq('is_historical', false);
+      // Opening Position Transactions (historical_source='opening_balance') are
+      // excluded from normal invoice lists -- they are onboarding records, not
+      // real invoices. Visible only in LedgerView / explainability queries.
+      // See AssistMe_Financial_Calculation_Rules.md -> "Opening Position Rules"
+      q = q.or('historical_source.is.null,historical_source.neq.opening_balance');
       if (args.status === 'paid') q = q.eq('status', 'paid');
       else if (args.status === 'unpaid') q = q.neq('status', 'paid');
       else if (args.status === 'overdue') q = q.neq('status', 'paid').lt('due_date', new Date().toISOString().split('T')[0]);
@@ -4253,11 +4258,16 @@ app.get('/api/customer/:customer_id/report', async (c) => {
     }
 
     // Q2: All invoices for this customer
+    // Opening Position Transactions (historical_source='opening_balance')
+    // excluded -- they represent a pre-existing balance, not a real order,
+    // and would skew avgOrderValue/totalOrders/paymentDelayAvg below.
+    // See AssistMe_Financial_Calculation_Rules.md -> "Opening Position Rules"
     const { data: invoices } = await supabase
       .from('invoices')
       .select('id, total_amount, amount_paid, status, created_at, updated_at, due_date')
       .eq('organisation_id', organisationId)
       .eq('customer_id', customerId)
+      .or('historical_source.is.null,historical_source.neq.opening_balance')
       .order('created_at', { ascending: true });
 
     const allInvoices = invoices || [];
@@ -4484,9 +4494,12 @@ app.get('/api/customer/:customer_id/history', async (c) => {
 
     const { data: invoices } = await supabase
       .from('invoices')
+      // Opening Position Transactions excluded -- see
+      // AssistMe_Financial_Calculation_Rules.md -> "Opening Position Rules"
       .select('id, total_amount, amount_paid, status, created_at, invoice_number')
       .eq('organisation_id', organisationId)
       .eq('customer_id', customerId)
+      .or('historical_source.is.null,historical_source.neq.opening_balance')
       .order('created_at', { ascending: false })
       .limit(50);
 

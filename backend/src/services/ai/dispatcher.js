@@ -17,6 +17,7 @@ import { getSuggestedNextActions } from './capabilityRegistry.js';
 import { dispatchMenuQuery } from '../ai/orgAi/index.js';
 import { mutateProductCapability } from '../capabilities/mutationCapabilities.js';
 import { mutatePaymentCapability } from '../capabilities/paymentCapabilities.js';
+import { recordOpeningPositionCapability } from '../capabilities/openingPositionCapability.js';
 
 const DISPATCH_MAP = {
 
@@ -71,6 +72,9 @@ const DISPATCH_MAP = {
 
   mutate_payment: async (params, orgId, supabase, orgContext) =>
     mutatePaymentCapability(params, orgId, supabase, orgContext),
+
+  record_opening_position: async (params, orgId, supabase, orgContext) =>
+    recordOpeningPositionCapability(params, orgId, supabase, orgContext),
 };
 
 export async function dispatch({ capability, params, orgId, supabase, orgContext }) {
