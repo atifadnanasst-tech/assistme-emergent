@@ -624,6 +624,71 @@ async function recordPayableOpeningPosition(supabase, orgId, customerId, amount,
 }
 
 /**
+ * isOpeningPositionAllowed() — lightweight, READ-ONLY eligibility check.
+ * Created Jun 2026 (Spark preview-UX fix, post-recovery session).
+ *
+ * Reuses the EXACT SAME hasRealTransaction() guard that
+ * recordOpeningPosition() itself uses — no duplicated query logic, no
+ * second implementation of the lock rule to drift out of sync.
+ *
+ * WHY THIS EXISTS: Spark's preview step (/spark) was showing a normal
+ * "I've prepared this" card with a Confirm button for customers who were
+ * ALREADY LOCKED (have real invoices/payments/purchase_bills) — the
+ * rejection only happened after the owner tapped Confirm, at execution
+ * time inside recordOpeningPosition(). That is correct for financial
+ * integrity but bad UX: the owner sees a misleading "this will work"
+ * preview, taps Confirm, and is then told "not possible". This function
+ * lets /spark check eligibility BEFORE building the preview card, so a
+ * locked customer gets an explanatory message + no Confirm button
+ * instead of a preview that fails.
+ *
+ * IMPORTANT — this does NOT replace the real guard inside
+ * recordReceivableOpeningPosition()/recordPayableOpeningPosition(). That
+ * guard still runs at confirm/execute time and is the actual financial
+ * safety check (covers the race window between preview and confirm —
+ * e.g. owner records a real payment in the few seconds between seeing
+ * the preview and tapping Confirm). This function is a UX convenience
+ * only; never treat its result as authorization to skip the real guard.
+ *
+ * @param {object} supabase  - Supabase client (service role)
+ * @param {string} orgId     - organisation_id
+ * @param {string} customerId - customers.id
+ * @param {'receivable'|'payable'} direction
+ * @returns {object} { allowed: boolean, reason: string|null }
+ */
+export async function isOpeningPositionAllowed(supabase, orgId, customerId, direction) {
+  if (direction === 'receivable') {
+    const [realInvoices, realPayments] = await Promise.all([
+      hasRealTransaction(supabase, orgId, customerId, 'invoices'),
+      hasRealTransaction(supabase, orgId, customerId, 'payments'),
+    ]);
+    if (realInvoices || realPayments) {
+      return {
+        allowed: false,
+        reason: 'This customer already has invoices or payments, so an opening balance can only be set for a brand-new customer with no transaction history.',
+      };
+    }
+    return { allowed: true, reason: null };
+  }
+
+  if (direction === 'payable') {
+    const [realBills, realSupplierPayments] = await Promise.all([
+      hasRealTransaction(supabase, orgId, customerId, 'purchase_bills'),
+      hasRealTransaction(supabase, orgId, customerId, 'supplier_payments'),
+    ]);
+    if (realBills || realSupplierPayments) {
+      return {
+        allowed: false,
+        reason: 'This entity already has purchase bills or payments made, so an opening balance can only be set for a brand-new entity with no transaction history.',
+      };
+    }
+    return { allowed: true, reason: null };
+  }
+
+  return { allowed: false, reason: 'invalid_direction' };
+}
+
+/**
  * recordOpeningPosition() — entry point.
  *
  * @param {object} supabase  - Supabase client (service role)
