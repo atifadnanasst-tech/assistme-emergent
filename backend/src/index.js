@@ -2168,27 +2168,37 @@ async function resolveProduct({ productName, customerId, organisationId }) {
 // ─── POST /api/chat/:customer_id/spark ─────────────────────
 app.post('/api/chat/:customer_id/spark', async (c) => {
   const startTime = Date.now();
+  // Debugging instrumentation (audit recommendation, Jun 2026): this MUST
+  // be the literal first executable line. Previously there was no log
+  // statement until after auth/customer/conversation validation, so any
+  // early failure or rejection in those steps produced ZERO trace in
+  // pm2 logs -- this was the root blocker in diagnosing the Aziz
+  // white-screen incident (could not tell if the request reached the
+  // backend at all). Keep this permanently, not just for debugging.
+  console.log(`[SPARK] HIT customer_id=${c.req.param('customer_id')} op=${startTime}`);
   try {
     const auth = await authenticateChat(c);
-    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    if (!auth) { console.log(`[SPARK] op=${startTime} unauthorized after ${Date.now() - startTime}ms`); return c.json({ error: 'unauthorized' }, 401); }
     const { userId, organisationId } = auth;
     const customerId = c.req.param('customer_id');
 
     const customer = await validateCustomer(customerId, organisationId);
-    if (!customer) return c.json({ error: 'customer_not_found' }, 404);
+    if (!customer) { console.log(`[SPARK] op=${startTime} customer_not_found after ${Date.now() - startTime}ms`); return c.json({ error: 'customer_not_found' }, 404); }
 
     const body = await c.req.json();
     const query = body.query?.trim() || (body.forwarded_attachment ? 'Owner shared an attachment. Determine the appropriate business action from the attachment and conversation context. Default to create_invoice if unclear.' : '');
     const conversationId = body.conversation_id;
     const forwardedAttachment = body.forwarded_attachment || null;
-    if (!query) return c.json({ error: 'empty_query' }, 400);
-    if (!conversationId) return c.json({ error: 'missing_conversation_id' }, 400);
+    if (!query) { console.log(`[SPARK] op=${startTime} empty_query after ${Date.now() - startTime}ms`); return c.json({ error: 'empty_query' }, 400); }
+    if (!conversationId) { console.log(`[SPARK] op=${startTime} missing_conversation_id after ${Date.now() - startTime}ms`); return c.json({ error: 'missing_conversation_id' }, 400); }
+
+    console.log(`[SPARK] op=${startTime} query="${query.slice(0, 80)}" customer=${customer.name} after ${Date.now() - startTime}ms`);
 
     // Validate conversation belongs to org
     const { data: conv } = await supabase
       .from('conversations').select('id')
       .eq('id', conversationId).eq('organisation_id', organisationId).maybeSingle();
-    if (!conv) return c.json({ error: 'conversation_not_found' }, 404);
+    if (!conv) { console.log(`[SPARK] op=${startTime} conversation_not_found after ${Date.now() - startTime}ms`); return c.json({ error: 'conversation_not_found' }, 404); }
 
     // Layer 1: ai_context (global)
     let globalContext = '';
@@ -2354,6 +2364,8 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 15000);
 
+    console.log(`[SPARK] op=${startTime} starting OpenAI call after ${Date.now() - startTime}ms (pre-call setup), prompt_chars=${systemContent.length}`);
+
     try {
       const completion = await client.chat.completions.create({
         model: 'gpt-4o-mini',
@@ -2367,9 +2379,10 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
       tokensInput = completion.usage?.prompt_tokens || 0;
       tokensOutput = completion.usage?.completion_tokens || 0;
       parsed = parseSparkResponse(completion.choices[0].message.content || '');
+      console.log(`[SPARK] op=${startTime} OpenAI call completed after ${Date.now() - startTime}ms total, tokens_in=${tokensInput} tokens_out=${tokensOutput}`);
     } catch (aiErr) {
       clearTimeout(timeoutId);
-      console.error('Spark OpenAI call failed:', aiErr.message);
+      console.error(`[SPARK] op=${startTime} OpenAI call FAILED after ${Date.now() - startTime}ms:`, aiErr.name, aiErr.message);
       // Log failure
       try {
         await supabase.from('ai_usage_log').insert({
