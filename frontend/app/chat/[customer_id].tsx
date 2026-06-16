@@ -2461,6 +2461,8 @@ export default function CustomerChatScreen() {
                      action.action_type === 'record_supplier_payment' ? 'Supplier Payment' :
                      action.action_type === 'goods_returned' ? 'Goods Returned' :
                      action.action_type === 'record_expense' ? 'Record Expense' :
+                     action.action_type === 'record_opening_balance_receivable' ? 'Set Opening Balance' :
+                     action.action_type === 'record_opening_balance_payable' ? 'Set Opening Balance' :
                      action.action_type}
                   </Text>
 
