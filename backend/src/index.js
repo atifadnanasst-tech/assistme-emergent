@@ -10,7 +10,6 @@ import { registerOrgAiRoutes } from './services/ai/orgAi/routes.js';
 import { getBusinessProfile, updateBusinessProfileFields } from './services/capabilities/setBusinessProfileCapability.js';
 import { registerSupplierRoutes } from './services/business/supplierRoutes.js';
 import { recordPayment } from './services/business/recordPayment.js';
-import { recordOpeningPosition } from './services/business/recordOpeningPosition.js';
 import { extractVisualization } from './services/ai/visualizationParser.js';
 import PDFDocument from 'pdfkit';
 
@@ -1964,7 +1963,7 @@ Extract ALL actions from the owner's instruction. Output ONLY this JSON — no o
 {
   "actions": [
     {
-      "action_type": "create_invoice | create_quote | convert_quote_to_invoice | schedule_delivery | update_delivery_status | set_reminder | record_payment | goods_returned | record_expense | create_purchase_bill | record_supplier_payment | record_opening_balance_receivable | record_opening_balance_payable",
+      "action_type": "create_invoice | create_quote | convert_quote_to_invoice | schedule_delivery | update_delivery_status | set_reminder | record_payment | goods_returned | record_expense | create_purchase_bill | record_supplier_payment",
       "entities": {
         "items": [{"product_name": "string", "quantity": number, "unit_price": number or null, "discount_pct": number}],
         "amount": number or null,
@@ -2002,9 +2001,6 @@ Action rules:
 - record_expense: use when owner says kharcha hua, expense, paid for. Extract amount, category, description.
 - create_purchase_bill: use when owner says maal aya, goods received, purchase bill, maal mila, stock aya, supplier se maal. Extract items with quantity and unit_price into entities.items. Same structure as create_invoice. due_date auto-calculated from payment terms if not specified.
 - record_supplier_payment: use when owner says supplier ko diya, supplier ko payment, paid supplier, outgoing payment to supplier. Extract amount, payment_mode, bank_account_name. Same extraction as record_payment but direction is outgoing.
-- record_opening_balance_receivable: use ONLY for a customer with ZERO prior invoices, payments, or purchase bills -- a one-time declaration of a pre-existing balance when the owner starts using AssistMe for this customer. Use when owner says "[customer] owes me [amount]", "[customer] ka opening balance [amount] hai", "opening balance [amount] kar do" (when this customer has no transaction history yet). Extract amount only.
-- record_opening_balance_payable: same as record_opening_balance_receivable but for the OPPOSITE direction -- the owner owes THIS customer/entity. Use when owner says "I owe [customer] [amount]", "[customer] ko [amount] dena hai, opening balance", "[customer] se [amount] ka maal liya tha, opening balance". Extract amount only.
-  IMPORTANT for both: these are ONE-TIME declarations for a brand-new relationship with NO existing invoices/payments/purchase bills. Do NOT use for correcting an existing balance (e.g. "set balance to X", "humne hisaab kiya, ab X baki hai") -- that is not supported yet; if the customer clearly has prior transactions, do not emit these action types -- instead set confidence_score below 0.50 so the owner is asked to clarify.
 - invoice_type: set Bill of Supply if owner says bina GST, without GST, composition. Default is Tax Invoice.
 - freight_taxable: set true only if owner explicitly says freight has GST. Default false.
 - freight notation examples: "freight 50", "freight rupees 50", "freight Rs 50", "freight 50/-", "dhulai 50", "transport 50" — all mean freight=50. Always extract as number only into entities.freight.
@@ -2168,37 +2164,27 @@ async function resolveProduct({ productName, customerId, organisationId }) {
 // ─── POST /api/chat/:customer_id/spark ─────────────────────
 app.post('/api/chat/:customer_id/spark', async (c) => {
   const startTime = Date.now();
-  // Debugging instrumentation (audit recommendation, Jun 2026): this MUST
-  // be the literal first executable line. Previously there was no log
-  // statement until after auth/customer/conversation validation, so any
-  // early failure or rejection in those steps produced ZERO trace in
-  // pm2 logs -- this was the root blocker in diagnosing the Aziz
-  // white-screen incident (could not tell if the request reached the
-  // backend at all). Keep this permanently, not just for debugging.
-  console.log(`[SPARK] HIT customer_id=${c.req.param('customer_id')} op=${startTime}`);
   try {
     const auth = await authenticateChat(c);
-    if (!auth) { console.log(`[SPARK] op=${startTime} unauthorized after ${Date.now() - startTime}ms`); return c.json({ error: 'unauthorized' }, 401); }
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
     const { userId, organisationId } = auth;
     const customerId = c.req.param('customer_id');
 
     const customer = await validateCustomer(customerId, organisationId);
-    if (!customer) { console.log(`[SPARK] op=${startTime} customer_not_found after ${Date.now() - startTime}ms`); return c.json({ error: 'customer_not_found' }, 404); }
+    if (!customer) return c.json({ error: 'customer_not_found' }, 404);
 
     const body = await c.req.json();
     const query = body.query?.trim() || (body.forwarded_attachment ? 'Owner shared an attachment. Determine the appropriate business action from the attachment and conversation context. Default to create_invoice if unclear.' : '');
     const conversationId = body.conversation_id;
     const forwardedAttachment = body.forwarded_attachment || null;
-    if (!query) { console.log(`[SPARK] op=${startTime} empty_query after ${Date.now() - startTime}ms`); return c.json({ error: 'empty_query' }, 400); }
-    if (!conversationId) { console.log(`[SPARK] op=${startTime} missing_conversation_id after ${Date.now() - startTime}ms`); return c.json({ error: 'missing_conversation_id' }, 400); }
-
-    console.log(`[SPARK] op=${startTime} query="${query.slice(0, 80)}" customer=${customer.name} after ${Date.now() - startTime}ms`);
+    if (!query) return c.json({ error: 'empty_query' }, 400);
+    if (!conversationId) return c.json({ error: 'missing_conversation_id' }, 400);
 
     // Validate conversation belongs to org
     const { data: conv } = await supabase
       .from('conversations').select('id')
       .eq('id', conversationId).eq('organisation_id', organisationId).maybeSingle();
-    if (!conv) { console.log(`[SPARK] op=${startTime} conversation_not_found after ${Date.now() - startTime}ms`); return c.json({ error: 'conversation_not_found' }, 404); }
+    if (!conv) return c.json({ error: 'conversation_not_found' }, 404);
 
     // Layer 1: ai_context (global)
     let globalContext = '';
@@ -2364,8 +2350,6 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 15000);
 
-    console.log(`[SPARK] op=${startTime} starting OpenAI call after ${Date.now() - startTime}ms (pre-call setup), prompt_chars=${systemContent.length}`);
-
     try {
       const completion = await client.chat.completions.create({
         model: 'gpt-4o-mini',
@@ -2379,10 +2363,9 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
       tokensInput = completion.usage?.prompt_tokens || 0;
       tokensOutput = completion.usage?.completion_tokens || 0;
       parsed = parseSparkResponse(completion.choices[0].message.content || '');
-      console.log(`[SPARK] op=${startTime} OpenAI call completed after ${Date.now() - startTime}ms total, tokens_in=${tokensInput} tokens_out=${tokensOutput}`);
     } catch (aiErr) {
       clearTimeout(timeoutId);
-      console.error(`[SPARK] op=${startTime} OpenAI call FAILED after ${Date.now() - startTime}ms:`, aiErr.name, aiErr.message);
+      console.error('Spark OpenAI call failed:', aiErr.message);
       // Log failure
       try {
         await supabase.from('ai_usage_log').insert({
@@ -2525,29 +2508,17 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
         });
 
       } else {
-        // Non-invoice actions (delivery, reminder, payment, opening balance)
+        // Non-invoice actions (delivery, reminder, payment)
         const actionParams = {
           customer_id: customerId,
           customer_name: customer.name,
           amount: ent.amount || null,
           due_date: ent.due_date || null,
           delivery_date: ent.delivery_date || null,
-          // record_opening_balance_receivable/payable: direction maps 1:1
-          // from action_type -- see recordOpeningPosition() primitive
-          // (backend/src/services/business/recordOpeningPosition.js)
-          direction: action.action_type === 'record_opening_balance_receivable'
-            ? 'receivable'
-            : action.action_type === 'record_opening_balance_payable'
-            ? 'payable'
-            : null,
           description: action.action_type === 'schedule_delivery'
             ? `Delivery for ${customer.name}`
             : action.action_type === 'set_reminder'
             ? `Payment reminder for ${customer.name}`
-            : action.action_type === 'record_opening_balance_receivable'
-            ? `Opening balance: ${customer.name} owes you`
-            : action.action_type === 'record_opening_balance_payable'
-            ? `Opening balance: you owe ${customer.name}`
             : `Payment from ${customer.name}`,
         };
 
@@ -2571,8 +2542,6 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
         } else if (action.action_type === 'set_reminder') {
           details = `Send on: ${ent.due_date || 'TBD'}`;
         } else if (action.action_type === 'record_payment') {
-          details = ent.amount ? `₹${ent.amount.toLocaleString('en-IN')}` : 'Amount TBD';
-        } else if (action.action_type === 'record_opening_balance_receivable' || action.action_type === 'record_opening_balance_payable') {
           details = ent.amount ? `₹${ent.amount.toLocaleString('en-IN')}` : 'Amount TBD';
         }
 
@@ -3041,69 +3010,6 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
               }
             }
             if (payResult.status === 'success' || payResult.status === 'partial_success') {
-              executed.push(actionId);
-            } else {
-              failed.push(actionId);
-            }
-            break;
-          }
-
-          case 'record_opening_balance_receivable':
-          case 'record_opening_balance_payable': {
-            // Both action types call the same recordOpeningPosition() primitive
-            // (Patch 1, backend/src/services/business/recordOpeningPosition.js).
-            // direction was set in /spark's actionParams builder based on
-            // action_type (1:1 mapping, see SPARK_SYSTEM_PROMPT).
-            // Full architecture: AssistMe_Financial_Calculation_Rules.md ->
-            // "Opening Position Rules"
-            let obResult = { status: 'failed', events: [], error: 'invalid_amount' };
-            const obDirection = params.direction
-              || (action.action_type === 'record_opening_balance_receivable' ? 'receivable' : 'payable');
-
-            if (params.amount && params.amount > 0) {
-              obResult = await recordOpeningPosition(
-                supabase, organisationId, customerId, params.amount, obDirection
-              );
-            }
-
-            let obAckText = '';
-            if (obResult.status === 'success') {
-              const amountStr = `₹${params.amount.toLocaleString('en-IN')}`;
-              obAckText = obDirection === 'receivable'
-                ? `✓ Opening balance recorded: ${customer.name} owes ${amountStr}`
-                : `✓ Opening balance recorded: you owe ${customer.name} ${amountStr}`;
-            } else if (obResult.error === 'opening_position_locked') {
-              obAckText = `⚠️ ${obResult.message || 'This customer already has transaction history -- opening balance can only be set for a brand-new customer.'}`;
-            } else if (obResult.error === 'opening_position_corrupt_state') {
-              obAckText = `⚠️ ${obResult.message || 'Multiple opening balance records exist for this customer -- manual review required.'}`;
-            } else if (obResult.error === 'invalid_amount') {
-              obAckText = `⚠️ Could not record opening balance — amount missing or invalid.`;
-            } else {
-              obAckText = `⚠️ Opening balance could not be recorded. ${obResult.message || 'Please try again.'}`;
-              console.warn('[Spark record_opening_balance] failed op:', obResult.operation_id, 'error:', obResult.error);
-            }
-
-            if (obAckText) {
-              const { data: obAckConv } = await supabase
-                .from('conversations').select('id')
-                .eq('organisation_id', organisationId).eq('entity_type', 'customer')
-                .eq('entity_id', customerId).eq('status', 'active').maybeSingle();
-              if (obAckConv) {
-                await supabase.from('messages').insert({
-                  organisation_id: organisationId, conversation_id: obAckConv.id,
-                  role: 'system', content: obAckText,
-                  metadata: {
-                    sender_type: 'system', visibility: 'owner_only',
-                    message_type: 'system_alert', read_by_owner: true,
-                    preview_text: `Opening balance for ${customer.name}`,
-                    operation_id: obResult.operation_id,
-                  },
-                  tokens_input: 0, tokens_output: 0,
-                });
-              }
-            }
-
-            if (obResult.status === 'success') {
               executed.push(actionId);
             } else {
               failed.push(actionId);
@@ -3651,11 +3557,6 @@ async function executeAiQueryTool(toolName, args, supabase, organisationId, cust
       let q = supabase.from('invoices').select('invoice_number, status, total_amount, amount_paid, amount_due, issue_date, due_date')
         .eq('organisation_id', organisationId).eq('customer_id', customerId).order('issue_date', { ascending: false }).limit(20);
       if (!includeHistorical) q = q.eq('is_historical', false);
-      // Opening Position Transactions (historical_source='opening_balance') are
-      // excluded from normal invoice lists -- they are onboarding records, not
-      // real invoices. Visible only in LedgerView / explainability queries.
-      // See AssistMe_Financial_Calculation_Rules.md -> "Opening Position Rules"
-      q = q.or('historical_source.is.null,historical_source.neq.opening_balance');
       if (args.status === 'paid') q = q.eq('status', 'paid');
       else if (args.status === 'unpaid') q = q.neq('status', 'paid');
       else if (args.status === 'overdue') q = q.neq('status', 'paid').lt('due_date', new Date().toISOString().split('T')[0]);
@@ -4352,16 +4253,11 @@ app.get('/api/customer/:customer_id/report', async (c) => {
     }
 
     // Q2: All invoices for this customer
-    // Opening Position Transactions (historical_source='opening_balance')
-    // excluded -- they represent a pre-existing balance, not a real order,
-    // and would skew avgOrderValue/totalOrders/paymentDelayAvg below.
-    // See AssistMe_Financial_Calculation_Rules.md -> "Opening Position Rules"
     const { data: invoices } = await supabase
       .from('invoices')
       .select('id, total_amount, amount_paid, status, created_at, updated_at, due_date')
       .eq('organisation_id', organisationId)
       .eq('customer_id', customerId)
-      .or('historical_source.is.null,historical_source.neq.opening_balance')
       .order('created_at', { ascending: true });
 
     const allInvoices = invoices || [];
@@ -4588,12 +4484,9 @@ app.get('/api/customer/:customer_id/history', async (c) => {
 
     const { data: invoices } = await supabase
       .from('invoices')
-      // Opening Position Transactions excluded -- see
-      // AssistMe_Financial_Calculation_Rules.md -> "Opening Position Rules"
       .select('id, total_amount, amount_paid, status, created_at, invoice_number')
       .eq('organisation_id', organisationId)
       .eq('customer_id', customerId)
-      .or('historical_source.is.null,historical_source.neq.opening_balance')
       .order('created_at', { ascending: false })
       .limit(50);
 

@@ -567,9 +567,6 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
         } else if (stepCap === 'mutate_payment') {
           const { mutatePaymentCapability } = await import('../../capabilities/paymentCapabilities.js');
           stepResult = await mutatePaymentCapability(stepParams, organisationId, supabase, { currency: orgCurrency });
-        } else if (stepCap === 'record_opening_position') {
-          const { recordOpeningPositionCapability } = await import('../../capabilities/openingPositionCapability.js');
-          stepResult = await recordOpeningPositionCapability(stepParams, organisationId, supabase, { currency: orgCurrency });
         } else if (stepCap === 'mutate_invoice') {
           const { mutateInvoiceCapability } = await import('../../capabilities/invoiceCapabilities.js');
           stepResult = await mutateInvoiceCapability(stepParams, organisationId, supabase, { currency: orgCurrency }, ownerToken);

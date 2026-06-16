@@ -284,16 +284,12 @@ export function registerSupplierRoutes(app, supabase, authenticateChat) {
 
       const limit = parseInt(c.req.query('limit') || '20', 10);
 
-      // Opening Position Transactions (historical_source='opening_balance')
-      // excluded -- onboarding records, not real purchase bills. See
-      // AssistMe_Financial_Calculation_Rules.md -> "Opening Position Rules"
       const { data: bills, error: billsErr } = await supabase
         .from('purchase_bills')
         .select('id, bill_number, supplier_bill_number, status, issue_date, due_date, total_amount, amount_paid, amount_due, currency, notes')
         .eq('organisation_id', organisationId)
         .eq('customer_id', customerId)
         .eq('is_historical', false)
-        .or('historical_source.is.null,historical_source.neq.opening_balance')
         .is('deleted_at', null)
         .order('issue_date', { ascending: false })
         .limit(limit);

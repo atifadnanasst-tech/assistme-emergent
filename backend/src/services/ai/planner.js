@@ -113,12 +113,7 @@ PARAM EXAMPLES:
 - set_business_profile city: { "field_key": "city", "new_value": "Kolkata" }
 - set_business_profile state: { "field_key": "state", "new_value": "West Bengal" }
 - set_business_profile phone: { "field_key": "phone", "new_value": "9007188402" }
-- set_business_profile email: { "field_key": "email", "new_value": "contact@mybusiness.com" }
-- record_opening_position (NEW customer/entity with ZERO prior invoices, payments, or purchase bills -- a one-time declaration of a pre-existing balance when starting to use AssistMe): { "amount": 10000, "direction": "receivable", "customer": { "name": "Ramesh" } } -- use when owner says "Ramesh owes me 10000" or "Ramesh ka opening balance 10000 hai"
-- record_opening_position (owner owes a NEW entity, e.g. a supplier-style relationship -- still the customers table, direction flips): { "amount": 5000, "direction": "payable", "customer": { "name": "Noor" } } -- use when owner says "I owe Noor 5000" or "Noor ko 5000 dena hai, opening balance"
-  IMPORTANT: record_opening_position is for a ONE-TIME declaration about a customer/entity with NO existing invoices, payments, or purchase bills.
-  Do NOT use it if the owner is asking a QUESTION about an existing balance (e.g. "Amir currently owes how much", "what is Amir's balance") -- that is query_customers or financial_health, not record_opening_position.
-  Do NOT use it for correcting/adjusting an existing customer's balance (e.g. "set Ramesh balance to 12000", "we reconciled, balance is now 6000") -- that is not supported yet; set clarification_needed and explain this is not available.`;
+- set_business_profile email: { "field_key": "email", "new_value": "contact@mybusiness.com" }`;
 }
 
 export async function planExecution({ userMessage, scope = 'org', orgContext = {}, conversationHistory = [], openai }) {
