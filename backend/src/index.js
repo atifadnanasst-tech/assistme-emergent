@@ -2380,6 +2380,7 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
       tokensOutput = completion.usage?.completion_tokens || 0;
       parsed = parseSparkResponse(completion.choices[0].message.content || '');
       console.log(`[SPARK] op=${startTime} OpenAI call completed after ${Date.now() - startTime}ms total, tokens_in=${tokensInput} tokens_out=${tokensOutput}`);
+      console.log(`[SPARK] op=${startTime} parsed actions:`, JSON.stringify(parsed.actions?.map(a => a.action_type)), 'confidence=', parsed.confidence_score, 'raw_preview=', (completion.choices[0].message.content || '').slice(0, 300));
     } catch (aiErr) {
       clearTimeout(timeoutId);
       console.error(`[SPARK] op=${startTime} OpenAI call FAILED after ${Date.now() - startTime}ms:`, aiErr.name, aiErr.message);
@@ -2586,7 +2587,10 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
       }
     }
 
+    console.log(`[SPARK] op=${startTime} responseActions built:`, JSON.stringify(responseActions.map(a => ({ action_type: a.action_type, action_id: a.action_id, details: a.details }))));
+
     if (responseActions.length === 0) {
+      console.log(`[SPARK] op=${startTime} responseActions EMPTY -- falling to clarify`);
       return c.json({ routing: 'clarify', message: 'Could not create actions. Try again.', confidence_score: 0, actions: [] });
     }
 
@@ -2643,6 +2647,8 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
         if (parts.length > 0) aiInsight = parts.join('. ') + '.';
       }
     } catch {}
+
+    console.log(`[SPARK] op=${startTime} returning preview response, draft_id=${draftId}, action_count=${responseActions.length} after ${Date.now() - startTime}ms total`);
 
     return c.json({
       draft_id: draftId,
