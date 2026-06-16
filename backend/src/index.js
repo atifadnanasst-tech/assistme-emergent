@@ -10,7 +10,7 @@ import { registerOrgAiRoutes } from './services/ai/orgAi/routes.js';
 import { getBusinessProfile, updateBusinessProfileFields } from './services/capabilities/setBusinessProfileCapability.js';
 import { registerSupplierRoutes } from './services/business/supplierRoutes.js';
 import { recordPayment } from './services/business/recordPayment.js';
-import { recordOpeningPosition } from './services/business/recordOpeningPosition.js';
+import { recordOpeningPosition, isOpeningPositionAllowed } from './services/business/recordOpeningPosition.js';
 import { extractVisualization } from './services/ai/visualizationParser.js';
 import PDFDocument from 'pdfkit';
 
@@ -2424,6 +2424,11 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
     // Build and save each action as a separate ai_actions record
     const responseActions = [];
     let draftId = null;
+    // Collects owner-facing rejection reasons from the eligibility
+    // pre-check (e.g. opening balance blocked for a locked customer) --
+    // surfaced in ai_insight / clarify message below so the owner gets
+    // an explanation instead of silence.
+    const blockedActionReasons = [];
 
     for (const action of parsed.actions) {
       const ent = action.entities || {};
@@ -2525,6 +2530,51 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
         });
 
       } else {
+        // ── Opening Position eligibility pre-check (Spark preview-UX fix,
+        //    Jun 2026): before building a preview card for a
+        //    record_opening_balance_receivable/payable action, ask the
+        //    SAME deterministic guard that recordOpeningPosition() itself
+        //    enforces at execution time -- isOpeningPositionAllowed() --
+        //    whether this customer is actually eligible. If not, skip
+        //    building the action/preview entirely and surface the reason
+        //    instead, so the owner never sees a misleading "Confirm"
+        //    button for something that will be rejected anyway.
+        //    The real guard inside recordOpeningPosition() still runs at
+        //    confirm/execute time -- this is a UX check, not a
+        //    replacement for the financial safety check (covers the race
+        //    window between preview and confirm). ──
+        if (action.action_type === 'record_opening_balance_receivable' || action.action_type === 'record_opening_balance_payable') {
+          const obDirection = action.action_type === 'record_opening_balance_receivable' ? 'receivable' : 'payable';
+          const { allowed, reason } = await isOpeningPositionAllowed(supabase, organisationId, customerId, obDirection);
+          if (!allowed) {
+            console.log(`[SPARK] op=${startTime} opening balance blocked for customer=${customer.name}: ${reason}`);
+            blockedActionReasons.push(reason);
+
+            // Surface the rejection as the same pink system-message banner
+            // the confirm-time guard already shows -- so a blocked opening
+            // balance is never silent, whether it's rejected here (preview
+            // stage) or at execute time (race-window safety net).
+            if (conversationId) {
+              try {
+                await supabase.from('messages').insert({
+                  organisation_id: organisationId, conversation_id: conversationId,
+                  role: 'system', content: `⚠️ ${reason}`,
+                  metadata: {
+                    sender_type: 'system', visibility: 'owner_only',
+                    message_type: 'system_alert', read_by_owner: true,
+                    preview_text: `Opening balance for ${customer.name}`,
+                  },
+                  tokens_input: 0, tokens_output: 0,
+                });
+              } catch (bannerErr) {
+                console.warn(`[SPARK] op=${startTime} failed to insert blocked-action banner:`, bannerErr.message);
+              }
+            }
+
+            continue;
+          }
+        }
+
         // Non-invoice actions (delivery, reminder, payment, opening balance)
         const actionParams = {
           customer_id: customerId,
@@ -2588,7 +2638,10 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
 
     if (responseActions.length === 0) {
       console.log(`[SPARK] op=${startTime} responseActions EMPTY -- falling to clarify`);
-      return c.json({ routing: 'clarify', message: 'Could not create actions. Try again.', confidence_score: 0, actions: [] });
+      const clarifyMessage = blockedActionReasons.length > 0
+        ? blockedActionReasons[0]
+        : 'Could not create actions. Try again.';
+      return c.json({ routing: 'clarify', message: clarifyMessage, confidence_score: 0, actions: [] });
     }
 
     // Post-processing: if create_invoice has delivery_date or due_date, ensure separate delivery/reminder actions exist
