@@ -12,6 +12,7 @@ import { registerSupplierRoutes } from './services/business/supplierRoutes.js';
 import { recordPayment } from './services/business/recordPayment.js';
 import { recordOpeningPosition, isOpeningPositionAllowed } from './services/business/recordOpeningPosition.js';
 import { extractVisualization } from './services/ai/visualizationParser.js';
+import { getDocumentBrandingProfile } from './services/pdf/documentBrandingProfile.js';
 import PDFDocument from 'pdfkit';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -1801,19 +1802,8 @@ async function generateDocumentPDF({ documentId, organisationId, documentType, d
     const { data: org } = await supabase.from('organisations')
       .select('name').eq('id', organisationId).single();
 
-    // Fetch business profile header_cache
-    const { data: bizProfile } = await supabase.from('business_profiles')
-      .select('business_name, gstin, address_line1, address_line2, city, state, postal_code, phone, email, terms_text, header_cache')
-      .eq('organisation_id', organisationId).eq('is_default', true).eq('is_active', true)
-      .is('deleted_at', null).maybeSingle();
-
-    // Fetch footer promo from system_config
-    let footerPromo = '';
-    try {
-      const { data: sysConfig } = await supabase.from('system_config')
-        .select('value').eq('key', 'pdf_footer_promo').eq('is_active', true).maybeSingle();
-      if (sysConfig) footerPromo = sysConfig.value || '';
-    } catch {}
+    // Document Branding Engine -- single source of truth for header/footer/bank details
+    const biz = await getDocumentBrandingProfile(organisationId, supabase);
 
     const PDFDocument = (await import('pdfkit')).default;
     const doc2 = new PDFDocument({ size: 'A4', margin: 50 });
@@ -1822,7 +1812,6 @@ async function generateDocumentPDF({ documentId, organisationId, documentType, d
     const pdfReady = new Promise((resolve) => doc2.on('end', resolve));
 
     // ── Header: Business Profile
-    const biz = bizProfile || {};
     const businessName = biz.business_name || org?.name || 'Business';
     doc2.fontSize(18).font('Helvetica-Bold').text(businessName, { align: 'center' });
     if (biz.gstin) doc2.fontSize(9).font('Helvetica').text(`GSTIN: ${biz.gstin}`, { align: 'center' });
@@ -1899,7 +1888,7 @@ async function generateDocumentPDF({ documentId, organisationId, documentType, d
     doc2.text(`₹${(doc.total_amount || 0).toFixed(2)}`, 450, doc2.y - 14, { width: 95, align: 'right' });
 
     // ── Footer
-    if (biz.terms_text || footerPromo) {
+    if (biz.terms_text || biz.assistme_strip_text) {
       doc2.moveDown(2);
       doc2.moveTo(50, doc2.y).lineTo(545, doc2.y).stroke();
       doc2.moveDown(0.3);
@@ -1907,8 +1896,8 @@ async function generateDocumentPDF({ documentId, organisationId, documentType, d
         doc2.fontSize(8).font('Helvetica').text(biz.terms_text, { align: 'left' });
         doc2.moveDown(0.3);
       }
-      if (footerPromo) {
-        doc2.fontSize(8).font('Helvetica').fillColor('#888888').text(footerPromo, { align: 'center' });
+      if (biz.assistme_strip_text) {
+        doc2.fontSize(8).font('Helvetica').fillColor('#888888').text(biz.assistme_strip_text, { align: 'center' });
         doc2.fillColor('#000000');
       }
     }
