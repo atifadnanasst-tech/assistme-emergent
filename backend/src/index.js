@@ -6135,7 +6135,12 @@ if (supabase) {
       if (!auth) return c.json({ error: 'unauthorized' }, 401);
       const profile = await getBusinessProfile(auth.organisationId, supabase);
       if (!profile) return c.json({ error: 'profile_not_found' }, 404);
-      return c.json({ profile });
+      // subscription_plan included so the frontend can gate the branding
+      // toggle without a second request -- same org lookup pattern already
+      // used elsewhere (index.js ~5428), just inlined here.
+      const { data: org } = await supabase.from('organisations')
+        .select('subscription_plan').eq('id', auth.organisationId).single();
+      return c.json({ profile, subscription_plan: org?.subscription_plan || 'free' });
     } catch (err) {
       console.error('GET /api/business-profile error:', err);
       return c.json({ error: 'server_error' }, 500);
