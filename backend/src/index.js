@@ -5088,6 +5088,19 @@ app.post('/api/invoices', async (c) => {
 });
 
 // ─── POST /api/invoices/:id/pdf ─────────────────────────────
+// Converged onto generateDocumentPDF() Jun 17 2026 -- this route previously
+// had its own ~95-line duplicate pdfkit implementation (header, items table,
+// totals, storage upload, attachments insert), built before business_profiles
+// existed, with zero Document Branding Engine awareness (no GSTIN, address,
+// phone, logo, footer -- only org name + hardcoded "TAX INVOICE"). This is a
+// REAL, live consumer (frontend/app/customer/[id]/invoice.tsx's manual New
+// Invoice screen calls this directly), discovered during signature-embed
+// prep, not dead code. title hardcoded to 'TAX INVOICE' here matches the
+// PRE-EXISTING legacy behavior exactly -- invoice_type (Bill of Supply vs Tax
+// Invoice) is a transient calculateInvoiceTotals() result, never persisted to
+// the invoices row, so it was never actually available to this route even
+// before this change. Not introducing or fixing that gap here, only
+// preserving it -- a separate concern from branding consolidation.
 app.post('/api/invoices/:invoice_id/pdf', async (c) => {
   try {
     const auth = await authenticateChat(c);
@@ -5095,126 +5108,30 @@ app.post('/api/invoices/:invoice_id/pdf', async (c) => {
     const { organisationId } = auth;
     const invoiceId = c.req.param('invoice_id');
 
-    console.log(`📄 [PDF] Generating for invoice: ${invoiceId}`);
-
-    // Fetch invoice + items + customer + org
-    const { data: invoice } = await supabase.from('invoices').select('*').eq('id', invoiceId).eq('organisation_id', organisationId).single();
+    const { data: invoice } = await supabase.from('invoices')
+      .select('invoice_number').eq('id', invoiceId).eq('organisation_id', organisationId).single();
     if (!invoice) {
-      console.error('📄 [PDF] Invoice not found:', invoiceId);
+      console.error('[PDF] Invoice not found:', invoiceId);
       return c.json({ error: 'invoice_not_found' }, 404);
     }
 
-    const { data: items } = await supabase.from('invoice_items').select('*').eq('invoice_id', invoiceId).order('sort_order');
-    const { data: customer } = await supabase.from('customers').select('name, phone, tax_id').eq('id', invoice.customer_id).single();
-    const { data: org } = await supabase.from('organisations').select('name').eq('id', organisationId).single();
-
-    console.log(`📄 [PDF] Invoice: ${invoice.invoice_number}, Items: ${items?.length || 0}`);
-
-    // Generate PDF with pdfkit
-    const doc = new PDFDocument({ size: 'A4', margin: 50 });
-    const chunks = [];
-    doc.on('data', chunk => chunks.push(chunk));
-
-    const pdfReady = new Promise((resolve) => doc.on('end', resolve));
-
-    // Header
-    doc.fontSize(20).font('Helvetica-Bold').text(org?.name || 'Business', { align: 'center' });
-    doc.moveDown(0.3);
-    doc.fontSize(14).font('Helvetica').text('TAX INVOICE', { align: 'center' });
-    doc.moveDown(0.5);
-    doc.fontSize(10).text(`Invoice #: ${invoice.invoice_number}`, { align: 'right' });
-    doc.text(`Date: ${invoice.issue_date}`, { align: 'right' });
-    doc.text(`Due: ${invoice.due_date}`, { align: 'right' });
-    doc.moveDown(0.5);
-
-    // Bill To
-    doc.fontSize(11).font('Helvetica-Bold').text('BILL TO:');
-    doc.font('Helvetica').fontSize(10).text(customer?.name || '');
-    if (customer?.tax_id) doc.text(`GSTIN: ${customer.tax_id}`);
-    doc.moveDown(1);
-
-    // Items table header
-    const tableTop = doc.y;
-    doc.font('Helvetica-Bold').fontSize(9);
-    doc.text('#', 50, tableTop, { width: 20 });
-    doc.text('Item', 75, tableTop, { width: 200 });
-    doc.text('Qty', 280, tableTop, { width: 40, align: 'right' });
-    doc.text('Rate', 330, tableTop, { width: 70, align: 'right' });
-    doc.text('Tax', 405, tableTop, { width: 40, align: 'right' });
-    doc.text('Amount', 450, tableTop, { width: 95, align: 'right' });
-    doc.moveDown(0.3);
-    doc.moveTo(50, doc.y).lineTo(545, doc.y).stroke();
-    doc.moveDown(0.3);
-
-    // Items
-    doc.font('Helvetica').fontSize(9);
-    (items || []).forEach((item, i) => {
-      const y = doc.y;
-      doc.text(`${i + 1}`, 50, y, { width: 20 });
-      doc.text(item.description || '', 75, y, { width: 200 });
-      doc.text(`${item.quantity}`, 280, y, { width: 40, align: 'right' });
-      doc.text(`₹${(item.unit_price || 0).toFixed(2)}`, 330, y, { width: 70, align: 'right' });
-      doc.text(`${item.tax_rate || 0}%`, 405, y, { width: 40, align: 'right' });
-      doc.text(`₹${(item.line_total || 0).toFixed(2)}`, 450, y, { width: 95, align: 'right' });
-      doc.moveDown(0.5);
+    const pdfUrl = await generateDocumentPDF({
+      documentId: invoiceId,
+      organisationId,
+      documentType: 'invoice',
+      documentNumber: invoice.invoice_number,
+      title: 'TAX INVOICE',
+      storageBucket: 'invoices',
+      entityType: 'invoice',
     });
 
-    doc.moveDown(0.3);
-    doc.moveTo(50, doc.y).lineTo(545, doc.y).stroke();
-    doc.moveDown(0.5);
-
-    // Totals
-    const totalsX = 380;
-    doc.font('Helvetica').fontSize(10);
-    doc.text('Subtotal:', totalsX, doc.y, { width: 70 });
-    doc.text(`₹${(invoice.subtotal || 0).toFixed(2)}`, 450, doc.y - 12, { width: 95, align: 'right' });
-    doc.moveDown(0.3);
-    doc.text(`GST:`, totalsX, doc.y, { width: 70 });
-    doc.text(`₹${(invoice.tax_amount || 0).toFixed(2)}`, 450, doc.y - 12, { width: 95, align: 'right' });
-    if (invoice.custom_fields?.packing_handling > 0) {
-      doc.moveDown(0.3);
-      doc.text('P&H:', totalsX, doc.y, { width: 70 });
-      doc.text(`₹${invoice.custom_fields.packing_handling.toFixed(2)}`, 450, doc.y - 12, { width: 95, align: 'right' });
-    }
-    doc.moveDown(0.5);
-    doc.font('Helvetica-Bold').fontSize(12);
-    doc.text('TOTAL:', totalsX, doc.y, { width: 70 });
-    doc.text(`₹${(invoice.total_amount || 0).toFixed(2)}`, 450, doc.y - 14, { width: 95, align: 'right' });
-
-    doc.end();
-    await pdfReady;
-
-    const pdfBuffer = Buffer.concat(chunks);
-    const fileName = `${invoice.invoice_number}_${new Date().toISOString().replace(/[-:T.Z]/g, '').slice(0,15)}.pdf`;
-    const storagePath = `${organisationId}/${fileName}`;
-
-    console.log(`📄 [PDF] Uploading to storage: ${storagePath}`);
-
-    // Upload to Supabase Storage
-    const { error: uploadErr } = await supabase.storage.from('invoices').upload(storagePath, pdfBuffer, {
-      contentType: 'application/pdf', upsert: true,
-    });
-    if (uploadErr) {
-      console.error('📄 [PDF] Upload error:', uploadErr);
-      return c.json({ error: 'upload_failed', detail: uploadErr.message }, 500);
+    if (!pdfUrl) {
+      return c.json({ error: 'pdf_generation_failed' }, 500);
     }
 
-    const { data: publicUrl } = supabase.storage.from('invoices').getPublicUrl(storagePath);
-    console.log(`📄 [PDF] Public URL: ${publicUrl.publicUrl}`);
-
-    // Save to attachments table
-    try {
-      await supabase.from('attachments').insert({
-        organisation_id: organisationId, entity_type: 'invoice', entity_id: invoiceId,
-        file_name: fileName, mime_type: 'application/pdf',
-        storage_path: storagePath, public_url: publicUrl.publicUrl,
-      });
-      console.log(`📄 [PDF] Attachment record saved`);
-    } catch (attErr) {
-      console.warn('📄 [PDF] Attachment record failed:', attErr);
-    }
-
-    return c.json({ pdf_url: publicUrl.publicUrl, attachment_id: null });
+    // Response shape kept identical to the pre-existing contract --
+    // frontend reads pdf.pdf_url only, confirmed via grep before this change.
+    return c.json({ pdf_url: pdfUrl, attachment_id: null });
   } catch (error) {
     console.error('POST /api/invoices/pdf error:', error);
     return c.json({ error: 'server_error' }, 500);
