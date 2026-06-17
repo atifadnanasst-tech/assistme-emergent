@@ -1046,6 +1046,22 @@ export default function CustomerChatScreen() {
 
       const data = await res.json();
 
+      // SILENT-FAILURE FIX (Jun 2026): the backend has multiple legitimate
+      // early-return error paths (missing_conversation_id,
+      // conversation_not_found, ai_error, server_error, etc.) that return
+      // { error: '...' } with NO routing field. Previously, none of these
+      // matched any branch below, the entire if/else chain fell through
+      // silently, and sparkWorkflowState was left stuck at 'processing'
+      // with zero feedback to the owner -- this was the root cause of the
+      // "white flash, then nothing happens" symptom reported multiple
+      // times. Check for this case FIRST, before the routing checks.
+      if (!res.ok || data.error) {
+        console.warn('[Spark] Unhandled error response', { status: res.status, data });
+        Alert.alert('Could not process', data.message || 'Something went wrong. Please try again.');
+        setSparkWorkflowState('error');
+        return;
+      }
+
       if (data.routing === 'clarify') {
         // AI asks clarifying question — reload to show it
         setSparkWorkflowState('idle');
@@ -1088,9 +1104,24 @@ export default function CustomerChatScreen() {
         }
         setSparkWorkflowState('idle');
         await loadChat();
+      } else {
+        // Unexpected routing value -- neither a known success path nor
+        // caught by the error check above. Should be rare/impossible, but
+        // per the same principle: never let an unrecognized response
+        // fall through silently.
+        console.warn('[Spark] Unrecognized routing value', { routing: data.routing, data });
+        Alert.alert('Could not process', 'Something unexpected happened. Please try again.');
+        setSparkWorkflowState('error');
       }
     } catch (err: any) {
-      if (err.name !== 'AbortError') {
+      // SILENT-FAILURE FIX (Jun 2026): AbortError was previously swallowed
+      // silently -- if the request timed out (15s), the owner saw nothing
+      // at all. Surface it distinctly from other failures.
+      if (err.name === 'AbortError') {
+        console.warn('[Spark] Request timed out after 15s', { customer_id, query: text });
+        Alert.alert('Taking too long', 'This is taking longer than expected. Please try again.');
+      } else {
+        console.warn('[Spark] Request failed', { customer_id, error: err.message });
         Alert.alert('Spark Error', 'Could not process your request. Try again.');
       }
       setSparkWorkflowState('error');
@@ -2461,6 +2492,8 @@ export default function CustomerChatScreen() {
                      action.action_type === 'record_supplier_payment' ? 'Supplier Payment' :
                      action.action_type === 'goods_returned' ? 'Goods Returned' :
                      action.action_type === 'record_expense' ? 'Record Expense' :
+                     action.action_type === 'record_opening_balance_receivable' ? 'Set Opening Balance' :
+                     action.action_type === 'record_opening_balance_payable' ? 'Set Opening Balance' :
                      action.action_type}
                   </Text>
 

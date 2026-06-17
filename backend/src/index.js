@@ -10,6 +10,7 @@ import { registerOrgAiRoutes } from './services/ai/orgAi/routes.js';
 import { getBusinessProfile, updateBusinessProfileFields } from './services/capabilities/setBusinessProfileCapability.js';
 import { registerSupplierRoutes } from './services/business/supplierRoutes.js';
 import { recordPayment } from './services/business/recordPayment.js';
+import { recordOpeningPosition, isOpeningPositionAllowed } from './services/business/recordOpeningPosition.js';
 import { extractVisualization } from './services/ai/visualizationParser.js';
 import PDFDocument from 'pdfkit';
 
@@ -1963,7 +1964,7 @@ Extract ALL actions from the owner's instruction. Output ONLY this JSON — no o
 {
   "actions": [
     {
-      "action_type": "create_invoice | create_quote | convert_quote_to_invoice | schedule_delivery | update_delivery_status | set_reminder | record_payment | goods_returned | record_expense | create_purchase_bill | record_supplier_payment",
+      "action_type": "create_invoice | create_quote | convert_quote_to_invoice | schedule_delivery | update_delivery_status | set_reminder | record_payment | goods_returned | record_expense | create_purchase_bill | record_supplier_payment | record_opening_balance_receivable | record_opening_balance_payable",
       "entities": {
         "items": [{"product_name": "string", "quantity": number, "unit_price": number or null, "discount_pct": number}],
         "amount": number or null,
@@ -2000,7 +2001,14 @@ Action rules:
 - goods_returned: use when owner says maal wapis aaya, return, goods returned. Extract items and reason.
 - record_expense: use when owner says kharcha hua, expense, paid for. Extract amount, category, description.
 - create_purchase_bill: use when owner says maal aya, goods received, purchase bill, maal mila, stock aya, supplier se maal. Extract items with quantity and unit_price into entities.items. Same structure as create_invoice. due_date auto-calculated from payment terms if not specified.
-- record_supplier_payment: use when owner says supplier ko diya, supplier ko payment, paid supplier, outgoing payment to supplier. Extract amount, payment_mode, bank_account_name. Same extraction as record_payment but direction is outgoing.
+- record_supplier_payment: use when owner describes MONEY ACTUALLY MOVING -- "supplier ko diya", "supplier ko de diya", "payment kar diya", "transfer kar do", "pay kar do", "bhej do", "paid supplier", "abhi diya". This is an action -- money already moved, or an instruction to move it now. Extract amount, payment_mode, bank_account_name. Same extraction as record_payment but direction is outgoing.
+- record_opening_balance_receivable: use when owner DECLARES a pre-existing balance/relationship state -- not money moving, but a fact being recorded about what is owed. Use when owner says "[customer] owes me [amount]", "[customer] ka opening balance [amount] hai", "opening balance [amount] kar do", "[customer] ke upar [amount] baki hai", "[customer] se [amount] lena hai". Extract amount only. Do NOT try to judge whether this customer is new or has prior transactions -- you do not have access to their transaction history, only to recent chat messages, which are NOT reliable evidence of real invoices/payments/bills. Always extract this action when the phrasing matches a DECLARATION (not money moving); a separate, deterministic backend check (which DOES have real transaction data) will independently decide whether to allow or reject it.
+- record_opening_balance_payable: same as record_opening_balance_receivable but for the OPPOSITE direction -- a DECLARATION that the owner owes THIS customer/entity, not money moving. Use when owner says "I owe [customer] [amount]", "[customer] ko [amount] dena hai", "hamein [customer] ko [amount] dena hai", "[customer] ko [amount] dena baki hai", "[customer] se [amount] ka maal liya tha", "[customer] ka [amount] baki hai humpar", "[customer] ka [amount] nikalta hai", "[customer] ko [amount] nikalta hai". Extract amount only. Same rule: do not judge eligibility, just extract whenever the phrasing is a declaration.
+  DISAMBIGUATING record_opening_balance_payable vs record_supplier_payment (BOTH involve the owner owing/paying money outward -- classify by what the WORDS describe, never by guessing the customer's history):
+    - DECLARATION of an owed/pending state -- "dena hai", "hamein ... dena hai", "dena baki hai", "ka baki hai humpar", "nikalta hai", "owe", "we owe" -- nothing has moved yet, this is a fact being recorded = record_opening_balance_payable.
+    - ACTION of money moving -- "de diya", "payment kar diya", "transfer kar do", "pay kar do", "bhej do", "abhi diya" -- money has moved or the owner is instructing it to move right now = record_supplier_payment.
+    This distinction is about the GRAMMAR of what was said (a state/fact vs. a completed/in-progress action), not about whether the customer is new -- a brand-new contact and a contact with years of history can both use either phrasing; the deterministic backend check (not you) decides if record_opening_balance_payable is actually allowed for this customer.
+  IMPORTANT for both opening balance types: do NOT use for correcting an existing balance when the owner's OWN WORDS clearly indicate a correction (e.g. "set balance to X", "humne hisaab kiya, ab X baki hai", "change the opening balance to X") -- that is not supported yet. But absent such explicit correction language, always extract the action -- never withhold it based on a guess about the customer's transaction history.
 - invoice_type: set Bill of Supply if owner says bina GST, without GST, composition. Default is Tax Invoice.
 - freight_taxable: set true only if owner explicitly says freight has GST. Default false.
 - freight notation examples: "freight 50", "freight rupees 50", "freight Rs 50", "freight 50/-", "dhulai 50", "transport 50" — all mean freight=50. Always extract as number only into entities.freight.
@@ -2011,7 +2019,7 @@ Action rules:
 - No markdown. No preamble. JSON only.`;
 
 const FINANCIAL_INTENTS = ['create_invoice', 'create_quote', 'record_payment', 'set_reminder', 'goods_returned', 'record_expense', 'convert_quote_to_invoice', 'create_purchase_bill', 'record_supplier_payment'];
-const ALLOWED_INTENTS = ['create_invoice', 'create_quote', 'convert_quote_to_invoice', 'schedule_delivery', 'update_delivery_status', 'set_reminder', 'record_payment', 'goods_returned', 'record_expense', 'create_purchase_bill', 'record_supplier_payment', 'query', 'ambiguous'];
+const ALLOWED_INTENTS = ['create_invoice', 'create_quote', 'convert_quote_to_invoice', 'schedule_delivery', 'update_delivery_status', 'set_reminder', 'record_payment', 'goods_returned', 'record_expense', 'create_purchase_bill', 'record_supplier_payment', 'record_opening_balance_receivable', 'record_opening_balance_payable', 'query', 'ambiguous'];
 
 function parseSparkResponse(text) {
   try {
@@ -2164,27 +2172,37 @@ async function resolveProduct({ productName, customerId, organisationId }) {
 // ─── POST /api/chat/:customer_id/spark ─────────────────────
 app.post('/api/chat/:customer_id/spark', async (c) => {
   const startTime = Date.now();
+  // Debugging instrumentation (audit recommendation, Jun 2026): this MUST
+  // be the literal first executable line. Previously there was no log
+  // statement until after auth/customer/conversation validation, so any
+  // early failure or rejection in those steps produced ZERO trace in
+  // pm2 logs -- this was the root blocker in diagnosing the Aziz
+  // white-screen incident (could not tell if the request reached the
+  // backend at all). Keep this permanently, not just for debugging.
+  console.log(`[SPARK] HIT customer_id=${c.req.param('customer_id')} op=${startTime}`);
   try {
     const auth = await authenticateChat(c);
-    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    if (!auth) { console.log(`[SPARK] op=${startTime} unauthorized after ${Date.now() - startTime}ms`); return c.json({ error: 'unauthorized' }, 401); }
     const { userId, organisationId } = auth;
     const customerId = c.req.param('customer_id');
 
     const customer = await validateCustomer(customerId, organisationId);
-    if (!customer) return c.json({ error: 'customer_not_found' }, 404);
+    if (!customer) { console.log(`[SPARK] op=${startTime} customer_not_found after ${Date.now() - startTime}ms`); return c.json({ error: 'customer_not_found' }, 404); }
 
     const body = await c.req.json();
     const query = body.query?.trim() || (body.forwarded_attachment ? 'Owner shared an attachment. Determine the appropriate business action from the attachment and conversation context. Default to create_invoice if unclear.' : '');
     const conversationId = body.conversation_id;
     const forwardedAttachment = body.forwarded_attachment || null;
-    if (!query) return c.json({ error: 'empty_query' }, 400);
-    if (!conversationId) return c.json({ error: 'missing_conversation_id' }, 400);
+    if (!query) { console.log(`[SPARK] op=${startTime} empty_query after ${Date.now() - startTime}ms`); return c.json({ error: 'empty_query' }, 400); }
+    if (!conversationId) { console.log(`[SPARK] op=${startTime} missing_conversation_id after ${Date.now() - startTime}ms`); return c.json({ error: 'missing_conversation_id' }, 400); }
+
+    console.log(`[SPARK] op=${startTime} query="${query.slice(0, 80)}" customer=${customer.name} after ${Date.now() - startTime}ms`);
 
     // Validate conversation belongs to org
     const { data: conv } = await supabase
       .from('conversations').select('id')
       .eq('id', conversationId).eq('organisation_id', organisationId).maybeSingle();
-    if (!conv) return c.json({ error: 'conversation_not_found' }, 404);
+    if (!conv) { console.log(`[SPARK] op=${startTime} conversation_not_found after ${Date.now() - startTime}ms`); return c.json({ error: 'conversation_not_found' }, 404); }
 
     // Layer 1: ai_context (global)
     let globalContext = '';
@@ -2350,6 +2368,8 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 15000);
 
+    console.log(`[SPARK] op=${startTime} starting OpenAI call after ${Date.now() - startTime}ms (pre-call setup), prompt_chars=${systemContent.length}`);
+
     try {
       const completion = await client.chat.completions.create({
         model: 'gpt-4o-mini',
@@ -2363,9 +2383,10 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
       tokensInput = completion.usage?.prompt_tokens || 0;
       tokensOutput = completion.usage?.completion_tokens || 0;
       parsed = parseSparkResponse(completion.choices[0].message.content || '');
+      console.log(`[SPARK] op=${startTime} OpenAI call completed after ${Date.now() - startTime}ms total, tokens_in=${tokensInput} tokens_out=${tokensOutput}`);
     } catch (aiErr) {
       clearTimeout(timeoutId);
-      console.error('Spark OpenAI call failed:', aiErr.message);
+      console.error(`[SPARK] op=${startTime} OpenAI call FAILED after ${Date.now() - startTime}ms:`, aiErr.name, aiErr.message);
       // Log failure
       try {
         await supabase.from('ai_usage_log').insert({
@@ -2407,6 +2428,11 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
     // Build and save each action as a separate ai_actions record
     const responseActions = [];
     let draftId = null;
+    // Collects owner-facing rejection reasons from the eligibility
+    // pre-check (e.g. opening balance blocked for a locked customer) --
+    // surfaced in ai_insight / clarify message below so the owner gets
+    // an explanation instead of silence.
+    const blockedActionReasons = [];
 
     for (const action of parsed.actions) {
       const ent = action.entities || {};
@@ -2508,17 +2534,74 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
         });
 
       } else {
-        // Non-invoice actions (delivery, reminder, payment)
+        // ── Opening Position eligibility pre-check (Spark preview-UX fix,
+        //    Jun 2026): before building a preview card for a
+        //    record_opening_balance_receivable/payable action, ask the
+        //    SAME deterministic guard that recordOpeningPosition() itself
+        //    enforces at execution time -- isOpeningPositionAllowed() --
+        //    whether this customer is actually eligible. If not, skip
+        //    building the action/preview entirely and surface the reason
+        //    instead, so the owner never sees a misleading "Confirm"
+        //    button for something that will be rejected anyway.
+        //    The real guard inside recordOpeningPosition() still runs at
+        //    confirm/execute time -- this is a UX check, not a
+        //    replacement for the financial safety check (covers the race
+        //    window between preview and confirm). ──
+        if (action.action_type === 'record_opening_balance_receivable' || action.action_type === 'record_opening_balance_payable') {
+          const obDirection = action.action_type === 'record_opening_balance_receivable' ? 'receivable' : 'payable';
+          const { allowed, reason } = await isOpeningPositionAllowed(supabase, organisationId, customerId, obDirection);
+          if (!allowed) {
+            console.log(`[SPARK] op=${startTime} opening balance blocked for customer=${customer.name}: ${reason}`);
+            blockedActionReasons.push(reason);
+
+            // Surface the rejection as the same pink system-message banner
+            // the confirm-time guard already shows -- so a blocked opening
+            // balance is never silent, whether it's rejected here (preview
+            // stage) or at execute time (race-window safety net).
+            if (conversationId) {
+              try {
+                await supabase.from('messages').insert({
+                  organisation_id: organisationId, conversation_id: conversationId,
+                  role: 'system', content: `⚠️ ${reason}`,
+                  metadata: {
+                    sender_type: 'system', visibility: 'owner_only',
+                    message_type: 'system_alert', read_by_owner: true,
+                    preview_text: `Opening balance for ${customer.name}`,
+                  },
+                  tokens_input: 0, tokens_output: 0,
+                });
+              } catch (bannerErr) {
+                console.warn(`[SPARK] op=${startTime} failed to insert blocked-action banner:`, bannerErr.message);
+              }
+            }
+
+            continue;
+          }
+        }
+
+        // Non-invoice actions (delivery, reminder, payment, opening balance)
         const actionParams = {
           customer_id: customerId,
           customer_name: customer.name,
           amount: ent.amount || null,
           due_date: ent.due_date || null,
           delivery_date: ent.delivery_date || null,
+          // record_opening_balance_receivable/payable: direction maps 1:1
+          // from action_type -- see recordOpeningPosition() primitive
+          // (backend/src/services/business/recordOpeningPosition.js)
+          direction: action.action_type === 'record_opening_balance_receivable'
+            ? 'receivable'
+            : action.action_type === 'record_opening_balance_payable'
+            ? 'payable'
+            : null,
           description: action.action_type === 'schedule_delivery'
             ? `Delivery for ${customer.name}`
             : action.action_type === 'set_reminder'
             ? `Payment reminder for ${customer.name}`
+            : action.action_type === 'record_opening_balance_receivable'
+            ? `Opening balance: ${customer.name} owes you`
+            : action.action_type === 'record_opening_balance_payable'
+            ? `Opening balance: you owe ${customer.name}`
             : `Payment from ${customer.name}`,
         };
 
@@ -2543,6 +2626,8 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
           details = `Send on: ${ent.due_date || 'TBD'}`;
         } else if (action.action_type === 'record_payment') {
           details = ent.amount ? `₹${ent.amount.toLocaleString('en-IN')}` : 'Amount TBD';
+        } else if (action.action_type === 'record_opening_balance_receivable' || action.action_type === 'record_opening_balance_payable') {
+          details = ent.amount ? `₹${ent.amount.toLocaleString('en-IN')}` : 'Amount TBD';
         }
 
         responseActions.push({
@@ -2556,7 +2641,11 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
     }
 
     if (responseActions.length === 0) {
-      return c.json({ routing: 'clarify', message: 'Could not create actions. Try again.', confidence_score: 0, actions: [] });
+      console.log(`[SPARK] op=${startTime} responseActions EMPTY -- falling to clarify`);
+      const clarifyMessage = blockedActionReasons.length > 0
+        ? blockedActionReasons[0]
+        : 'Could not create actions. Try again.';
+      return c.json({ routing: 'clarify', message: clarifyMessage, confidence_score: 0, actions: [] });
     }
 
     // Post-processing: if create_invoice has delivery_date or due_date, ensure separate delivery/reminder actions exist
@@ -2612,6 +2701,8 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
         if (parts.length > 0) aiInsight = parts.join('. ') + '.';
       }
     } catch {}
+
+    console.log(`[SPARK] op=${startTime} returning preview response, draft_id=${draftId}, action_count=${responseActions.length} after ${Date.now() - startTime}ms total`);
 
     return c.json({
       draft_id: draftId,
@@ -3010,6 +3101,69 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
               }
             }
             if (payResult.status === 'success' || payResult.status === 'partial_success') {
+              executed.push(actionId);
+            } else {
+              failed.push(actionId);
+            }
+            break;
+          }
+
+          case 'record_opening_balance_receivable':
+          case 'record_opening_balance_payable': {
+            // Both action types call the same recordOpeningPosition() primitive
+            // (Patch 1, backend/src/services/business/recordOpeningPosition.js).
+            // direction was set in /spark's actionParams builder based on
+            // action_type (1:1 mapping, see SPARK_SYSTEM_PROMPT).
+            // Full architecture: AssistMe_Financial_Calculation_Rules.md ->
+            // "Opening Position Rules"
+            let obResult = { status: 'failed', events: [], error: 'invalid_amount' };
+            const obDirection = params.direction
+              || (action.action_type === 'record_opening_balance_receivable' ? 'receivable' : 'payable');
+
+            if (params.amount && params.amount > 0) {
+              obResult = await recordOpeningPosition(
+                supabase, organisationId, customerId, params.amount, obDirection
+              );
+            }
+
+            let obAckText = '';
+            if (obResult.status === 'success') {
+              const amountStr = `₹${params.amount.toLocaleString('en-IN')}`;
+              obAckText = obDirection === 'receivable'
+                ? `✓ Opening balance recorded: ${customer.name} owes ${amountStr}`
+                : `✓ Opening balance recorded: you owe ${customer.name} ${amountStr}`;
+            } else if (obResult.error === 'opening_position_locked') {
+              obAckText = `⚠️ ${obResult.message || 'This customer already has transaction history -- opening balance can only be set for a brand-new customer.'}`;
+            } else if (obResult.error === 'opening_position_corrupt_state') {
+              obAckText = `⚠️ ${obResult.message || 'Multiple opening balance records exist for this customer -- manual review required.'}`;
+            } else if (obResult.error === 'invalid_amount') {
+              obAckText = `⚠️ Could not record opening balance — amount missing or invalid.`;
+            } else {
+              obAckText = `⚠️ Opening balance could not be recorded. ${obResult.message || 'Please try again.'}`;
+              console.warn('[Spark record_opening_balance] failed op:', obResult.operation_id, 'error:', obResult.error);
+            }
+
+            if (obAckText) {
+              const { data: obAckConv } = await supabase
+                .from('conversations').select('id')
+                .eq('organisation_id', organisationId).eq('entity_type', 'customer')
+                .eq('entity_id', customerId).eq('status', 'active').maybeSingle();
+              if (obAckConv) {
+                await supabase.from('messages').insert({
+                  organisation_id: organisationId, conversation_id: obAckConv.id,
+                  role: 'system', content: obAckText,
+                  metadata: {
+                    sender_type: 'system', visibility: 'owner_only',
+                    message_type: 'system_alert', read_by_owner: true,
+                    preview_text: `Opening balance for ${customer.name}`,
+                    operation_id: obResult.operation_id,
+                  },
+                  tokens_input: 0, tokens_output: 0,
+                });
+              }
+            }
+
+            if (obResult.status === 'success') {
               executed.push(actionId);
             } else {
               failed.push(actionId);
@@ -3557,6 +3711,11 @@ async function executeAiQueryTool(toolName, args, supabase, organisationId, cust
       let q = supabase.from('invoices').select('invoice_number, status, total_amount, amount_paid, amount_due, issue_date, due_date')
         .eq('organisation_id', organisationId).eq('customer_id', customerId).order('issue_date', { ascending: false }).limit(20);
       if (!includeHistorical) q = q.eq('is_historical', false);
+      // Opening Position Transactions (historical_source='opening_balance') are
+      // excluded from normal invoice lists -- they are onboarding records, not
+      // real invoices. Visible only in LedgerView / explainability queries.
+      // See AssistMe_Financial_Calculation_Rules.md -> "Opening Position Rules"
+      q = q.or('historical_source.is.null,historical_source.neq.opening_balance');
       if (args.status === 'paid') q = q.eq('status', 'paid');
       else if (args.status === 'unpaid') q = q.neq('status', 'paid');
       else if (args.status === 'overdue') q = q.neq('status', 'paid').lt('due_date', new Date().toISOString().split('T')[0]);
@@ -4253,11 +4412,16 @@ app.get('/api/customer/:customer_id/report', async (c) => {
     }
 
     // Q2: All invoices for this customer
+    // Opening Position Transactions (historical_source='opening_balance')
+    // excluded -- they represent a pre-existing balance, not a real order,
+    // and would skew avgOrderValue/totalOrders/paymentDelayAvg below.
+    // See AssistMe_Financial_Calculation_Rules.md -> "Opening Position Rules"
     const { data: invoices } = await supabase
       .from('invoices')
       .select('id, total_amount, amount_paid, status, created_at, updated_at, due_date')
       .eq('organisation_id', organisationId)
       .eq('customer_id', customerId)
+      .or('historical_source.is.null,historical_source.neq.opening_balance')
       .order('created_at', { ascending: true });
 
     const allInvoices = invoices || [];
@@ -4484,9 +4648,12 @@ app.get('/api/customer/:customer_id/history', async (c) => {
 
     const { data: invoices } = await supabase
       .from('invoices')
+      // Opening Position Transactions excluded -- see
+      // AssistMe_Financial_Calculation_Rules.md -> "Opening Position Rules"
       .select('id, total_amount, amount_paid, status, created_at, invoice_number')
       .eq('organisation_id', organisationId)
       .eq('customer_id', customerId)
+      .or('historical_source.is.null,historical_source.neq.opening_balance')
       .order('created_at', { ascending: false })
       .limit(50);
 
