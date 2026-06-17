@@ -39,6 +39,7 @@ export default function BusinessProfileScreen() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [logoUploading, setLogoUploading] = useState(false);
+  const [signatureUploading, setSignatureUploading] = useState(false);
 
   // Form fields — field_key names match WRITABLE_FIELDS in setBusinessProfileCapability.js
   // and column names in business_profiles table (schema_sql_v3.txt verified)
@@ -52,6 +53,7 @@ export default function BusinessProfileScreen() {
   const [stateName, setStateName] = useState('');
   const [postalCode, setPostalCode] = useState('');
   const [logoUrl, setLogoUrl] = useState<string | null>(null);
+  const [signatureUrl, setSignatureUrl] = useState<string | null>(null);
   const [termsText, setTermsText] = useState('');
 
   // Auth token — exact pattern from products.tsx
@@ -97,6 +99,7 @@ export default function BusinessProfileScreen() {
       setStateName(profile.state || '');
       setPostalCode(profile.postal_code || '');
       setLogoUrl(profile.logo_url || null);
+      setSignatureUrl(profile.signature_url || null);
       setTermsText(profile.terms_text || '');
     } catch (err) {
       setError('Could not load business profile. Please try again.');
@@ -151,6 +154,50 @@ export default function BusinessProfileScreen() {
     }
   };
 
+  // Mirrors handleLogoUpload exactly (UX-2, Jun 17 2026) -- same picker call,
+  // same allowsEditing:false fix, same upload/permission/error pattern.
+  const handleSignatureUpload = async () => {
+    try {
+      const ImagePicker = await import('expo-image-picker');
+      const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!permission.granted) {
+        Alert.alert('Permission Required', 'Please allow access to your photo library.');
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: 'images' as any,
+        allowsEditing: false,
+        quality: 0.8,
+      });
+      if (result.canceled || !result.assets?.[0]) return;
+
+      const asset = result.assets[0];
+      setSignatureUploading(true);
+      const token = await getToken();
+      if (!token) return;
+
+      const filename = asset.uri.split('/').pop() || 'signature.jpg';
+      const ext = filename.split('.').pop()?.toLowerCase() || 'jpg';
+      const mime = ext === 'png' ? 'image/png' : 'image/jpeg';
+
+      const formData = new FormData();
+      formData.append('file', { uri: asset.uri, name: filename, type: mime } as any);
+
+      const uploadRes = await fetch(`${BACKEND_URL}/api/upload`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: formData,
+      });
+      if (!uploadRes.ok) throw new Error('Upload failed');
+      const { url } = await uploadRes.json();
+      setSignatureUrl(url);
+    } catch (err) {
+      Alert.alert('Upload Failed', 'Could not upload signature. Please try again.');
+    } finally {
+      setSignatureUploading(false);
+    }
+  };
+
   // ── Save ──────────────────────────────────────────────────────────────────
 
   const handleSave = async () => {
@@ -173,6 +220,7 @@ export default function BusinessProfileScreen() {
         state: stateName.trim() || null,
         postal_code: postalCode.trim() || null,
         logo_url: logoUrl || null,
+        signature_url: signatureUrl || null,
         terms_text: termsText.trim() || null,
       };
       const res = await fetch(`${BACKEND_URL}/api/business-profile`, {
@@ -255,6 +303,29 @@ export default function BusinessProfileScreen() {
           <Text style={styles.logoLabel}>{logoUrl ? 'Change Logo' : 'Upload Logo'}</Text>
         </TouchableOpacity>
         <Text style={styles.logoHint}>Appears on invoices and PDF documents</Text>
+      </View>
+
+      {/* Signature -- mirrors Logo section exactly, reuses same styles (UX-2) */}
+      <View style={styles.logoSection}>
+        <TouchableOpacity
+          style={styles.logoContainer}
+          onPress={handleSignatureUpload}
+          disabled={signatureUploading || saving}
+        >
+          {signatureUploading ? (
+            <ActivityIndicator size="small" color="#075E54" />
+          ) : signatureUrl ? (
+            <Image source={{ uri: signatureUrl }} style={styles.logoImage} resizeMode="contain" />
+          ) : (
+            <View style={styles.logoPlaceholder}>
+              <Ionicons name="create-outline" size={36} color="#CCCCCC" />
+            </View>
+          )}
+        </TouchableOpacity>
+        <TouchableOpacity onPress={handleSignatureUpload} disabled={signatureUploading || saving}>
+          <Text style={styles.logoLabel}>{signatureUrl ? 'Change Signature' : 'Upload Signature'}</Text>
+        </TouchableOpacity>
+        <Text style={styles.logoHint}>Appears above "Authorized Signatory" on invoices</Text>
       </View>
 
       {/* Business Details */}
