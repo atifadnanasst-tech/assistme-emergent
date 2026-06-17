@@ -119,8 +119,7 @@ export default function BusinessProfileScreen() {
       }
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: 'images' as any,
-        allowsEditing: true,
-        aspect: [1, 1],
+        allowsEditing: false,
         quality: 0.8,
       });
       if (result.canceled || !result.assets?.[0]) return;
