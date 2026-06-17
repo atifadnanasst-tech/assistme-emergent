@@ -1812,6 +1812,35 @@ async function generateDocumentPDF({ documentId, organisationId, documentType, d
     const pdfReady = new Promise((resolve) => doc2.on('end', resolve));
 
     // ── Header: Business Profile
+    // Logo picker no longer force-crops to 1:1 (v1.3.275 -- the native Android
+    // crop step caused a dead-end, fixed via allowsEditing:false, same fix
+    // already applied to chat/[customer_id].tsx's picker in an earlier session).
+    // Non-square logos are therefore the normal case, not a hypothetical --
+    // fit: [] (not a stretch) is load-bearing here, not just defensive.
+    if (biz.logo_url) {
+      try {
+        const logoController = new AbortController();
+        const logoTimeout = setTimeout(() => logoController.abort(), 10000);
+        try {
+          const logoRes = await fetch(biz.logo_url, { signal: logoController.signal });
+          if (logoRes.ok) {
+            const logoArrayBuffer = await logoRes.arrayBuffer();
+            if (logoArrayBuffer.byteLength <= 8 * 1024 * 1024) {
+              const logoBuffer = Buffer.from(logoArrayBuffer);
+              const logoSize = 70;
+              const logoX = (doc2.page.width - logoSize) / 2;
+              doc2.image(logoBuffer, logoX, doc2.y, { fit: [logoSize, logoSize], align: 'center', valign: 'center' });
+              doc2.y += logoSize + 8;
+            }
+          }
+        } finally {
+          clearTimeout(logoTimeout);
+        }
+      } catch (logoErr) {
+        console.error('[PDF] Logo embed failed (continuing without logo):', logoErr.message);
+      }
+    }
+
     const businessName = biz.business_name || org?.name || 'Business';
     doc2.fontSize(18).font('Helvetica-Bold').text(businessName, { align: 'center' });
     if (biz.gstin) doc2.fontSize(9).font('Helvetica').text(`GSTIN: ${biz.gstin}`, { align: 'center' });
