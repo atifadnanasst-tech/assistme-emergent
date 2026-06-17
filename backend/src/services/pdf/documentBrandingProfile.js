@@ -89,13 +89,24 @@ export async function getDocumentBrandingProfile(organisationId, supabase) {
     }
 
     if (showAssistmeStrip) {
-      const { data: sysConfig } = await supabase
+      // Bug fix Jun 17 2026: system_config can legitimately have multiple active
+      // rows for the same key (global default + targeted overrides, e.g. country:IN) --
+      // .maybeSingle() throws when 2+ rows match, which silently produced null text
+      // here (error was never checked). Fixed by taking the highest-priority active
+      // row instead of assuming exactly one. NOT yet doing real targeting-match
+      // (comparing each row's `targeting` jsonb against actual org attributes) --
+      // AssistMe's entire user base is India-market today and there's no
+      // organisations.country column to match against yet, so "highest priority
+      // wins" already produces the right real-world result. True targeting-match
+      // is a separate, larger feature, deferred, not silently smuggled into this fix.
+      const { data: sysConfigRows } = await supabase
         .from('system_config')
-        .select('value')
+        .select('value, priority')
         .eq('key', 'pdf_footer_promo')
         .eq('is_active', true)
-        .maybeSingle();
-      assistmeStripText = sysConfig?.value || null;
+        .order('priority', { ascending: false })
+        .limit(1);
+      assistmeStripText = sysConfigRows?.[0]?.value || null;
     }
   } catch (err) {
     console.error('[getDocumentBrandingProfile] tier/footer check failed:', err.message);

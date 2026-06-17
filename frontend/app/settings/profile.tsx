@@ -310,29 +310,6 @@ export default function BusinessProfileScreen() {
         <Text style={styles.logoHint}>Appears on invoices and PDF documents</Text>
       </View>
 
-      {/* Signature -- mirrors Logo section exactly, reuses same styles (UX-2) */}
-      <View style={styles.logoSection}>
-        <TouchableOpacity
-          style={styles.logoContainer}
-          onPress={handleSignatureUpload}
-          disabled={signatureUploading || saving}
-        >
-          {signatureUploading ? (
-            <ActivityIndicator size="small" color="#075E54" />
-          ) : signatureUrl ? (
-            <Image source={{ uri: signatureUrl }} style={styles.logoImage} resizeMode="contain" />
-          ) : (
-            <View style={styles.logoPlaceholder}>
-              <Ionicons name="create-outline" size={36} color="#CCCCCC" />
-            </View>
-          )}
-        </TouchableOpacity>
-        <TouchableOpacity onPress={handleSignatureUpload} disabled={signatureUploading || saving}>
-          <Text style={styles.logoLabel}>{signatureUrl ? 'Change Signature' : 'Upload Signature'}</Text>
-        </TouchableOpacity>
-        <Text style={styles.logoHint}>Appears above "Authorized Signatory" on invoices</Text>
-      </View>
-
       {/* Business Details */}
       <SettingsSection title="Business Details">
         <SettingsField
@@ -427,6 +404,34 @@ export default function BusinessProfileScreen() {
         />
       </SettingsSection>
 
+      {/* Signature -- relocated below Address, above Invoice Terms, left-aligned
+          (distinct from Logo's centered top-of-screen treatment) */}
+      <SettingsSection title="Signature">
+        <View style={styles.signatureRow}>
+          <TouchableOpacity
+            style={styles.signatureThumb}
+            onPress={handleSignatureUpload}
+            disabled={signatureUploading || saving}
+          >
+            {signatureUploading ? (
+              <ActivityIndicator size="small" color="#075E54" />
+            ) : signatureUrl ? (
+              <Image source={{ uri: signatureUrl }} style={styles.signatureThumbImage} resizeMode="contain" />
+            ) : (
+              <Ionicons name="create-outline" size={28} color="#CCCCCC" />
+            )}
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.signatureTextWrap}
+            onPress={handleSignatureUpload}
+            disabled={signatureUploading || saving}
+          >
+            <Text style={styles.logoLabel}>{signatureUrl ? 'Change Signature' : 'Upload Signature'}</Text>
+            <Text style={styles.logoHint}>Appears above "Authorized Signatory" on invoices</Text>
+          </TouchableOpacity>
+        </View>
+      </SettingsSection>
+
       {/* Invoice Terms */}
       <SettingsSection title="Invoice Terms">
         <SettingsField
@@ -478,6 +483,13 @@ const styles = StyleSheet.create({
   brandingTextWrap: { flex: 1, marginRight: 12 },
   brandingLabel: { fontSize: 14, color: '#1A1A1A', fontWeight: '500' },
   brandingHint: { fontSize: 12, color: '#888888', marginTop: 2 },
+  signatureRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 4 },
+  signatureThumb: {
+    width: 56, height: 56, borderRadius: 8, borderWidth: 1, borderColor: '#E0E0E0',
+    backgroundColor: '#FAFAFA', alignItems: 'center', justifyContent: 'center', marginRight: 12,
+  },
+  signatureThumbImage: { width: 52, height: 52 },
+  signatureTextWrap: { flex: 1 },
   row: { flexDirection: 'row', alignItems: 'flex-start' },
   rowGap: { width: 12 },
   flex1: { flex: 1 },
