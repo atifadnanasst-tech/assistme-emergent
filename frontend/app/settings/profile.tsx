@@ -18,7 +18,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity,
-  Alert, Image, ActivityIndicator,
+  Alert, Image, ActivityIndicator, Switch,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuth } from '../../contexts/AuthContext';
@@ -40,6 +40,8 @@ export default function BusinessProfileScreen() {
   const [error, setError] = useState<string | null>(null);
   const [logoUploading, setLogoUploading] = useState(false);
   const [signatureUploading, setSignatureUploading] = useState(false);
+  const [subscriptionPlan, setSubscriptionPlan] = useState('free');
+  const [showAssistmeBranding, setShowAssistmeBranding] = useState(true);
 
   // Form fields — field_key names match WRITABLE_FIELDS in setBusinessProfileCapability.js
   // and column names in business_profiles table (schema_sql_v3.txt verified)
@@ -88,7 +90,9 @@ export default function BusinessProfileScreen() {
         return;
       }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const { profile } = await res.json();
+      const { profile, subscription_plan } = await res.json();
+      setSubscriptionPlan(subscription_plan || 'free');
+      setShowAssistmeBranding(profile.show_assistme_branding ?? true);
       setBusinessName(profile.business_name || '');
       setGstin(profile.gstin || '');
       setPhone(profile.phone || '');
@@ -222,6 +226,7 @@ export default function BusinessProfileScreen() {
         logo_url: logoUrl || null,
         signature_url: signatureUrl || null,
         terms_text: termsText.trim() || null,
+        show_assistme_branding: showAssistmeBranding,
       };
       const res = await fetch(`${BACKEND_URL}/api/business-profile`, {
         method: 'PATCH',
@@ -435,6 +440,24 @@ export default function BusinessProfileScreen() {
           hint="Appears at the bottom of your invoice PDF."
         />
       </SettingsSection>
+
+      {/* Branding */}
+      <SettingsSection title="Branding">
+        <View style={styles.brandingRow}>
+          <View style={styles.brandingTextWrap}>
+            <Text style={styles.brandingLabel}>Show "Generated using AssistMe" on documents</Text>
+            {subscriptionPlan !== 'business' && (
+              <Text style={styles.brandingHint}>Available on the Business plan</Text>
+            )}
+          </View>
+          <Switch
+            value={showAssistmeBranding}
+            onValueChange={setShowAssistmeBranding}
+            disabled={subscriptionPlan !== 'business' || saving}
+            trackColor={{ false: '#CCCCCC', true: '#25D366' }}
+          />
+        </View>
+      </SettingsSection>
     </SettingsScreenShell>
   );
 }
@@ -451,6 +474,10 @@ const styles = StyleSheet.create({
   logoPlaceholder: { justifyContent: 'center', alignItems: 'center' },
   logoLabel: { fontSize: 14, color: '#075E54', fontWeight: '600', marginBottom: 4 },
   logoHint: { fontSize: 12, color: '#888888' },
+  brandingRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 8 },
+  brandingTextWrap: { flex: 1, marginRight: 12 },
+  brandingLabel: { fontSize: 14, color: '#1A1A1A', fontWeight: '500' },
+  brandingHint: { fontSize: 12, color: '#888888', marginTop: 2 },
   row: { flexDirection: 'row', alignItems: 'flex-start' },
   rowGap: { width: 12 },
   flex1: { flex: 1 },
