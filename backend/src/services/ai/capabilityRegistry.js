@@ -202,6 +202,16 @@ export const CAPABILITY_REGISTRY = {
     suggested_next_actions: ['query_collection_insights', 'query_overdue_payments'],
   },
 
+  record_opening_position: {
+    version: 1,
+    description: 'Record a pre-existing balance for a BRAND-NEW customer or entity with ZERO invoices, payments, or purchase bills so far -- a one-time declaration made when the owner starts using AssistMe. ALLOWED examples: "Ramesh owes me 10000" (direction=receivable, they owe the owner), "I owe Noor 5000" (direction=payable, the owner owes them), "Ahmed ka opening balance 8000 hai". NOT ALLOWED -- do NOT use for any of these, refuse and explain instead: "Set Ramesh balance to 12000" (this is a correction to an existing balance, not an opening declaration), "Adjust Ahmed account by 2000", "Customer says invoice was wrong, fix the balance", "We reconciled and agreed the balance is now 6000" (these are balance adjustments/reconciliations -- a different, not-yet-built feature; refuse and tell the owner this is not supported yet). If the direction (who owes whom) is unclear from the phrasing, ask the owner to clarify before calling this capability.',
+    confirmation: 'always',
+    scope: ['org', 'customers', 'finance'],
+    is_financial: true,
+    middleware_fn: 'recordOpeningPosition',
+    suggested_next_actions: ['query_customers', 'financial_health'],
+  },
+
   mutate_expense: {
     version: 1,
     description: 'Log a business expense with category, amount, date.',

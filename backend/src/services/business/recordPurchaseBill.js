@@ -213,6 +213,7 @@ export async function recordPurchaseBill(supabase, orgId, customerId, items, opt
         amount_due: totalAmount,
         notes: opts.notes || null,
         is_historical: false,
+        historical_source: opts.historicalSource || null,
         import_metadata: { operation_id: operationId },
       })
       .select('id, bill_number, total_amount')
