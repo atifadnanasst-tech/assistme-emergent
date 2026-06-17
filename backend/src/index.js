@@ -1916,6 +1916,38 @@ async function generateDocumentPDF({ documentId, organisationId, documentType, d
     doc2.text('TOTAL:', totalsX, doc2.y, { width: 70 });
     doc2.text(`₹${(doc.total_amount || 0).toFixed(2)}`, 450, doc2.y - 14, { width: 95, align: 'right' });
 
+    // ── Signature -- placed near totals/footer per spec, same fetch/fit/never-crash
+    // pattern as the logo embed (Patch: logo-embed, v1.3.276). Right-margin box,
+    // centered within it (not stretched) since a signature image's actual aspect
+    // ratio is unpredictable -- a scrawled signature crop is rarely square.
+    if (biz.signature_url) {
+      try {
+        const sigController = new AbortController();
+        const sigTimeout = setTimeout(() => sigController.abort(), 10000);
+        try {
+          const sigRes = await fetch(biz.signature_url, { signal: sigController.signal });
+          if (sigRes.ok) {
+            const sigArrayBuffer = await sigRes.arrayBuffer();
+            if (sigArrayBuffer.byteLength <= 8 * 1024 * 1024) {
+              const sigBuffer = Buffer.from(sigArrayBuffer);
+              const sigWidth = 100;
+              const sigHeight = 50;
+              const sigX = 545 - sigWidth;
+              doc2.moveDown(1);
+              doc2.image(sigBuffer, sigX, doc2.y, { fit: [sigWidth, sigHeight], align: 'center', valign: 'center' });
+              doc2.y += sigHeight + 4;
+              doc2.fontSize(8).font('Helvetica').text('Authorized Signatory', sigX, doc2.y, { width: sigWidth, align: 'center' });
+              doc2.moveDown(0.5);
+            }
+          }
+        } finally {
+          clearTimeout(sigTimeout);
+        }
+      } catch (sigErr) {
+        console.error('[PDF] Signature embed failed (continuing without signature):', sigErr.message);
+      }
+    }
+
     // ── Footer
     if (biz.terms_text || biz.assistme_strip_text) {
       doc2.moveDown(2);
