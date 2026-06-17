@@ -49,6 +49,7 @@ const WRITABLE_FIELDS = {
   logo_url:      { column: 'logo_url',       label: 'Logo',          required: false },
   signature_url: { column: 'signature_url',  label: 'Signature',     required: false },
   terms_text:    { column: 'terms_text',     label: 'Terms & Conditions', required: false },
+  show_assistme_branding: { column: 'show_assistme_branding', label: 'Show AssistMe Branding', required: false, type: 'boolean' },
 };
 
 // ── Field validation ──────────────────────────────────────────────────────────
@@ -106,8 +107,13 @@ export async function setBusinessProfileCapability(params, orgId, supabase) {
   }
 
   // Normalize GSTIN to uppercase before saving
-  let parsedValue = String(new_value).trim();
-  if (field_key === 'gstin') parsedValue = parsedValue.toUpperCase();
+  let parsedValue;
+  if (fieldDef.type === 'boolean') {
+    parsedValue = new_value === true || new_value === 'true';
+  } else {
+    parsedValue = String(new_value).trim();
+    if (field_key === 'gstin') parsedValue = parsedValue.toUpperCase();
+  }
 
   const validationError = _validateField(field_key, parsedValue);
   if (validationError) return _errorResult(validationError);
@@ -178,8 +184,13 @@ export async function updateBusinessProfileFields(orgId, fields, supabase) {
   const updateCols = {};
   for (const [key, value] of Object.entries(fields)) {
     const fieldDef = WRITABLE_FIELDS[key];
-    let finalValue = (value === '' || value === null) ? null : String(value).trim();
-    if (key === 'gstin' && finalValue) finalValue = finalValue.toUpperCase();
+    let finalValue;
+    if (fieldDef.type === 'boolean') {
+      finalValue = value === true || value === 'true';
+    } else {
+      finalValue = (value === '' || value === null) ? null : String(value).trim();
+      if (key === 'gstin' && finalValue) finalValue = finalValue.toUpperCase();
+    }
     updateCols[fieldDef.column] = finalValue;
   }
 
