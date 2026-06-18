@@ -1948,6 +1948,29 @@ async function generateDocumentPDF({ documentId, organisationId, documentType, d
       }
     }
 
+    // ── Bank Accounts -- renders every active account getDocumentBrandingProfile()
+    // returns, in the order it already locked (default first, then sort_order).
+    // Not yet gated by a per-document show/hide toggle -- that's a deferred item
+    // (spec Part 7), so today every account on file shows on every document type.
+    if (biz.bank_accounts && biz.bank_accounts.length > 0) {
+      doc2.moveDown(1.5);
+      doc2.fontSize(10).font('Helvetica-Bold').text('Bank Details', { align: 'left' });
+      doc2.moveDown(0.3);
+      biz.bank_accounts.forEach((acct) => {
+        doc2.fontSize(8).font('Helvetica-Bold').text(
+          `${acct.name}${acct.bank_name ? ' — ' + acct.bank_name : ''}`, { align: 'left' }
+        );
+        const lineParts = [];
+        if (acct.account_number) lineParts.push(`A/C: ${acct.account_number}`);
+        if (acct.ifsc_code) lineParts.push(`IFSC: ${acct.ifsc_code}`);
+        if (acct.branch_name) lineParts.push(`Branch: ${acct.branch_name}`);
+        if (lineParts.length > 0) {
+          doc2.fontSize(8).font('Helvetica').text(lineParts.join('   '), { align: 'left' });
+        }
+        doc2.moveDown(0.3);
+      });
+    }
+
     // ── Footer
     if (biz.terms_text || biz.assistme_strip_text) {
       doc2.moveDown(2);
