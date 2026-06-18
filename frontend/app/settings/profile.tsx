@@ -747,7 +747,7 @@ export default function BusinessProfileScreen() {
         ) : (
           <TouchableOpacity style={styles.addBankAccountBtn} onPress={() => setAddingNewAccount(true)}>
             <Ionicons name="add-circle" size={20} color="#075E54" />
-            <Text style={styles.addBankAccountText}>+ Add Bank Account</Text>
+            <Text style={styles.addBankAccountText}>Add Bank Account</Text>
           </TouchableOpacity>
         )}
       </SettingsSection>
