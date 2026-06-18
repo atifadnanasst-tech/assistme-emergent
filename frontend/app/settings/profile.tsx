@@ -47,6 +47,9 @@ export default function BusinessProfileScreen() {
   const [expandedAccountId, setExpandedAccountId] = useState(null);
   const [savingAccountId, setSavingAccountId] = useState(null);
   const [expandedSnapshot, setExpandedSnapshot] = useState(null);
+  const [addingNewAccount, setAddingNewAccount] = useState(false);
+  const [newAccount, setNewAccount] = useState({ name: '', bank_name: '', account_number: '', ifsc_code: '', branch_name: '' });
+  const [creatingAccount, setCreatingAccount] = useState(false);
 
   // Form fields — field_key names match WRITABLE_FIELDS in setBusinessProfileCapability.js
   // and column names in business_profiles table (schema_sql_v3.txt verified)
@@ -281,6 +284,35 @@ export default function BusinessProfileScreen() {
       await loadBankAccounts();
     } catch (err) {
       Alert.alert('Could Not Update', 'Please try again.');
+    }
+  };
+
+  const handleCreateBankAccount = async () => {
+    if (!newAccount.name.trim()) {
+      Alert.alert('Required', 'Account name is required.');
+      return;
+    }
+    setCreatingAccount(true);
+    try {
+      const token = await getToken();
+      if (!token) return;
+      const res = await fetch(`${BACKEND_URL}/api/business-profile/bank-accounts`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(newAccount),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        Alert.alert('Could Not Add', data.error || 'Please check the fields and try again.');
+        return;
+      }
+      setAddingNewAccount(false);
+      setNewAccount({ name: '', bank_name: '', account_number: '', ifsc_code: '', branch_name: '' });
+      await loadBankAccounts();
+    } catch (err) {
+      Alert.alert('Could Not Add', 'Please try again.');
+    } finally {
+      setCreatingAccount(false);
     }
   };
 
@@ -666,6 +698,58 @@ export default function BusinessProfileScreen() {
             );
           })
         )}
+
+        {addingNewAccount ? (
+          <View style={styles.bankExpanded}>
+            <SettingsField
+              label="Account Name"
+              value={newAccount.name}
+              onChangeText={(v) => setNewAccount({ ...newAccount, name: v })}
+              placeholder="e.g. HDFC Current Account"
+              editable={!creatingAccount}
+            />
+            <SettingsField
+              label="Bank Name"
+              value={newAccount.bank_name}
+              onChangeText={(v) => setNewAccount({ ...newAccount, bank_name: v })}
+              editable={!creatingAccount}
+            />
+            <SettingsField
+              label="Account Number"
+              value={newAccount.account_number}
+              onChangeText={(v) => setNewAccount({ ...newAccount, account_number: v })}
+              editable={!creatingAccount}
+            />
+            <SettingsField
+              label="IFSC"
+              value={newAccount.ifsc_code}
+              onChangeText={(v) => setNewAccount({ ...newAccount, ifsc_code: v })}
+              editable={!creatingAccount}
+            />
+            <SettingsField
+              label="Branch"
+              value={newAccount.branch_name}
+              onChangeText={(v) => setNewAccount({ ...newAccount, branch_name: v })}
+              editable={!creatingAccount}
+            />
+            <View style={styles.bankRowActions}>
+              <TouchableOpacity
+                onPress={() => { setAddingNewAccount(false); setNewAccount({ name: '', bank_name: '', account_number: '', ifsc_code: '', branch_name: '' }); }}
+                disabled={creatingAccount}
+              >
+                <Text style={styles.bankCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.bankSaveBtn} onPress={handleCreateBankAccount} disabled={creatingAccount}>
+                <Text style={styles.bankSaveBtnText}>{creatingAccount ? 'Saving...' : 'Save'}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        ) : (
+          <TouchableOpacity style={styles.addBankAccountBtn} onPress={() => setAddingNewAccount(true)}>
+            <Ionicons name="add-circle" size={20} color="#075E54" />
+            <Text style={styles.addBankAccountText}>+ Add Bank Account</Text>
+          </TouchableOpacity>
+        )}
       </SettingsSection>
 
       {/* Branding */}
@@ -718,6 +802,8 @@ const styles = StyleSheet.create({
   bankCancelText: { fontSize: 14, color: '#666666', paddingVertical: 8, paddingHorizontal: 8 },
   bankSaveBtn: { backgroundColor: '#075E54', borderRadius: 8, paddingVertical: 8, paddingHorizontal: 16 },
   bankSaveBtnText: { color: '#FFFFFF', fontSize: 14, fontWeight: '600' },
+  addBankAccountBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 12 },
+  addBankAccountText: { fontSize: 14, fontWeight: '700', color: '#075E54' },
   signatureRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 4 },
   signatureThumb: {
     width: 56, height: 56, borderRadius: 8, borderWidth: 1, borderColor: '#E0E0E0',
