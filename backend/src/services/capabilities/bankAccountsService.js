@@ -28,6 +28,7 @@
 import { getBusinessProfile } from './setBusinessProfileCapability.js';
 
 const IFSC_REGEX = /^[A-Z]{4}0[A-Z0-9]{6}$/;
+const ACCOUNT_NUMBER_REGEX = /^\d{6,20}$/;
 
 export async function listBankAccounts(orgId, supabase) {
   const profile = await getBusinessProfile(orgId, supabase);
@@ -79,6 +80,14 @@ export async function createBankAccount(orgId, fields, supabase) {
     }
   }
 
+  let normalizedAccountNumber = null;
+  if (account_number && account_number.trim()) {
+    normalizedAccountNumber = account_number.trim();
+    if (!ACCOUNT_NUMBER_REGEX.test(normalizedAccountNumber)) {
+      return { success: false, error: 'Account number should contain only digits (6-20 characters).' };
+    }
+  }
+
   const profile = await getBusinessProfile(orgId, supabase);
   if (!profile) return { success: false, error: 'Could not access business profile.' };
 
@@ -88,7 +97,7 @@ export async function createBankAccount(orgId, fields, supabase) {
       organisation_id: orgId,
       name: name.trim(),
       bank_name: bank_name?.trim() || null,
-      account_number: account_number?.trim() || null,
+      account_number: normalizedAccountNumber,
       ifsc_code: normalizedIfsc,
       branch_name: branch_name?.trim() || null,
     })
@@ -142,7 +151,17 @@ export async function updateBankAccount(orgId, accountId, fields, supabase) {
     updateCols.name = fields.name.trim();
   }
   if (fields.bank_name !== undefined) updateCols.bank_name = fields.bank_name?.trim() || null;
-  if (fields.account_number !== undefined) updateCols.account_number = fields.account_number?.trim() || null;
+  if (fields.account_number !== undefined) {
+    if (fields.account_number && fields.account_number.trim()) {
+      const normalized = fields.account_number.trim();
+      if (!ACCOUNT_NUMBER_REGEX.test(normalized)) {
+        return { success: false, error: 'Account number should contain only digits (6-20 characters).' };
+      }
+      updateCols.account_number = normalized;
+    } else {
+      updateCols.account_number = null;
+    }
+  }
   if (fields.branch_name !== undefined) updateCols.branch_name = fields.branch_name?.trim() || null;
   if (fields.ifsc_code !== undefined) {
     if (fields.ifsc_code && fields.ifsc_code.trim()) {

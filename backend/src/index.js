@@ -13,6 +13,7 @@ import { recordPayment } from './services/business/recordPayment.js';
 import { recordOpeningPosition, isOpeningPositionAllowed } from './services/business/recordOpeningPosition.js';
 import { extractVisualization } from './services/ai/visualizationParser.js';
 import { getDocumentBrandingProfile } from './services/pdf/documentBrandingProfile.js';
+import { listBankAccounts, createBankAccount, updateBankAccount, deleteBankAccount } from './services/capabilities/bankAccountsService.js';
 import PDFDocument from 'pdfkit';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -6185,6 +6186,62 @@ if (supabase) {
       return c.json({ profile });
     } catch (err) {
       console.error('PATCH /api/business-profile error:', err);
+      return c.json({ error: 'server_error' }, 500);
+    }
+  });
+
+  // ── Bank Accounts (Business Profile screen, Jun 2026) -- REAPPLIED Jun 18.
+  app.get('/api/business-profile/bank-accounts', async (c) => {
+    try {
+      const auth = await authenticateChat(c);
+      if (!auth) return c.json({ error: 'unauthorized' }, 401);
+      const bank_accounts = await listBankAccounts(auth.organisationId, supabase);
+      return c.json({ bank_accounts });
+    } catch (err) {
+      console.error('GET /api/business-profile/bank-accounts error:', err);
+      return c.json({ error: 'server_error' }, 500);
+    }
+  });
+
+  app.post('/api/business-profile/bank-accounts', async (c) => {
+    try {
+      const auth = await authenticateChat(c);
+      if (!auth) return c.json({ error: 'unauthorized' }, 401);
+      const body = await c.req.json();
+      const result = await createBankAccount(auth.organisationId, body, supabase);
+      if (!result.success) return c.json({ error: result.error }, 400);
+      return c.json({ account: result.account });
+    } catch (err) {
+      console.error('POST /api/business-profile/bank-accounts error:', err);
+      return c.json({ error: 'server_error' }, 500);
+    }
+  });
+
+  app.patch('/api/business-profile/bank-accounts/:id', async (c) => {
+    try {
+      const auth = await authenticateChat(c);
+      if (!auth) return c.json({ error: 'unauthorized' }, 401);
+      const accountId = c.req.param('id');
+      const body = await c.req.json();
+      const result = await updateBankAccount(auth.organisationId, accountId, body, supabase);
+      if (!result.success) return c.json({ error: result.error }, 400);
+      return c.json({ success: true });
+    } catch (err) {
+      console.error('PATCH /api/business-profile/bank-accounts/:id error:', err);
+      return c.json({ error: 'server_error' }, 500);
+    }
+  });
+
+  app.delete('/api/business-profile/bank-accounts/:id', async (c) => {
+    try {
+      const auth = await authenticateChat(c);
+      if (!auth) return c.json({ error: 'unauthorized' }, 401);
+      const accountId = c.req.param('id');
+      const result = await deleteBankAccount(auth.organisationId, accountId, supabase);
+      if (!result.success) return c.json({ error: result.error }, 400);
+      return c.json({ success: true });
+    } catch (err) {
+      console.error('DELETE /api/business-profile/bank-accounts/:id error:', err);
       return c.json({ error: 'server_error' }, 500);
     }
   });
