@@ -42,6 +42,11 @@ export default function BusinessProfileScreen() {
   const [signatureUploading, setSignatureUploading] = useState(false);
   const [subscriptionPlan, setSubscriptionPlan] = useState('free');
   const [showAssistmeBranding, setShowAssistmeBranding] = useState(true);
+  const [bankAccounts, setBankAccounts] = useState([]);
+  const [bankAccountsLoading, setBankAccountsLoading] = useState(true);
+  const [expandedAccountId, setExpandedAccountId] = useState(null);
+  const [savingAccountId, setSavingAccountId] = useState(null);
+  const [expandedSnapshot, setExpandedSnapshot] = useState(null);
 
   // Form fields — field_key names match WRITABLE_FIELDS in setBusinessProfileCapability.js
   // and column names in business_profiles table (schema_sql_v3.txt verified)
@@ -112,7 +117,25 @@ export default function BusinessProfileScreen() {
     }
   }, [getToken, setIsAuthenticated, router]);
 
+  const loadBankAccounts = useCallback(async () => {
+    try {
+      const token = await getToken();
+      if (!token) return;
+      const res = await fetch(`${BACKEND_URL}/api/business-profile/bank-accounts`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error('Failed to load bank accounts');
+      const { bank_accounts } = await res.json();
+      setBankAccounts(bank_accounts || []);
+    } catch (err) {
+      console.error('loadBankAccounts error:', err);
+    } finally {
+      setBankAccountsLoading(false);
+    }
+  }, [getToken]);
+
   useEffect(() => { loadProfile(); }, [loadProfile]);
+  useEffect(() => { loadBankAccounts(); }, [loadBankAccounts]);
 
   // ── Logo upload ───────────────────────────────────────────────────────────
 
@@ -200,6 +223,94 @@ export default function BusinessProfileScreen() {
     } finally {
       setSignatureUploading(false);
     }
+  };
+
+  // ── Bank Accounts -- each row saves independently via its own endpoint,
+  // NOT bundled into the screen's main handleSave() payload below.
+  const updateLocalBankField = (accountId, field, value) => {
+    setBankAccounts((prev) => prev.map((a) => (a.id === accountId ? { ...a, [field]: value } : a)));
+  };
+
+  const handleSaveBankAccount = async (accountId) => {
+    const account = bankAccounts.find((a) => a.id === accountId);
+    if (!account) return;
+    if (!account.name || !account.name.trim()) {
+      Alert.alert('Required', 'Account name is required.');
+      return;
+    }
+    setSavingAccountId(accountId);
+    try {
+      const token = await getToken();
+      if (!token) return;
+      const res = await fetch(`${BACKEND_URL}/api/business-profile/bank-accounts/${accountId}`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: account.name,
+          bank_name: account.bank_name,
+          account_number: account.account_number,
+          ifsc_code: account.ifsc_code,
+          branch_name: account.branch_name,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        Alert.alert('Could Not Save', data.error || 'Please check the fields and try again.');
+        return;
+      }
+      setExpandedAccountId(null);
+      setExpandedSnapshot(null);
+      await loadBankAccounts();
+    } catch (err) {
+      Alert.alert('Could Not Save', 'Please try again.');
+    } finally {
+      setSavingAccountId(null);
+    }
+  };
+
+  const handleSetDefaultBankAccount = async (accountId) => {
+    try {
+      const token = await getToken();
+      if (!token) return;
+      const res = await fetch(`${BACKEND_URL}/api/business-profile/bank-accounts/${accountId}`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_default: true }),
+      });
+      if (!res.ok) throw new Error('Failed to set default');
+      await loadBankAccounts();
+    } catch (err) {
+      Alert.alert('Could Not Update', 'Please try again.');
+    }
+  };
+
+  const handleDeleteBankAccount = (accountId, accountName) => {
+    Alert.alert(
+      'Delete Bank Account',
+      `Remove "${accountName}"? This cannot be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const token = await getToken();
+              if (!token) return;
+              const res = await fetch(`${BACKEND_URL}/api/business-profile/bank-accounts/${accountId}`, {
+                method: 'DELETE',
+                headers: { Authorization: `Bearer ${token}` },
+              });
+              if (!res.ok) throw new Error('Delete failed');
+              if (expandedAccountId === accountId) setExpandedAccountId(null);
+              await loadBankAccounts();
+            } catch (err) {
+              Alert.alert('Could Not Delete', 'Please try again.');
+            }
+          },
+        },
+      ]
+    );
   };
 
   // ── Save ──────────────────────────────────────────────────────────────────
@@ -446,6 +557,117 @@ export default function BusinessProfileScreen() {
         />
       </SettingsSection>
 
+      {/* Bank Accounts -- each row saves independently via its own Save button,
+          not the screen-level Save below. */}
+      <SettingsSection title="Bank Accounts">
+        {bankAccountsLoading ? (
+          <ActivityIndicator size="small" color="#075E54" />
+        ) : bankAccounts.length === 0 ? (
+          <Text style={styles.bankEmptyText}>No bank accounts added yet.</Text>
+        ) : (
+          bankAccounts.map((acct) => {
+            const isExpanded = expandedAccountId === acct.id;
+            return (
+              <View key={acct.id} style={styles.bankRow}>
+                <View style={styles.bankRowHeader}>
+                  <TouchableOpacity
+                    style={styles.bankRowHeaderMain}
+                    onPress={() => {
+                      if (isExpanded) {
+                        setExpandedAccountId(null);
+                        setExpandedSnapshot(null);
+                      } else {
+                        setExpandedAccountId(acct.id);
+                        setExpandedSnapshot({ ...acct });
+                      }
+                    }}
+                  >
+                    <Ionicons name={isExpanded ? 'chevron-up' : 'chevron-down'} size={18} color="#666666" />
+                    <Text style={styles.bankRowTitle}>
+                      {acct.name}{acct.is_default ? ' (Default)' : ''}
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={() => handleDeleteBankAccount(acct.id, acct.name)}
+                    style={styles.bankDeleteBtn}
+                  >
+                    <Ionicons name="trash-outline" size={18} color="#CC3333" />
+                  </TouchableOpacity>
+                </View>
+
+                {isExpanded && (
+                  <View style={styles.bankExpanded}>
+                    <SettingsField
+                      label="Account Name"
+                      value={acct.name}
+                      onChangeText={(v) => updateLocalBankField(acct.id, 'name', v)}
+                      editable={savingAccountId !== acct.id}
+                    />
+                    <SettingsField
+                      label="Bank Name"
+                      value={acct.bank_name || ''}
+                      onChangeText={(v) => updateLocalBankField(acct.id, 'bank_name', v)}
+                      editable={savingAccountId !== acct.id}
+                    />
+                    <SettingsField
+                      label="Account Number"
+                      value={acct.account_number || ''}
+                      onChangeText={(v) => updateLocalBankField(acct.id, 'account_number', v)}
+                      editable={savingAccountId !== acct.id}
+                    />
+                    <SettingsField
+                      label="IFSC"
+                      value={acct.ifsc_code || ''}
+                      onChangeText={(v) => updateLocalBankField(acct.id, 'ifsc_code', v)}
+                      editable={savingAccountId !== acct.id}
+                    />
+                    <SettingsField
+                      label="Branch"
+                      value={acct.branch_name || ''}
+                      onChangeText={(v) => updateLocalBankField(acct.id, 'branch_name', v)}
+                      editable={savingAccountId !== acct.id}
+                    />
+                    <TouchableOpacity
+                      style={styles.bankDefaultRow}
+                      onPress={() => handleSetDefaultBankAccount(acct.id)}
+                      disabled={acct.is_default}
+                    >
+                      <Ionicons
+                        name={acct.is_default ? 'checkbox' : 'square-outline'}
+                        size={20}
+                        color={acct.is_default ? '#075E54' : '#999999'}
+                      />
+                      <Text style={styles.bankDefaultLabel}>Use as default payment account</Text>
+                    </TouchableOpacity>
+                    <View style={styles.bankRowActions}>
+                      <TouchableOpacity
+                        onPress={() => {
+                          if (expandedSnapshot) {
+                            setBankAccounts((prev) => prev.map((a) => (a.id === acct.id ? expandedSnapshot : a)));
+                          }
+                          setExpandedAccountId(null);
+                          setExpandedSnapshot(null);
+                        }}
+                        disabled={savingAccountId === acct.id}
+                      >
+                        <Text style={styles.bankCancelText}>Cancel</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.bankSaveBtn}
+                        onPress={() => handleSaveBankAccount(acct.id)}
+                        disabled={savingAccountId === acct.id}
+                      >
+                        <Text style={styles.bankSaveBtnText}>{savingAccountId === acct.id ? 'Saving...' : 'Save'}</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                )}
+              </View>
+            );
+          })
+        )}
+      </SettingsSection>
+
       {/* Branding */}
       <SettingsSection title="Branding">
         <View style={styles.brandingRow}>
@@ -483,6 +705,19 @@ const styles = StyleSheet.create({
   brandingTextWrap: { flex: 1, marginRight: 12 },
   brandingLabel: { fontSize: 14, color: '#1A1A1A', fontWeight: '500' },
   brandingHint: { fontSize: 12, color: '#888888', marginTop: 2 },
+  bankEmptyText: { fontSize: 13, color: '#999999', paddingVertical: 8 },
+  bankRow: { borderBottomWidth: 1, borderBottomColor: '#F0F0F0', paddingVertical: 4 },
+  bankRowHeader: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, gap: 8 },
+  bankRowHeaderMain: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  bankRowTitle: { flex: 1, fontSize: 14, fontWeight: '600', color: '#1A1A1A' },
+  bankDeleteBtn: { padding: 4 },
+  bankExpanded: { paddingBottom: 12 },
+  bankDefaultRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8 },
+  bankDefaultLabel: { fontSize: 13, color: '#1A1A1A' },
+  bankRowActions: { flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center', gap: 16, marginTop: 4 },
+  bankCancelText: { fontSize: 14, color: '#666666', paddingVertical: 8, paddingHorizontal: 8 },
+  bankSaveBtn: { backgroundColor: '#075E54', borderRadius: 8, paddingVertical: 8, paddingHorizontal: 16 },
+  bankSaveBtnText: { color: '#FFFFFF', fontSize: 14, fontWeight: '600' },
   signatureRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 4 },
   signatureThumb: {
     width: 56, height: 56, borderRadius: 8, borderWidth: 1, borderColor: '#E0E0E0',
