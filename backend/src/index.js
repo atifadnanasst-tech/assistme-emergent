@@ -1954,18 +1954,18 @@ async function generateDocumentPDF({ documentId, organisationId, documentType, d
     // (spec Part 7), so today every account on file shows on every document type.
     if (biz.bank_accounts && biz.bank_accounts.length > 0) {
       doc2.moveDown(1.5);
-      doc2.fontSize(10).font('Helvetica-Bold').text('Bank Details', { align: 'left' });
+      doc2.fontSize(10).font('Helvetica-Bold').text('Bank Details', 50, doc2.y, { width: 495, align: 'left' });
       doc2.moveDown(0.3);
       biz.bank_accounts.forEach((acct) => {
         doc2.fontSize(8).font('Helvetica-Bold').text(
-          `${acct.name}${acct.bank_name ? ' — ' + acct.bank_name : ''}`, { align: 'left' }
+          `${acct.name}${acct.bank_name ? ' — ' + acct.bank_name : ''}`, 50, doc2.y, { width: 495, align: 'left' }
         );
         const lineParts = [];
         if (acct.account_number) lineParts.push(`A/C: ${acct.account_number}`);
         if (acct.ifsc_code) lineParts.push(`IFSC: ${acct.ifsc_code}`);
         if (acct.branch_name) lineParts.push(`Branch: ${acct.branch_name}`);
         if (lineParts.length > 0) {
-          doc2.fontSize(8).font('Helvetica').text(lineParts.join('   '), { align: 'left' });
+          doc2.fontSize(8).font('Helvetica').text(lineParts.join('   '), 50, doc2.y, { width: 495, align: 'left' });
         }
         doc2.moveDown(0.3);
       });
@@ -1977,11 +1977,11 @@ async function generateDocumentPDF({ documentId, organisationId, documentType, d
       doc2.moveTo(50, doc2.y).lineTo(545, doc2.y).stroke();
       doc2.moveDown(0.3);
       if (biz.terms_text) {
-        doc2.fontSize(8).font('Helvetica').text(biz.terms_text, { align: 'left' });
+        doc2.fontSize(8).font('Helvetica').text(biz.terms_text, 50, doc2.y, { width: 495, align: 'left' });
         doc2.moveDown(0.3);
       }
       if (biz.assistme_strip_text) {
-        doc2.fontSize(8).font('Helvetica').fillColor('#888888').text(biz.assistme_strip_text, { align: 'center' });
+        doc2.fontSize(8).font('Helvetica').fillColor('#888888').text(biz.assistme_strip_text, 50, doc2.y, { width: 495, align: 'left' });
         doc2.fillColor('#000000');
       }
     }
