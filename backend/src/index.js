@@ -14,6 +14,7 @@ import { recordOpeningPosition, isOpeningPositionAllowed } from './services/busi
 import { extractVisualization } from './services/ai/visualizationParser.js';
 import { getDocumentBrandingProfile } from './services/pdf/documentBrandingProfile.js';
 import { listBankAccounts, createBankAccount, updateBankAccount, deleteBankAccount } from './services/capabilities/bankAccountsService.js';
+import { extractBankAccountFromImage } from './services/ai/extractBankAccountFromImage.js';
 import PDFDocument from 'pdfkit';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -6242,6 +6243,24 @@ if (supabase) {
       return c.json({ success: true });
     } catch (err) {
       console.error('DELETE /api/business-profile/bank-accounts/:id error:', err);
+      return c.json({ error: 'server_error' }, 500);
+    }
+  });
+
+  app.post('/api/business-profile/bank-accounts/extract-from-image', async (c) => {
+    try {
+      const auth = await authenticateChat(c);
+      if (!auth) return c.json({ error: 'unauthorized' }, 401);
+      const { url, mime } = await c.req.json();
+      if (!url) return c.json({ error: 'No image URL provided.' }, 400);
+
+      const client = getOpenAI();
+      if (!client) return c.json({ error: 'ai_error', message: 'AI not configured' }, 500);
+
+      const result = await extractBankAccountFromImage({ url, mime, llmClient: client });
+      return c.json(result);
+    } catch (err) {
+      console.error('POST /api/business-profile/bank-accounts/extract-from-image error:', err);
       return c.json({ error: 'server_error' }, 500);
     }
   });
