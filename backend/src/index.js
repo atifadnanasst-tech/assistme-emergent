@@ -5870,25 +5870,28 @@ async function getGlobalConv(orgId, userId) {
 async function jobMorningBriefing(orgId, userId) {
   const today = new Date().toISOString().split('T')[0];
   let fired = 0;
-  const { data: tasks } = await supabase.from('tasks').select('id, title, entity_id, entity_type')
+  // entity_id is the customer id (canonical contract) -- invoice linkage, when present,
+  // lives in custom_fields.invoice_id, not entity_id.
+  const { data: tasks } = await supabase.from('tasks').select('id, title, entity_id, entity_type, custom_fields')
     .eq('organisation_id', orgId).eq('entity_type', 'delivery').eq('status', 'pending').eq('due_date', today).is('deleted_at', null);
   for (const task of (tasks || [])) {
-    let custName = 'Customer'; let custId = null;
-    if (task.entity_id) {
-      const { data: inv } = await supabase.from('invoices').select('customer_id, invoice_number').eq('id', task.entity_id).maybeSingle();
-      if (inv) {
-        custId = inv.customer_id;
-        const { data: cust } = await supabase.from('customers').select('name').eq('id', inv.customer_id).maybeSingle();
-        custName = cust?.name || 'Customer';
-        const convId = await getConvForCustomer(orgId, userId, inv.customer_id);
-        if (convId && !(await alertAlreadyFired(orgId, convId, 'task_id', task.id, today))) {
-          await insertAlert(orgId, convId, `🚚 Delivery due today — ${inv.invoice_number} for ${custName}. Mark done when delivered.`,
-            { task_id: task.id, alert_type: 'delivery_due', alert_date: today });
-          await supabase.from('entity_memory').upsert({ organisation_id: orgId, entity_type: 'customer', entity_id: inv.customer_id, memory_key: 'last_delivery_alert_date', memory_value: today, confidence: 1.0 },
-            { onConflict: 'organisation_id,entity_type,entity_id,memory_key' });
-          fired++;
-        }
-      }
+    if (!task.entity_id) continue;
+    const { data: cust } = await supabase.from('customers').select('name').eq('id', task.entity_id).maybeSingle();
+    if (!cust) continue;
+    const custName = cust.name || 'Customer';
+    const linkedInvoiceId = task.custom_fields?.invoice_id || null;
+    let invoiceLabel = task.title || 'Scheduled delivery';
+    if (linkedInvoiceId) {
+      const { data: inv } = await supabase.from('invoices').select('invoice_number').eq('id', linkedInvoiceId).maybeSingle();
+      if (inv?.invoice_number) invoiceLabel = inv.invoice_number;
+    }
+    const convId = await getConvForCustomer(orgId, userId, task.entity_id);
+    if (convId && !(await alertAlreadyFired(orgId, convId, 'task_id', task.id, today))) {
+      await insertAlert(orgId, convId, `🚚 Delivery due today — ${invoiceLabel} for ${custName}. Mark done when delivered.`,
+        { task_id: task.id, alert_type: 'delivery_due', alert_date: today });
+      await supabase.from('entity_memory').upsert({ organisation_id: orgId, entity_type: 'customer', entity_id: task.entity_id, memory_key: 'last_delivery_alert_date', memory_value: today, confidence: 1.0 },
+        { onConflict: 'organisation_id,entity_type,entity_id,memory_key' });
+      fired++;
     }
   }
   return fired;
@@ -5898,19 +5901,21 @@ async function jobMorningBriefing(orgId, userId) {
 async function jobPaymentReminders(orgId, userId) {
   const today = new Date().toISOString().split('T')[0];
   let fired = 0;
-  const { data: tasks } = await supabase.from('tasks').select('id, entity_id')
+  // entity_id is the customer id (canonical contract) -- invoice linkage, when present,
+  // lives in custom_fields.invoice_id, not entity_id.
+  const { data: tasks } = await supabase.from('tasks').select('id, entity_id, custom_fields')
     .eq('organisation_id', orgId).eq('entity_type', 'reminder').eq('status', 'pending').eq('due_date', today).is('deleted_at', null);
   for (const task of (tasks || [])) {
     if (!task.entity_id) continue;
-    const { data: inv } = await supabase.from('invoices').select('customer_id, invoice_number').eq('id', task.entity_id).maybeSingle();
-    if (!inv) continue;
-    const { data: cust } = await supabase.from('customers').select('name, outstanding_balance').eq('id', inv.customer_id).maybeSingle();
-    const convId = await getConvForCustomer(orgId, userId, inv.customer_id);
+    const { data: cust } = await supabase.from('customers').select('name, outstanding_balance').eq('id', task.entity_id).maybeSingle();
+    if (!cust) continue;
+    const linkedInvoiceId = task.custom_fields?.invoice_id || null;
+    const convId = await getConvForCustomer(orgId, userId, task.entity_id);
     if (convId && !(await alertAlreadyFired(orgId, convId, 'task_id', task.id, today))) {
-      const amt = (cust?.outstanding_balance || 0).toLocaleString('en-IN');
-      await insertAlert(orgId, convId, `💰 Payment reminder — ${cust?.name || 'Customer'} owes ₹${amt}. Tap to send WhatsApp.`,
-        { task_id: task.id, invoice_id: inv.id, alert_type: 'reminder_due', alert_date: today, customer_id: inv.customer_id });
-      await supabase.from('entity_memory').upsert({ organisation_id: orgId, entity_type: 'customer', entity_id: inv.customer_id, memory_key: 'last_reminder_alert_date', memory_value: today, confidence: 1.0 },
+      const amt = (cust.outstanding_balance || 0).toLocaleString('en-IN');
+      await insertAlert(orgId, convId, `💰 Payment reminder — ${cust.name || 'Customer'} owes ₹${amt}. Tap to send WhatsApp.`,
+        { task_id: task.id, invoice_id: linkedInvoiceId, alert_type: 'reminder_due', alert_date: today, customer_id: task.entity_id });
+      await supabase.from('entity_memory').upsert({ organisation_id: orgId, entity_type: 'customer', entity_id: task.entity_id, memory_key: 'last_reminder_alert_date', memory_value: today, confidence: 1.0 },
         { onConflict: 'organisation_id,entity_type,entity_id,memory_key' });
       fired++;
     }
@@ -6099,7 +6104,7 @@ app.get('/api/activity', async (c) => {
 
     } else {
       // My Tasks
-      const { data: tasks } = await supabase.from('tasks').select('id, title, description, status, priority, due_date, entity_type, entity_id, created_at')
+      const { data: tasks } = await supabase.from('tasks').select('id, title, description, status, priority, due_date, entity_type, entity_id, custom_fields, created_at')
         .eq('organisation_id', organisationId).is('deleted_at', null)
         .or(`created_by.eq.${userId},assigned_to.eq.${userId}`)
         .order('due_date', { ascending: true }).limit(50);
@@ -6108,11 +6113,12 @@ app.get('/api/activity', async (c) => {
       for (const task of (tasks || [])) {
         let custName = null, custId = null, custPhone = null;
         if (task.entity_id && (task.entity_type === 'delivery' || task.entity_type === 'reminder')) {
-          const { data: inv } = await supabase.from('invoices').select('customer_id').eq('id', task.entity_id).maybeSingle();
-          if (inv?.customer_id) {
-            custId = inv.customer_id;
-            const { data: cust } = await supabase.from('customers').select('name, phone').eq('id', inv.customer_id).maybeSingle();
-            custName = cust?.name; custPhone = cust?.phone;
+          // entity_id is the customer id directly (canonical contract) -- invoice linkage,
+          // when present, lives in custom_fields.invoice_id, not entity_id.
+          const { data: cust } = await supabase.from('customers').select('name, phone').eq('id', task.entity_id).maybeSingle();
+          if (cust) {
+            custId = task.entity_id;
+            custName = cust.name; custPhone = cust.phone;
           }
         }
         items.push({
