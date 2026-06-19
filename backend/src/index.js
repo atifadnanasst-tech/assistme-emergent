@@ -1,4 +1,5 @@
 import { serve } from '@hono/node-server';
+import cron from 'node-cron';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import dotenv from 'dotenv';
@@ -6021,6 +6022,42 @@ async function jobDraftCleanup(orgId) {
   } catch { return 0; }
 }
 
+// ── Watch Engine — scheduled execution across all active orgs (Batch 0.5) ──
+// Interim hardcoded schedule. Batch A's Preferences Center will later let
+// each org configure its own working hours / per-job timing -- this just
+// gets jobs running on a real timer so the rest of the system has
+// something live to build against.
+async function getOrgNotificationRecipients() {
+  // Resolves to the org owner today. When manager/doer assignment ships
+  // (Batch C), this is the one place that needs to change to route to the
+  // right person -- scheduler plumbing itself stays untouched.
+  const { data: orgs } = await supabase.from('organisations')
+    .select('id').eq('is_active', true).is('deleted_at', null);
+  const results = [];
+  for (const org of (orgs || [])) {
+    const { data: owner } = await supabase.from('users')
+      .select('id').eq('organisation_id', org.id).eq('role', 'owner')
+      .eq('is_active', true).is('deleted_at', null).limit(1).maybeSingle();
+    if (owner) results.push({ orgId: org.id, userId: owner.id });
+  }
+  return results;
+}
+
+async function runWatchJobForAllOrgs(jobName, jobFn) {
+  const orgs = await getOrgNotificationRecipients();
+  let totalFired = 0;
+  for (const { orgId, userId } of orgs) {
+    try {
+      const result = await jobFn(orgId, userId);
+      totalFired += (typeof result === 'number' ? result : 0);
+    } catch (err) {
+      console.error(`[WatchEngine] ${jobName} failed for org ${orgId}:`, err.message);
+    }
+  }
+  console.log(`[WatchEngine] ${jobName} ran for ${orgs.length} org(s), ${totalFired} alert(s)/update(s) fired.`);
+  return totalFired;
+}
+
 // ─── POST /api/watch/trigger ─────────────────────────────────
 app.post('/api/watch/trigger', async (c) => {
   try {
@@ -6302,6 +6339,18 @@ if (supabase) {
   registerSupplierRoutes(app, supabase, authenticateChat);
   console.log('✅ AI routes registered');
 }
+
+// ── Watch Engine cron schedule (interim, Batch 0.5) — IST (Asia/Kolkata) ──
+const CRON_TZ = { timezone: 'Asia/Kolkata' };
+cron.schedule('0 8 * * *', () => runWatchJobForAllOrgs('jobMorningBriefing', jobMorningBriefing), CRON_TZ);
+cron.schedule('0 8 * * *', () => runWatchJobForAllOrgs('jobPaymentReminders', jobPaymentReminders), CRON_TZ);
+cron.schedule('0 8 * * *', () => runWatchJobForAllOrgs('jobOverdueEscalation', jobOverdueEscalation), CRON_TZ);
+cron.schedule('0 8 * * *', () => runWatchJobForAllOrgs('jobDailyInsight', jobDailyInsight), CRON_TZ);
+// TODO Batch 3: move this fixed 8 PM schedule to organisations.settings.job_schedule
+// once the Preferences Center exists -- 20:00 here is a placeholder, not business logic.
+cron.schedule('0 20 * * *', () => runWatchJobForAllOrgs('jobBankReconciliation', jobBankReconciliation), CRON_TZ);
+cron.schedule('0 */4 * * *', () => runWatchJobForAllOrgs('jobDraftCleanup', jobDraftCleanup), CRON_TZ);
+console.log('[WatchEngine] Scheduler initialized -- 6 jobs scheduled (interim fixed schedule, IST)');
 
 // Start server
 const port = process.env.PORT ? parseInt(process.env.PORT) : 3000;
