@@ -48,10 +48,10 @@ export default function BusinessProfileScreen() {
   const [savingAccountId, setSavingAccountId] = useState(null);
   const [expandedSnapshot, setExpandedSnapshot] = useState(null);
   const [addingNewAccount, setAddingNewAccount] = useState(false);
-  const [newAccount, setNewAccount] = useState({ name: '', bank_name: '', account_number: '', ifsc_code: '', branch_name: '' });
+  const [newAccount, setNewAccount] = useState({ name: '', bank_name: '', account_holder_name: '', account_number: '', ifsc_code: '', branch_name: '' });
   const [creatingAccount, setCreatingAccount] = useState(false);
   const [extractingBankImage, setExtractingBankImage] = useState(false);
-  const [pendingBankExtraction, setPendingBankExtraction] = useState(null);
+  const [bankOcrToast, setBankOcrToast] = useState('');
 
   // Form fields — field_key names match WRITABLE_FIELDS in setBusinessProfileCapability.js
   // and column names in business_profiles table (schema_sql_v3.txt verified)
@@ -253,6 +253,7 @@ export default function BusinessProfileScreen() {
         body: JSON.stringify({
           name: account.name,
           bank_name: account.bank_name,
+          account_holder_name: account.account_holder_name,
           account_number: account.account_number,
           ifsc_code: account.ifsc_code,
           branch_name: account.branch_name,
@@ -339,28 +340,21 @@ export default function BusinessProfileScreen() {
         Alert.alert('Could Not Read Image', extracted.error || 'Please try again or enter details manually.');
         return;
       }
-      setPendingBankExtraction(extracted);
+      setNewAccount((prev) => ({
+        ...prev,
+        bank_name: extracted.bank_name || prev.bank_name,
+        account_holder_name: extracted.account_holder_name || prev.account_holder_name,
+        account_number: extracted.account_number || prev.account_number,
+        ifsc_code: extracted.ifsc_code || prev.ifsc_code,
+        branch_name: extracted.branch_name || prev.branch_name,
+      }));
+      setBankOcrToast('Please check the details carefully. AI can make mistakes.');
+      setTimeout(() => setBankOcrToast(''), 4000);
     } catch (err) {
       Alert.alert('Could Not Process Image', 'Please try again.');
     } finally {
       setExtractingBankImage(false);
     }
-  };
-
-  const handleApplyBankExtraction = () => {
-    if (!pendingBankExtraction) return;
-    setNewAccount({
-      ...newAccount,
-      bank_name: pendingBankExtraction.bank_name || newAccount.bank_name,
-      account_number: pendingBankExtraction.account_number || newAccount.account_number,
-      ifsc_code: pendingBankExtraction.ifsc_code || newAccount.ifsc_code,
-      branch_name: pendingBankExtraction.branch_name || newAccount.branch_name,
-    });
-    setPendingBankExtraction(null);
-  };
-
-  const handleDiscardBankExtraction = () => {
-    setPendingBankExtraction(null);
   };
 
   const handleCreateBankAccount = async () => {
@@ -383,7 +377,7 @@ export default function BusinessProfileScreen() {
         return;
       }
       setAddingNewAccount(false);
-      setNewAccount({ name: '', bank_name: '', account_number: '', ifsc_code: '', branch_name: '' });
+      setNewAccount({ name: '', bank_name: '', account_holder_name: '', account_number: '', ifsc_code: '', branch_name: '' });
       await loadBankAccounts();
     } catch (err) {
       Alert.alert('Could Not Add', 'Please try again.');
@@ -718,6 +712,13 @@ export default function BusinessProfileScreen() {
                       editable={savingAccountId !== acct.id}
                     />
                     <SettingsField
+                      label="Account Holder Name"
+                      value={acct.account_holder_name || ''}
+                      onChangeText={(v) => updateLocalBankField(acct.id, 'account_holder_name', v)}
+                      placeholder="If different from business name"
+                      editable={savingAccountId !== acct.id}
+                    />
+                    <SettingsField
                       label="Account Number"
                       value={acct.account_number || ''}
                       onChangeText={(v) => updateLocalBankField(acct.id, 'account_number', v)}
@@ -777,51 +778,26 @@ export default function BusinessProfileScreen() {
 
         {addingNewAccount ? (
           <View style={styles.bankExpanded}>
-            {pendingBankExtraction ? (
-              <View style={styles.bankRecognizedCard}>
-                <Text style={styles.bankRecognizedTitle}>Recognized:</Text>
-                {pendingBankExtraction.bank_name && (
-                  <Text style={styles.bankRecognizedLine}>Bank: {pendingBankExtraction.bank_name}</Text>
-                )}
-                {pendingBankExtraction.account_number && (
-                  <Text style={styles.bankRecognizedLine}>A/C: {pendingBankExtraction.account_number}</Text>
-                )}
-                {pendingBankExtraction.ifsc_code && (
-                  <Text style={styles.bankRecognizedLine}>IFSC: {pendingBankExtraction.ifsc_code}</Text>
-                )}
-                {pendingBankExtraction.branch_name && (
-                  <Text style={styles.bankRecognizedLine}>Branch: {pendingBankExtraction.branch_name}</Text>
-                )}
-                {!pendingBankExtraction.bank_name && !pendingBankExtraction.account_number &&
-                  !pendingBankExtraction.ifsc_code && !pendingBankExtraction.branch_name && (
-                  <Text style={styles.bankRecognizedLine}>Nothing readable was found in this image.</Text>
-                )}
-                <View style={styles.bankRowActions}>
-                  <TouchableOpacity onPress={handleDiscardBankExtraction}>
-                    <Text style={styles.bankCancelText}>Discard</Text>
+            <View style={styles.bankImportRow}>
+              <Text style={styles.bankImportLabel}>Scan a passbook or cheque</Text>
+              {extractingBankImage ? (
+                <ActivityIndicator size="small" color="#075E54" />
+              ) : (
+                <View style={styles.bankImportIcons}>
+                  <TouchableOpacity onPress={() => handleBankImagePick(true)} style={styles.bankImportIconBtn}>
+                    <Ionicons name="camera-outline" size={20} color="#075E54" />
                   </TouchableOpacity>
-                  <TouchableOpacity style={styles.bankSaveBtn} onPress={handleApplyBankExtraction}>
-                    <Text style={styles.bankSaveBtnText}>Apply</Text>
+                  <TouchableOpacity onPress={() => handleBankImagePick(false)} style={styles.bankImportIconBtn}>
+                    <Ionicons name="images-outline" size={20} color="#075E54" />
                   </TouchableOpacity>
                 </View>
+              )}
+            </View>
+            {bankOcrToast ? (
+              <View style={styles.bankOcrToast}>
+                <Text style={styles.bankOcrToastText}>{bankOcrToast}</Text>
               </View>
-            ) : (
-              <View style={styles.bankImportRow}>
-                <Text style={styles.bankImportLabel}>Scan a passbook or cheque</Text>
-                {extractingBankImage ? (
-                  <ActivityIndicator size="small" color="#075E54" />
-                ) : (
-                  <View style={styles.bankImportIcons}>
-                    <TouchableOpacity onPress={() => handleBankImagePick(true)} style={styles.bankImportIconBtn}>
-                      <Ionicons name="camera-outline" size={20} color="#075E54" />
-                    </TouchableOpacity>
-                    <TouchableOpacity onPress={() => handleBankImagePick(false)} style={styles.bankImportIconBtn}>
-                      <Ionicons name="images-outline" size={20} color="#075E54" />
-                    </TouchableOpacity>
-                  </View>
-                )}
-              </View>
-            )}
+            ) : null}
             <SettingsField
               label="Account Name"
               value={newAccount.name}
@@ -833,6 +809,13 @@ export default function BusinessProfileScreen() {
               label="Bank Name"
               value={newAccount.bank_name}
               onChangeText={(v) => setNewAccount({ ...newAccount, bank_name: v })}
+              editable={!creatingAccount}
+            />
+            <SettingsField
+              label="Account Holder Name"
+              value={newAccount.account_holder_name}
+              onChangeText={(v) => setNewAccount({ ...newAccount, account_holder_name: v })}
+              placeholder="If different from business name"
               editable={!creatingAccount}
             />
             <SettingsField
@@ -855,7 +838,7 @@ export default function BusinessProfileScreen() {
             />
             <View style={styles.bankRowActions}>
               <TouchableOpacity
-                onPress={() => { setAddingNewAccount(false); setNewAccount({ name: '', bank_name: '', account_number: '', ifsc_code: '', branch_name: '' }); }}
+                onPress={() => { setAddingNewAccount(false); setNewAccount({ name: '', bank_name: '', account_holder_name: '', account_number: '', ifsc_code: '', branch_name: '' }); }}
                 disabled={creatingAccount}
               >
                 <Text style={styles.bankCancelText}>Cancel</Text>
@@ -929,9 +912,8 @@ const styles = StyleSheet.create({
   bankImportLabel: { fontSize: 13, color: '#666666' },
   bankImportIcons: { flexDirection: 'row', gap: 16 },
   bankImportIconBtn: { padding: 4 },
-  bankRecognizedCard: { backgroundColor: '#F0F7F5', borderRadius: 8, padding: 12, marginBottom: 12 },
-  bankRecognizedTitle: { fontSize: 13, fontWeight: '700', color: '#075E54', marginBottom: 4 },
-  bankRecognizedLine: { fontSize: 13, color: '#1A1A1A', marginBottom: 2 },
+  bankOcrToast: { backgroundColor: '#FFF8E1', borderRadius: 8, padding: 10, marginBottom: 8 },
+  bankOcrToastText: { fontSize: 12, color: '#7B5800' },
   signatureRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 4 },
   signatureThumb: {
     width: 56, height: 56, borderRadius: 8, borderWidth: 1, borderColor: '#E0E0E0',
