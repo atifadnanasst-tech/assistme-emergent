@@ -1800,9 +1800,22 @@ async function generateDocumentPDF({ documentId, organisationId, documentType, d
     const { data: items } = await supabase.from(itemsTable).select('*')
       .eq(itemsForeignKey, documentId).order('sort_order');
     const { data: customer } = await supabase.from('customers')
-      .select('name, phone, tax_id').eq('id', doc.customer_id).single();
+      .select('name, phone, tax_id, company').eq('id', doc.customer_id).single();
     const { data: org } = await supabase.from('organisations')
       .select('name').eq('id', organisationId).single();
+
+    // Customer official identity (spec Part 5): resolve a billing address
+    // for the "Bill To" block. Prefer is_default=true if multiple billing
+    // rows exist; otherwise take whatever billing row comes back first.
+    let customerBillingAddress = null;
+    if (doc.customer_id) {
+      const { data: custAddrs } = await supabase.from('customer_addresses')
+        .select('line1, line2, city, state, postal_code, is_default')
+        .eq('customer_id', doc.customer_id).eq('type', 'billing').is('deleted_at', null);
+      if (custAddrs && custAddrs.length > 0) {
+        customerBillingAddress = custAddrs.find((a) => a.is_default) || custAddrs[0];
+      }
+    }
 
     // Document Branding Engine -- single source of truth for header/footer/bank details
     const biz = await getDocumentBrandingProfile(organisationId, supabase);
@@ -1861,10 +1874,22 @@ async function generateDocumentPDF({ documentId, organisationId, documentType, d
     if (doc.due_date) doc2.text(`${documentType === 'invoice' ? 'Due' : 'Valid Until'}: ${doc.due_date || doc.expiry_date}`, { align: 'right' });
     doc2.moveDown(0.5);
 
-    // ── Bill To
+    // ── Bill To -- customer.company falls back to customer.name only when
+    // the official business name has never been set (spec Part 2/5 rule).
     doc2.fontSize(11).font('Helvetica-Bold').text('BILL TO:');
-    doc2.font('Helvetica').fontSize(10).text(customer?.name || '');
+    const customerDisplayName = (customer?.company && customer.company.trim()) || customer?.name || '';
+    doc2.font('Helvetica').fontSize(10).text(customerDisplayName);
     if (customer?.tax_id) doc2.text(`GSTIN: ${customer.tax_id}`);
+    if (customerBillingAddress) {
+      const addrParts = [
+        customerBillingAddress.line1,
+        customerBillingAddress.line2,
+        customerBillingAddress.city,
+        customerBillingAddress.state,
+        customerBillingAddress.postal_code,
+      ].filter(Boolean);
+      if (addrParts.length > 0) doc2.text(addrParts.join(', '));
+    }
     doc2.moveDown(1);
 
     // ── Items table header
@@ -4782,9 +4807,9 @@ app.get('/api/invoice/new', async (c) => {
           const { data: addrs } = await supabase.from('customer_addresses').select('*')
             .eq('customer_id', customerId).eq('organisation_id', organisationId);
           if (addrs) {
-            const billing = addrs.find(a => a.address_type === 'billing' && a.is_default) || addrs.find(a => a.address_type === 'billing') || addrs[0];
-            const shipping = addrs.find(a => a.address_type === 'shipping' && a.is_default) || addrs.find(a => a.address_type === 'shipping');
-            if (billing) billingAddress = { id: billing.id, line1: billing.line1 || '', line2: billing.line2 || '', city: billing.city || '', state: billing.state || '', pincode: billing.pincode || '' };
+            const billing = addrs.find(a => a.type === 'billing' && a.is_default) || addrs.find(a => a.type === 'billing') || addrs[0];
+            const shipping = addrs.find(a => a.type === 'shipping' && a.is_default) || addrs.find(a => a.type === 'shipping');
+            if (billing) billingAddress = { id: billing.id, line1: billing.line1 || '', line2: billing.line2 || '', city: billing.city || '', state: billing.state || '', pincode: billing.postal_code || '' };
             if (shipping) shippingAddress = { id: shipping.id, line1: shipping.line1 || '', city: shipping.city || '', state: shipping.state || '' };
           }
         } catch {}
@@ -5061,7 +5086,7 @@ app.post('/api/invoices', async (c) => {
     } catch {}
     try {
       const { data: addrs } = await supabase.from('customer_addresses').select('state')
-        .eq('customer_id', customer_id).eq('organisation_id', organisationId).eq('address_type', 'billing').limit(1);
+        .eq('customer_id', customer_id).eq('organisation_id', organisationId).eq('type', 'billing').limit(1);
       customerState = addrs?.[0]?.state || null;
     } catch {}
     const isIntraState = supplierState && customerState && supplierState.toLowerCase() === customerState.toLowerCase();
