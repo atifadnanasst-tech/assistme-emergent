@@ -1876,10 +1876,10 @@ async function generateDocumentPDF({ documentId, organisationId, documentType, d
 
     // ── Bill To -- customer.company falls back to customer.name only when
     // the official business name has never been set (spec Part 2/5 rule).
+    // Order: name, then address, then GSTIN (GSTIN moved below address Jun 19).
     doc2.fontSize(11).font('Helvetica-Bold').text('BILL TO:');
     const customerDisplayName = (customer?.company && customer.company.trim()) || customer?.name || '';
     doc2.font('Helvetica').fontSize(10).text(customerDisplayName);
-    if (customer?.tax_id) doc2.text(`GSTIN: ${customer.tax_id}`);
     if (customerBillingAddress) {
       const addrParts = [
         customerBillingAddress.line1,
@@ -1890,6 +1890,7 @@ async function generateDocumentPDF({ documentId, organisationId, documentType, d
       ].filter(Boolean);
       if (addrParts.length > 0) doc2.text(addrParts.join(', '));
     }
+    if (customer?.tax_id) doc2.text(`GSTIN: ${customer.tax_id}`);
     doc2.moveDown(1);
 
     // ── Items table header
@@ -1984,12 +1985,10 @@ async function generateDocumentPDF({ documentId, organisationId, documentType, d
       doc2.fontSize(10).font('Helvetica-Bold').text('Bank Details', 50, doc2.y, { width: 495, align: 'left' });
       doc2.moveDown(0.3);
       biz.bank_accounts.forEach((acct) => {
+        const bankLineTitle = acct.account_holder_name || acct.name;
         doc2.fontSize(8).font('Helvetica-Bold').text(
-          `${acct.name}${acct.bank_name ? ' — ' + acct.bank_name : ''}`, 50, doc2.y, { width: 495, align: 'left' }
+          `${bankLineTitle}${acct.bank_name ? ' — ' + acct.bank_name : ''}`, 50, doc2.y, { width: 495, align: 'left' }
         );
-        if (acct.account_holder_name) {
-          doc2.fontSize(8).font('Helvetica').text(`Held by: ${acct.account_holder_name}`, 50, doc2.y, { width: 495, align: 'left' });
-        }
         const lineParts = [];
         if (acct.account_number) lineParts.push(`A/C: ${acct.account_number}`);
         if (acct.ifsc_code) lineParts.push(`IFSC: ${acct.ifsc_code}`);
