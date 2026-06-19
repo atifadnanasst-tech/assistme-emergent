@@ -27,7 +27,11 @@ Extract these five fields using the PRINTED LABELS on the document as your guide
 
 1. bank_name: The name of the bank. On a cheque it usually appears prominently at the top (e.g. "State Bank of India", "HDFC Bank"). On a passbook it appears on the cover or header.
 
-2. account_holder_name: The name of the person or business the account belongs to. This may be a business name OR a personal/proprietor name -- Indian small businesses commonly collect payments into a personal or proprietor account, not just a formally named business account, so do not assume it must be a company name. Look for a printed name near the top of a cheque or on a passbook cover.
+2. account_holder_name: The name of the person or business the account itself belongs to (the account owner / drawer). This may be a business name OR a personal/proprietor name -- Indian small businesses commonly collect payments into a personal or proprietor account, not just a formally named business account.
+
+   CRITICAL on a cheque: the "Pay ___" line names the PAYEE -- the person RECEIVING the money. This is NEVER the account holder and must be ignored for this field. The actual account holder's name is typically printed elsewhere on the cheque, often near the signature line at the bottom (sometimes with "S/O" meaning "son of", or similar relationship markers), or pre-printed as part of the personalized cheque book. If you cannot find a name that is clearly the account owner (distinct from the "Pay" line), return null rather than guessing the payee's name.
+
+   On a passbook, the account holder's name is usually printed prominently on the cover or first page -- there is no "payee" ambiguity there.
 
 3. account_number: The account number. On a cheque, look for a label that says "A/c No.", "Account No.", or similar -- the number next to THAT label is the account number. DO NOT use the MICR code (the row of special magnetic-ink numbers printed at the very bottom of a cheque -- those are for machine processing only and are NOT the account number). On a passbook, look for "Account Number" or "A/c No." label.
 
