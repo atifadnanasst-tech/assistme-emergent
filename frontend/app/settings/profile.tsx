@@ -50,6 +50,8 @@ export default function BusinessProfileScreen() {
   const [addingNewAccount, setAddingNewAccount] = useState(false);
   const [newAccount, setNewAccount] = useState({ name: '', bank_name: '', account_number: '', ifsc_code: '', branch_name: '' });
   const [creatingAccount, setCreatingAccount] = useState(false);
+  const [extractingBankImage, setExtractingBankImage] = useState(false);
+  const [pendingBankExtraction, setPendingBankExtraction] = useState(null);
 
   // Form fields — field_key names match WRITABLE_FIELDS in setBusinessProfileCapability.js
   // and column names in business_profiles table (schema_sql_v3.txt verified)
@@ -285,6 +287,80 @@ export default function BusinessProfileScreen() {
     } catch (err) {
       Alert.alert('Could Not Update', 'Please try again.');
     }
+  };
+
+  const handleBankImagePick = async (useCamera) => {
+    try {
+      const ImagePicker = await import('expo-image-picker');
+      let result;
+      if (useCamera) {
+        const permission = await ImagePicker.requestCameraPermissionsAsync();
+        if (!permission.granted) {
+          Alert.alert('Permission Required', 'Please allow camera access.');
+          return;
+        }
+        result = await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 0.8 });
+      } else {
+        const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (!permission.granted) {
+          Alert.alert('Permission Required', 'Please allow access to your photo library.');
+          return;
+        }
+        result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: 'images', allowsEditing: false, quality: 0.8 });
+      }
+      if (result.canceled || !result.assets?.[0]) return;
+
+      const asset = result.assets[0];
+      setExtractingBankImage(true);
+      const token = await getToken();
+      if (!token) return;
+
+      const filename = asset.uri.split('/').pop() || 'bankdoc.jpg';
+      const ext = filename.split('.').pop()?.toLowerCase() || 'jpg';
+      const mime = ext === 'png' ? 'image/png' : 'image/jpeg';
+
+      const formData = new FormData();
+      formData.append('file', { uri: asset.uri, name: filename, type: mime } as any);
+      const uploadRes = await fetch(`${BACKEND_URL}/api/upload`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: formData,
+      });
+      if (!uploadRes.ok) throw new Error('Upload failed');
+      const { url, mime_type } = await uploadRes.json();
+
+      const extractRes = await fetch(`${BACKEND_URL}/api/business-profile/bank-accounts/extract-from-image`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url, mime: mime_type }),
+      });
+      const extracted = await extractRes.json();
+      if (!extractRes.ok || !extracted.success) {
+        Alert.alert('Could Not Read Image', extracted.error || 'Please try again or enter details manually.');
+        return;
+      }
+      setPendingBankExtraction(extracted);
+    } catch (err) {
+      Alert.alert('Could Not Process Image', 'Please try again.');
+    } finally {
+      setExtractingBankImage(false);
+    }
+  };
+
+  const handleApplyBankExtraction = () => {
+    if (!pendingBankExtraction) return;
+    setNewAccount({
+      ...newAccount,
+      bank_name: pendingBankExtraction.bank_name || newAccount.bank_name,
+      account_number: pendingBankExtraction.account_number || newAccount.account_number,
+      ifsc_code: pendingBankExtraction.ifsc_code || newAccount.ifsc_code,
+      branch_name: pendingBankExtraction.branch_name || newAccount.branch_name,
+    });
+    setPendingBankExtraction(null);
+  };
+
+  const handleDiscardBankExtraction = () => {
+    setPendingBankExtraction(null);
   };
 
   const handleCreateBankAccount = async () => {
@@ -701,6 +777,51 @@ export default function BusinessProfileScreen() {
 
         {addingNewAccount ? (
           <View style={styles.bankExpanded}>
+            {pendingBankExtraction ? (
+              <View style={styles.bankRecognizedCard}>
+                <Text style={styles.bankRecognizedTitle}>Recognized:</Text>
+                {pendingBankExtraction.bank_name && (
+                  <Text style={styles.bankRecognizedLine}>Bank: {pendingBankExtraction.bank_name}</Text>
+                )}
+                {pendingBankExtraction.account_number && (
+                  <Text style={styles.bankRecognizedLine}>A/C: {pendingBankExtraction.account_number}</Text>
+                )}
+                {pendingBankExtraction.ifsc_code && (
+                  <Text style={styles.bankRecognizedLine}>IFSC: {pendingBankExtraction.ifsc_code}</Text>
+                )}
+                {pendingBankExtraction.branch_name && (
+                  <Text style={styles.bankRecognizedLine}>Branch: {pendingBankExtraction.branch_name}</Text>
+                )}
+                {!pendingBankExtraction.bank_name && !pendingBankExtraction.account_number &&
+                  !pendingBankExtraction.ifsc_code && !pendingBankExtraction.branch_name && (
+                  <Text style={styles.bankRecognizedLine}>Nothing readable was found in this image.</Text>
+                )}
+                <View style={styles.bankRowActions}>
+                  <TouchableOpacity onPress={handleDiscardBankExtraction}>
+                    <Text style={styles.bankCancelText}>Discard</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.bankSaveBtn} onPress={handleApplyBankExtraction}>
+                    <Text style={styles.bankSaveBtnText}>Apply</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ) : (
+              <View style={styles.bankImportRow}>
+                <Text style={styles.bankImportLabel}>Scan a passbook or cheque</Text>
+                {extractingBankImage ? (
+                  <ActivityIndicator size="small" color="#075E54" />
+                ) : (
+                  <View style={styles.bankImportIcons}>
+                    <TouchableOpacity onPress={() => handleBankImagePick(true)} style={styles.bankImportIconBtn}>
+                      <Ionicons name="camera-outline" size={20} color="#075E54" />
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={() => handleBankImagePick(false)} style={styles.bankImportIconBtn}>
+                      <Ionicons name="images-outline" size={20} color="#075E54" />
+                    </TouchableOpacity>
+                  </View>
+                )}
+              </View>
+            )}
             <SettingsField
               label="Account Name"
               value={newAccount.name}
@@ -804,6 +925,13 @@ const styles = StyleSheet.create({
   bankSaveBtnText: { color: '#FFFFFF', fontSize: 14, fontWeight: '600' },
   addBankAccountBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 12 },
   addBankAccountText: { fontSize: 14, fontWeight: '700', color: '#075E54' },
+  bankImportRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 8, marginBottom: 8 },
+  bankImportLabel: { fontSize: 13, color: '#666666' },
+  bankImportIcons: { flexDirection: 'row', gap: 16 },
+  bankImportIconBtn: { padding: 4 },
+  bankRecognizedCard: { backgroundColor: '#F0F7F5', borderRadius: 8, padding: 12, marginBottom: 12 },
+  bankRecognizedTitle: { fontSize: 13, fontWeight: '700', color: '#075E54', marginBottom: 4 },
+  bankRecognizedLine: { fontSize: 13, color: '#1A1A1A', marginBottom: 2 },
   signatureRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 4 },
   signatureThumb: {
     width: 56, height: 56, borderRadius: 8, borderWidth: 1, borderColor: '#E0E0E0',
