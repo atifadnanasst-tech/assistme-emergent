@@ -1962,6 +1962,9 @@ async function generateDocumentPDF({ documentId, organisationId, documentType, d
         doc2.fontSize(8).font('Helvetica-Bold').text(
           `${acct.name}${acct.bank_name ? ' — ' + acct.bank_name : ''}`, 50, doc2.y, { width: 495, align: 'left' }
         );
+        if (acct.account_holder_name) {
+          doc2.fontSize(8).font('Helvetica').text(`Held by: ${acct.account_holder_name}`, 50, doc2.y, { width: 495, align: 'left' });
+        }
         const lineParts = [];
         if (acct.account_number) lineParts.push(`A/C: ${acct.account_number}`);
         if (acct.ifsc_code) lineParts.push(`IFSC: ${acct.ifsc_code}`);

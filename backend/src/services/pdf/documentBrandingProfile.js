@@ -47,7 +47,7 @@ export async function getDocumentBrandingProfile(organisationId, supabase) {
         const accountIds = links.map((l) => l.bank_account_id);
         const { data: accounts } = await supabase
           .from('bank_accounts')
-          .select('id, name, bank_name, account_number, ifsc_code, branch_name')
+          .select('id, name, bank_name, account_holder_name, account_number, ifsc_code, branch_name')
           .in('id', accountIds)
           .is('deleted_at', null)
           .eq('is_active', true);

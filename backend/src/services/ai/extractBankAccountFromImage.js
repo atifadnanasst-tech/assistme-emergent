@@ -21,24 +21,30 @@
  * nickname, never printed on a real bank document.
  */
 
-const VISION_PROMPT = `You are extracting bank account details from an image (passbook page, cheque leaf, or bank statement) for an Indian MSME business.
+const VISION_PROMPT = `You are extracting bank account details from an Indian bank document (passbook page, cheque, or bank statement).
 
-Look at the image and extract these fields if clearly and confidently visible:
-- bank_name: the name of the bank (e.g. "HDFC Bank")
-- account_number: the account number, digits only, no spaces or dashes
-- ifsc_code: the IFSC code (format: 4 letters, then 0, then 6 alphanumeric characters)
-- branch_name: the branch name or location
+Extract these five fields using the PRINTED LABELS on the document as your guide:
+
+1. bank_name: The name of the bank. On a cheque it usually appears prominently at the top (e.g. "State Bank of India", "HDFC Bank"). On a passbook it appears on the cover or header.
+
+2. account_holder_name: The name of the person or business the account belongs to. This may be a business name OR a personal/proprietor name -- Indian small businesses commonly collect payments into a personal or proprietor account, not just a formally named business account, so do not assume it must be a company name. Look for a printed name near the top of a cheque or on a passbook cover.
+
+3. account_number: The account number. On a cheque, look for a label that says "A/c No.", "Account No.", or similar -- the number next to THAT label is the account number. DO NOT use the MICR code (the row of special magnetic-ink numbers printed at the very bottom of a cheque -- those are for machine processing only and are NOT the account number). On a passbook, look for "Account Number" or "A/c No." label.
+
+4. ifsc_code: The IFSC code. On a cheque it is labeled "IFS Code", "IFSC Code", or similar -- it follows the format: 4 letters, then the digit 0, then 6 alphanumeric characters (e.g. SBIN0003867). Do not confuse this with the MICR code or branch code.
+
+5. branch_name: The branch name or location. On a cheque this is usually printed in the bank's header block. On a passbook it may appear on the cover.
 
 Rules:
-- Only extract what is clearly and confidently visible. Use null for any field that is not visible, unclear, or you are not confident about.
-- Do not guess or invent values that aren't actually printed in the image.
-- Do not extract the account holder's name -- it is not needed.
-- Include a "confidence" field: a single number between 0 and 1 representing your overall confidence in this extraction as a whole.
+- Use the printed LABELS to identify each field. Do not guess based on position alone.
+- If a field is not clearly labeled and legible, return null for it. Never invent a value.
+- Do not return the MICR line (bottom row of magnetic numbers) as the account number under any circumstances.
+- Include a "confidence" field: a single number between 0 and 1 for your overall confidence in this extraction.
 
-Return ONLY a valid JSON object with exactly these five keys: bank_name, account_number, ifsc_code, branch_name, confidence. No markdown, no code fences, no explanation, no preamble -- just the raw JSON object and nothing else.`;
+Return ONLY a valid JSON object with exactly these six keys: bank_name, account_holder_name, account_number, ifsc_code, branch_name, confidence. No markdown, no code fences, no explanation -- just the raw JSON object and nothing else.`;
 
 export async function extractBankAccountFromImage({ url, mime, llmClient }) {
-  const empty = { success: false, bank_name: null, account_number: null, ifsc_code: null, branch_name: null, confidence: 0 };
+  const empty = { success: false, bank_name: null, account_holder_name: null, account_number: null, ifsc_code: null, branch_name: null, confidence: 0 };
 
   const supabaseHost = process.env.SUPABASE_URL
     ? new URL(process.env.SUPABASE_URL).hostname
@@ -80,7 +86,7 @@ export async function extractBankAccountFromImage({ url, mime, llmClient }) {
         role: 'user',
         content: [
           { type: 'text', text: VISION_PROMPT },
-          { type: 'image_url', image_url: { url: `data:${mime};base64,${base64Image}`, detail: 'low' } },
+          { type: 'image_url', image_url: { url: `data:${mime};base64,${base64Image}`, detail: 'auto' } },
         ],
       }],
       max_tokens: 300,
@@ -102,6 +108,7 @@ export async function extractBankAccountFromImage({ url, mime, llmClient }) {
     return {
       success: true,
       bank_name: parsed.bank_name || null,
+      account_holder_name: parsed.account_holder_name || null,
       account_number: parsed.account_number || null,
       ifsc_code: parsed.ifsc_code || null,
       branch_name: parsed.branch_name || null,

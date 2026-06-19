@@ -45,7 +45,7 @@ export async function listBankAccounts(orgId, supabase) {
   const accountIds = links.map((l) => l.bank_account_id);
   const { data: accounts } = await supabase
     .from('bank_accounts')
-    .select('id, name, bank_name, account_number, ifsc_code, branch_name')
+    .select('id, name, bank_name, account_holder_name, account_number, ifsc_code, branch_name')
     .in('id', accountIds)
     .is('deleted_at', null)
     .eq('is_active', true);
@@ -67,7 +67,7 @@ export async function listBankAccounts(orgId, supabase) {
 }
 
 export async function createBankAccount(orgId, fields, supabase) {
-  const { name, bank_name, account_number, ifsc_code, branch_name } = fields || {};
+  const { name, bank_name, account_holder_name, account_number, ifsc_code, branch_name } = fields || {};
   if (!name || !name.trim()) {
     return { success: false, error: 'Account name is required.' };
   }
@@ -99,6 +99,7 @@ export async function createBankAccount(orgId, fields, supabase) {
       bank_name: bank_name?.trim() || null,
       account_number: normalizedAccountNumber,
       ifsc_code: normalizedIfsc,
+      account_holder_name: account_holder_name?.trim() || null,
       branch_name: branch_name?.trim() || null,
     })
     .select()
@@ -162,6 +163,7 @@ export async function updateBankAccount(orgId, accountId, fields, supabase) {
       updateCols.account_number = null;
     }
   }
+  if (fields.account_holder_name !== undefined) updateCols.account_holder_name = fields.account_holder_name?.trim() || null;
   if (fields.branch_name !== undefined) updateCols.branch_name = fields.branch_name?.trim() || null;
   if (fields.ifsc_code !== undefined) {
     if (fields.ifsc_code && fields.ifsc_code.trim()) {
