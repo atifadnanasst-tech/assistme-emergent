@@ -27,8 +27,8 @@ export const PUSH_FREQUENCY_OPTIONS: OptionDef[] = [
 
 export const WEEKEND_BEHAVIOR_OPTIONS: OptionDef[] = [
   { value: 'normal', label: 'Normal', description: 'Same as weekdays' },
-  { value: 'reduced', label: 'Reduced', description: 'The default -- fewer pushes on weekends' },
-  { value: 'pause', label: 'Pause', description: 'No pushes at all on weekends' },
+  { value: 'reduced', label: 'Reduced', description: 'The default -- saved now, takes effect once notification scheduling is built' },
+  { value: 'pause', label: 'Pause', description: 'Saved now, takes effect once notification scheduling is built' },
 ];
 
 export const REMINDER_ESCALATION_OPTIONS: OptionDef[] = [

@@ -210,8 +210,8 @@ export default function NotificationsAttentionScreen() {
               <Text style={styles.fieldLabel}>Vacation Mode</Text>
               <Text style={styles.switchDescription}>
                 {current.vacation_mode
-                  ? 'No pushes or nudges right now. Background work still continues.'
-                  : 'Off -- AssistMe will reach you normally'}
+                  ? "Saved -- will pause pushes once notification routing is built. Nothing changes yet."
+                  : 'Off'}
               </Text>
             </View>
             <Switch
