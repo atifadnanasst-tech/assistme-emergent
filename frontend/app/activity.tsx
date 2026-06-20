@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, FlatList,
-  ActivityIndicator, RefreshControl,
+  ActivityIndicator, RefreshControl, Modal, Pressable,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -18,6 +18,7 @@ export default function ActivityScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [tab, setTab] = useState<'watchlist' | 'mytasks'>('watchlist');
   const [items, setItems] = useState<any[]>([]);
+  const [headerMenuVisible, setHeaderMenuVisible] = useState(false);
 
   const getToken = async () => {
     const token = await authService.getAccessToken();
@@ -51,7 +52,37 @@ export default function ActivityScreen() {
           <Ionicons name="arrow-back" size={24} color="#FFF" />
         </TouchableOpacity>
         <Text style={s.headerTitle}>Activity Center</Text>
+        <View style={{ flex: 1 }} />
+        <TouchableOpacity onPress={() => setHeaderMenuVisible(true)} style={s.backBtn}>
+          <Ionicons name="ellipsis-vertical" size={22} color="#FFF" />
+        </TouchableOpacity>
       </View>
+
+      {/* Header 3-dot menu (Batch C.16) -- same centered-popup pattern as
+          SharedActivityCard's own menus, for consistency. Object-form
+          navigation matches the proven convention already used in
+          login.tsx and chat/[customer_id].tsx -- not a literal query
+          string, which has zero precedent in this app. */}
+      <Modal visible={headerMenuVisible} transparent animationType="fade" onRequestClose={() => setHeaderMenuVisible(false)}>
+        <Pressable style={s.modalBackdrop} onPress={() => setHeaderMenuVisible(false)}>
+          <View style={s.menuBox}>
+            <TouchableOpacity
+              style={s.menuItem}
+              onPress={() => { setHeaderMenuVisible(false); router.push({ pathname: '/activity-filtered', params: { view: 'archived' } }); }}
+            >
+              <Ionicons name="archive-outline" size={20} color="#075E54" />
+              <Text style={s.menuItemText}>Archived Reminders</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={s.menuItem}
+              onPress={() => { setHeaderMenuVisible(false); router.push({ pathname: '/activity-filtered', params: { view: 'snoozed' } }); }}
+            >
+              <Ionicons name="time-outline" size={20} color="#075E54" />
+              <Text style={s.menuItemText}>Snoozed Reminders</Text>
+            </TouchableOpacity>
+          </View>
+        </Pressable>
+      </Modal>
 
       {/* Tabs */}
       <View style={s.tabBar}>
@@ -99,4 +130,8 @@ const s = StyleSheet.create({
   tabTextActive: { color: '#075E54', fontWeight: '700' },
   listContent: { padding: 12 },
   emptyText: { fontSize: 15, color: '#999' },
+  modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.3)', justifyContent: 'flex-start', alignItems: 'flex-end', paddingTop: 70, paddingRight: 12 },
+  menuBox: { backgroundColor: '#FFF', borderRadius: 12, paddingVertical: 6, minWidth: 200, shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 12, elevation: 8 },
+  menuItem: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 18, paddingVertical: 14, gap: 12 },
+  menuItemText: { fontSize: 15, color: '#333' },
 });
