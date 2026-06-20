@@ -6255,39 +6255,63 @@ app.get('/api/activity', async (c) => {
 
     } else {
       // My Tasks
-      const showArchived = c.req.query('show_archived') === 'true';
+      // Batch C.14: generalized from the old show_archived boolean into a
+      // 3-way view -- 'active' (default), 'archived', 'snoozed'. No caller
+      // ever used show_archived=true (nothing was wired to the archived
+      // view yet -- verified via grep across the whole repo), so this is
+      // a clean replacement, not a migration.
+      const view = c.req.query('view') === 'archived' ? 'archived'
+        : c.req.query('view') === 'snoozed' ? 'snoozed' : 'active';
       let taskQuery = supabase.from('tasks').select('id, title, description, status, priority, due_date, entity_type, entity_id, custom_fields, snoozed_until, archived_at, created_at')
         .eq('organisation_id', organisationId).is('deleted_at', null)
         .or(`created_by.eq.${userId},assigned_to.eq.${userId}`);
-      // Archive filtering stays in SQL using only .is()/.gte() -- both
-      // already proven to work in this exact file. A null archived_at
+      // Archive/snooze filtering stays in SQL using only .is()/.gte() --
+      // both already proven to work in this exact file. A null column
       // fails a >= comparison in Postgres, so .gte() against an epoch
-      // correctly isolates genuinely-archived rows without needing an
-      // untested .not(col,'is',null) variant.
-      taskQuery = showArchived
-        ? taskQuery.gte('archived_at', '1970-01-01T00:00:00Z')
-        : taskQuery.is('archived_at', null);
+      // correctly isolates genuinely-non-null rows without needing an
+      // untested .not(col,'is',null) variant. The snoozed view additionally
+      // requires archived_at IS NULL -- if a row somehow has both fields
+      // set, archived wins by construction: it matches the archived view's
+      // query but fails this one's archived_at IS NULL requirement, so it
+      // can never appear in both lists.
+      if (view === 'archived') {
+        taskQuery = taskQuery.gte('archived_at', '1970-01-01T00:00:00Z');
+      } else if (view === 'snoozed') {
+        taskQuery = taskQuery.is('archived_at', null).gte('snoozed_until', '1970-01-01T00:00:00Z');
+      } else {
+        taskQuery = taskQuery.is('archived_at', null);
+      }
       const { data: rawTasks } = await taskQuery.order('due_date', { ascending: true }).limit(50);
-      // Snooze filtering done in JS, not a second chained .or() -- this
-      // codebase has zero existing precedent for chaining multiple .or()
-      // calls in one query, so it isn't something to assume without a
-      // live test. Doing it here is equally correct and fully verifiable.
+      // Time-relative filtering done in JS, not a second chained .or() --
+      // this codebase has zero existing precedent for chaining multiple
+      // .or() calls in one query, so it isn't something to assume without
+      // a live test. Doing it here is equally correct and fully verifiable.
       // Compare as parsed Date objects, not raw strings -- format-agnostic
       // regardless of whether Supabase returns ISO-8601 ("...T...Z") or
       // Postgres-native ("... +00") timestamptz serialization, both of
       // which JS's Date constructor parses correctly either way.
       const nowMs = Date.now();
-      const visibleTasks = showArchived ? rawTasks : (rawTasks || []).filter(t => !t.snoozed_until || new Date(t.snoozed_until).getTime() <= nowMs);
+      let visibleTasks;
+      if (view === 'archived') {
+        visibleTasks = rawTasks;
+      } else if (view === 'snoozed') {
+        // Only genuinely still-snoozed items -- once snoozed_until passes,
+        // the item already reappears in the active view on its own, and
+        // shouldn't also linger here as if still hidden.
+        visibleTasks = (rawTasks || []).filter(t => t.snoozed_until && new Date(t.snoozed_until).getTime() > nowMs);
+      } else {
+        visibleTasks = (rawTasks || []).filter(t => !t.snoozed_until || new Date(t.snoozed_until).getTime() <= nowMs);
+      }
       // Overdue-pinned-to-top (Batch C.6). The SQL query already orders by
       // due_date ascending, so a simple filter+concat partition preserves
       // that ordering within each group -- no custom comparator needed.
-      // Archived view is left in its existing order (overdue framing
-      // doesn't apply to things already filed away).
+      // Meaningful only for the active view -- archived/snoozed items are
+      // already filed away, overdue framing doesn't apply there.
       const today = new Date().toISOString().split('T')[0];
       const isOverdue = (t) => t.due_date && t.due_date < today && t.status !== 'completed';
-      const tasks = showArchived
-        ? visibleTasks
-        : [...(visibleTasks || []).filter(isOverdue), ...(visibleTasks || []).filter(t => !isOverdue(t))];
+      const tasks = view === 'active'
+        ? [...(visibleTasks || []).filter(isOverdue), ...(visibleTasks || []).filter(t => !isOverdue(t))]
+        : visibleTasks;
 
       const items = [];
       for (const task of (tasks || [])) {
