@@ -75,6 +75,10 @@ export default function SharedActivityCard({ item, source, onRefresh, onTapCard,
   const dueDate = source === 'mytasks' ? item.due_date : item.alert_date;
   const isCompleted = item.status === 'completed';
   const isArchived = !!item.archived_at;
+  // Only relevant inside the future Snoozed view -- a snoozed item never
+  // appears in the default Watchlist/My Tasks lists (C.4/C.14 filter them
+  // out), so this can only ever be true there.
+  const isSnoozed = !!item.snoozed_until && new Date(item.snoozed_until).getTime() > Date.now();
   const hasCustomer = !!item.customer_id;
   const hasMenuItems = !!(taskId) || !!onAssign || !!onAddNotes;
 
@@ -156,6 +160,9 @@ export default function SharedActivityCard({ item, source, onRefresh, onTapCard,
           {isArchived && (
             <View style={s.archivedBadge}><Text style={s.archivedBadgeText}>Archived</Text></View>
           )}
+          {isSnoozed && (
+            <View style={s.snoozedBadge}><Text style={s.snoozedBadgeText}>Snoozed until {fmtDate(item.snoozed_until)}</Text></View>
+          )}
         </View>
 
         {hasCustomer && (
@@ -181,7 +188,7 @@ export default function SharedActivityCard({ item, source, onRefresh, onTapCard,
                 <TouchableOpacity style={s.iconBtn} onPress={handleToggleComplete}>
                   <Ionicons name={isCompleted ? 'refresh-outline' : 'checkmark-circle-outline'} size={18} color="#4CAF50" />
                 </TouchableOpacity>
-                <TouchableOpacity style={s.iconBtn} onPress={() => setSnoozeVisible(true)}>
+                <TouchableOpacity style={s.iconBtn} onPress={() => isSnoozed ? patchTask({ snoozed_until: null }) : setSnoozeVisible(true)}>
                   <Ionicons name="time-outline" size={18} color="#075E54" />
                 </TouchableOpacity>
                 <TouchableOpacity style={s.iconBtn} onPress={handleDelete}>
@@ -255,6 +262,8 @@ const s = StyleSheet.create({
   statusText: { fontSize: 11, fontWeight: '600', textTransform: 'capitalize' },
   archivedBadge: { backgroundColor: '#F0F0F0', borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2 },
   archivedBadgeText: { fontSize: 11, fontWeight: '600', color: '#667781' },
+  snoozedBadge: { backgroundColor: '#FFF3E0', borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2 },
+  snoozedBadgeText: { fontSize: 11, fontWeight: '600', color: '#F57C00' },
   actionRow: { flexDirection: 'row', gap: 4, alignItems: 'center', marginTop: 8 },
   iconBtn: { padding: 6, borderRadius: 6, backgroundColor: '#F5F5F5' },
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.3)', justifyContent: 'center', alignItems: 'center' },
