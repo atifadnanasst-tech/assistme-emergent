@@ -6222,6 +6222,13 @@ app.get('/api/activity', async (c) => {
       const items = [];
       for (const alert of (alerts || [])) {
         const meta = alert.metadata || {};
+        // Watchlist must only show genuine system-generated alerts (every
+        // Watch Engine job always tags alert_type), not one-time Spark
+        // confirmation messages ("I set this reminder for you") -- those
+        // share role='system' but never set alert_type, so they were
+        // leaking into Watchlist even though the actual task they confirm
+        // correctly belongs in My Tasks only.
+        if (!meta.alert_type) continue;
         let custName = null, custId = meta.customer_id || null, custPhone = null;
         if (custId) {
           const { data: cust } = await supabase.from('customers').select('name, phone').eq('id', custId).maybeSingle();
