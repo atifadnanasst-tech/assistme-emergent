@@ -2487,7 +2487,7 @@ export default function CustomerChatScreen() {
                      action.action_type === 'create_quote' ? 'Create Quote' :
                      action.action_type === 'create_purchase_bill' ? 'Purchase Bill' :
                      action.action_type === 'schedule_delivery' ? 'Delivery' :
-                     action.action_type === 'set_reminder' ? 'Payment Reminder' :
+                     action.action_type === 'set_reminder' ? (action.parameters?.title || 'Payment Reminder') :
                      action.action_type === 'record_payment' ? 'Record Payment' :
                      action.action_type === 'record_supplier_payment' ? 'Supplier Payment' :
                      action.action_type === 'goods_returned' ? 'Goods Returned' :

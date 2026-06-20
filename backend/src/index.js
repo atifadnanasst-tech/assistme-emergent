@@ -2166,7 +2166,7 @@ Action rules:
 - convert_quote_to_invoice: use when owner says convert quote to invoice. Set quote_number if mentioned.
 - schedule_delivery: one action, set delivery_date.
 - update_delivery_status: use when owner says maal pahunch gaya, delivered, delivery complete. Set status=completed.
-- set_reminder: one action, set due_date.
+- set_reminder: set due_date. ALSO extract a short 'title' describing what the reminder is for, in the owner's own words (e.g. "Trade License Renewal", "Follow up on quotation", "Renew GST registration"). Only use payment/collection framing if the conversation is actually about a pending payment or invoice -- do not assume every reminder is about money. If no clear subject is mentioned, leave title null.
 - record_payment: extract amount AND bank_account_name if owner mentions a bank name. Extract payment_mode if mentioned. Extract payment_date if owner mentions when payment was received (kal/yesterday = previous day, aaj/today = current date, parso/day before yesterday, weekday references like Monday/last Friday/pichle hafte, or specific dates = YYYY-MM-DD). Default null if not mentioned — backend will use today's date.
 - goods_returned: use when owner says maal wapis aaya, return, goods returned. Extract items and reason.
 - record_expense: use when owner says kharcha hua, expense, paid for. Extract amount, category, description.
@@ -2750,12 +2750,19 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
         }
 
         // Non-invoice actions (delivery, reminder, payment, opening balance)
+        // Batch C.13: title was previously dropped here -- ent.title never
+        // made it into actionParams, so the prompt's extraction instruction
+        // had no effect downstream no matter what the LLM returned. Adding
+        // it explicitly, and stopping the unconditional payment-framing
+        // hardcode for set_reminder's description so it doesn't contradict
+        // a correctly-extracted non-financial title.
         const actionParams = {
           customer_id: customerId,
           customer_name: customer.name,
           amount: ent.amount || null,
           due_date: ent.due_date || null,
           delivery_date: ent.delivery_date || null,
+          title: action.action_type === 'set_reminder' ? (ent.title || null) : null,
           // record_opening_balance_receivable/payable: direction maps 1:1
           // from action_type -- see recordOpeningPosition() primitive
           // (backend/src/services/business/recordOpeningPosition.js)
@@ -2767,7 +2774,7 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
           description: action.action_type === 'schedule_delivery'
             ? `Delivery for ${customer.name}`
             : action.action_type === 'set_reminder'
-            ? `Payment reminder for ${customer.name}`
+            ? (ent.title || `Payment reminder for ${customer.name}`)
             : action.action_type === 'record_opening_balance_receivable'
             ? `Opening balance: ${customer.name} owes you`
             : action.action_type === 'record_opening_balance_payable'
@@ -3151,10 +3158,19 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
           case 'set_reminder': {
             // Create a task in tasks table (so it shows in My Tasks)
             const reminderDate = params.due_date || new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0];
+            // Batch C.13: use the extracted title if the LLM found a clear
+            // non-financial subject (e.g. "Trade License Renewal"). Falls
+            // back to the existing payment framing when nothing was
+            // extracted -- this also correctly covers the auto-paired
+            // reminder created alongside a new invoice, which is built
+            // deterministically by the backend and never sets params.title
+            // at all, so it always keeps the (correct, genuinely payment-
+            // related) fallback framing.
+            const reminderTitle = params.title || `Payment reminder for ${customer.name}`;
             await supabase.from('tasks').insert({
               organisation_id: organisationId,
-              title: `Payment reminder for ${customer.name}`,
-              description: params.description || `Send payment reminder to ${customer.name}`,
+              title: reminderTitle,
+              description: params.description || reminderTitle,
               status: 'pending',
               priority: 'medium',
               created_by: userId,
@@ -3170,7 +3186,7 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
             if (remConv) {
               await supabase.from('messages').insert({
                 organisation_id: organisationId, conversation_id: remConv.id,
-                role: 'system', content: `✓ Payment reminder set for ${customer.name} on ${reminderDate}`,
+                role: 'system', content: `✓ ${reminderTitle} set for ${customer.name} on ${reminderDate}`,
                 metadata: { sender_type: 'system', visibility: 'owner_only', message_type: 'system_alert', read_by_owner: true, preview_text: `Reminder set for ${customer.name}` },
                 tokens_input: 0, tokens_output: 0,
               });
