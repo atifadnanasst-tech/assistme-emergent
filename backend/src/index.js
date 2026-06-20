@@ -6240,7 +6240,7 @@ app.get('/api/activity', async (c) => {
       const items = [];
       for (const task of (tasks || [])) {
         let custName = null, custId = null, custPhone = null;
-        if (task.entity_id && (task.entity_type === 'delivery' || task.entity_type === 'reminder')) {
+        if (task.entity_id && (task.entity_type === 'delivery' || task.entity_type === 'reminder' || task.entity_type === 'task')) {
           // entity_id is the customer id directly (canonical contract) -- invoice linkage,
           // when present, lives in custom_fields.invoice_id, not entity_id.
           const { data: cust } = await supabase.from('customers').select('name, phone').eq('id', task.entity_id).maybeSingle();
@@ -6265,6 +6265,81 @@ app.get('/api/activity', async (c) => {
   }
 });
 
+// ─── POST /api/tasks ─────────────────────────────────────────
+// General-purpose task/reminder creation -- the 4th way to create a
+// reminder alongside Spark, Customer AI, and Org AI (Batch C.8/C.9).
+// entity_id is the customer id directly (canonical contract, locked in
+// Batch 0.2) -- never an invoice id.
+// entity_type defaults to 'task' (general, non-financial) rather than
+// 'reminder' -- jobPaymentReminders filters strictly on entity_type =
+// 'reminder', so a trade-license renewal or supplier follow-up created
+// here correctly never gets framed as a payment alert. Override to
+// 'reminder' only if the caller explicitly wants payment-reminder
+// semantics for a manually created (non-invoice-paired) entry.
+app.post('/api/tasks', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { userId, organisationId } = auth;
+    const body = await c.req.json().catch(() => null);
+    if (!body || typeof body !== 'object') return c.json({ error: 'invalid_body' }, 400);
+
+    const title = (body.title || '').trim();
+    if (!title) return c.json({ error: 'title_required' }, 400);
+
+    // Real calendar-date check, not just digit-shape -- rejects things
+    // like 2026-99-99 that a bare \d{4}-\d{2}-\d{2} regex would accept.
+    const due = body.due_date;
+    const dueValid = typeof due === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(due)
+      && new Date(due + 'T00:00:00Z').toISOString().slice(0, 10) === due;
+    if (!dueValid) return c.json({ error: 'invalid_due_date' }, 400);
+
+    const allowedPriorities = ['low', 'medium', 'high', 'urgent'];
+    const priority = allowedPriorities.includes(body.priority) ? body.priority : 'medium';
+
+    const entityType = body.entity_type === 'reminder' ? 'reminder' : 'task';
+
+    let entityId = null;
+    if (body.customer_id) {
+      const { data: cust } = await supabase.from('customers').select('id')
+        .eq('id', body.customer_id).eq('organisation_id', organisationId).maybeSingle();
+      if (!cust) return c.json({ error: 'customer_not_found' }, 404);
+      entityId = body.customer_id;
+    }
+
+    let assignedTo = userId;
+    if (body.assigned_to && body.assigned_to !== userId) {
+      const { data: assignee } = await supabase.from('users').select('id')
+        .eq('id', body.assigned_to).eq('organisation_id', organisationId).maybeSingle();
+      if (!assignee) return c.json({ error: 'assignee_not_found' }, 404);
+      assignedTo = body.assigned_to;
+    }
+
+    const { data: task, error } = await supabase.from('tasks').insert({
+      organisation_id: organisationId,
+      title,
+      description: body.description || null,
+      status: 'pending',
+      priority,
+      created_by: userId,
+      assigned_to: assignedTo,
+      due_date: due,
+      entity_type: entityType,
+      entity_id: entityId,
+    }).select('id, title, description, due_date, status, priority, entity_id, entity_type, assigned_to, created_at').single();
+
+    if (error) {
+      console.error('[POST /api/tasks] insert error:', error);
+      return c.json({ error: 'create_failed' }, 500);
+    }
+
+    return c.json({ success: true, task });
+  } catch (error) {
+    console.error('[POST /api/tasks] Error:', error);
+    return c.json({ error: 'internal_error' }, 500);
+  }
+});
+
 // ─── PATCH /api/tasks/:task_id ───────────────────────────────
 app.patch('/api/tasks/:task_id', async (c) => {
   try {
@@ -6285,18 +6360,18 @@ app.patch('/api/tasks/:task_id', async (c) => {
     // Write entity_memory if completed
     if (body.status === 'completed') {
       const { data: task } = await supabase.from('tasks').select('entity_id, entity_type, due_date').eq('id', taskId).single();
+      // entity_id is the customer id directly (canonical contract, locked
+      // in Batch 0.2) -- this used to wrongly look it up as an invoice id,
+      // which silently found nothing for every single task completion.
       if (task?.entity_id) {
-        const { data: inv } = await supabase.from('invoices').select('customer_id').eq('id', task.entity_id).maybeSingle();
-        if (inv?.customer_id) {
-          const today = new Date().toISOString().split('T')[0];
-          const onTime = task.due_date ? task.due_date >= today : true;
-          try {
-            await supabase.from('entity_memory').upsert({
-              organisation_id: auth.organisationId, entity_type: 'customer', entity_id: inv.customer_id,
-              memory_key: 'task_completed_on_time', memory_value: onTime ? 'true' : 'false', confidence: 1.0,
-            }, { onConflict: 'organisation_id,entity_type,entity_id,memory_key' });
-          } catch {}
-        }
+        const today = new Date().toISOString().split('T')[0];
+        const onTime = task.due_date ? task.due_date >= today : true;
+        try {
+          await supabase.from('entity_memory').upsert({
+            organisation_id: auth.organisationId, entity_type: 'customer', entity_id: task.entity_id,
+            memory_key: 'task_completed_on_time', memory_value: onTime ? 'true' : 'false', confidence: 1.0,
+          }, { onConflict: 'organisation_id,entity_type,entity_id,memory_key' });
+        } catch {}
       }
     }
 
