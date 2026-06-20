@@ -527,7 +527,7 @@ export default function HomeScreen() {
         <Ionicons name="add" size={28} color="#FFFFFF" />
       </TouchableOpacity>
 
-      <Text style={{ textAlign: "center", fontSize: 10, color: "#CCC", paddingVertical: 2 }}>v1.3.293</Text>
+      <Text style={{ textAlign: "center", fontSize: 10, color: "#CCC", paddingVertical: 2 }}>v1.3.300</Text>
       {/* Bottom Navigation SafeAreaView */}
       <SafeAreaView style={styles.bottomNavSafeArea} edges={['bottom']}>
         <View style={styles.bottomNav}>
@@ -704,9 +704,9 @@ export default function HomeScreen() {
                 <Ionicons name="chevron-forward" size={20} color="#CCCCCC" />
               </TouchableOpacity>
 
-              <TouchableOpacity style={styles.sheetItem} onPress={() => { setShowToolsSheet(false); router.push('/settings/notifications'); }}>
+              <TouchableOpacity style={styles.sheetItem} onPress={() => { setShowToolsSheet(false); router.push('/settings/business-preferences'); }}>
                 <Ionicons name="notifications-outline" size={24} color="#667781" />
-                <Text style={styles.sheetItemText}>Notification preferences</Text>
+                <Text style={styles.sheetItemText}>Business Preferences</Text>
                 <Ionicons name="chevron-forward" size={20} color="#CCCCCC" />
               </TouchableOpacity>
 
@@ -728,14 +728,6 @@ export default function HomeScreen() {
                 <Ionicons name="chevron-forward" size={20} color="#CCCCCC" />
               </TouchableOpacity>
 
-              <TouchableOpacity style={styles.sheetItem} onPress={async () => {
-                setShowToolsSheet(false);
-                await AsyncStorage.removeItem('sparkHintDismissed');
-                Alert.alert('Done', 'Spark hints will show again on your next Spark tap.');
-              }}>
-                <Ionicons name="sparkles-outline" size={24} color="#667781" />
-                <Text style={styles.sheetItemText}>Reset Spark Hints</Text>
-              </TouchableOpacity>
               <TouchableOpacity style={styles.sheetItem} onPress={() => { setShowToolsSheet(false); router.push('/settings/help'); }}>
                 <Ionicons name="help-circle-outline" size={24} color="#667781" />
                 <Text style={styles.sheetItemText}>Tutorials & help</Text>
