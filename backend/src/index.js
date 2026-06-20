@@ -12,6 +12,7 @@ import { getBusinessProfile, updateBusinessProfileFields } from './services/capa
 import { registerSupplierRoutes } from './services/business/supplierRoutes.js';
 import { recordPayment } from './services/business/recordPayment.js';
 import { recordOpeningPosition, isOpeningPositionAllowed } from './services/business/recordOpeningPosition.js';
+import { getOrganisationSettings, buildDefaultSettings, deepMerge, checkPatchPermission, validateSettingsPatch } from './services/settings/organisationSettings.js';
 import { extractVisualization } from './services/ai/visualizationParser.js';
 import { getDocumentBrandingProfile } from './services/pdf/documentBrandingProfile.js';
 import { listBankAccounts, createBankAccount, updateBankAccount, deleteBankAccount } from './services/capabilities/bankAccountsService.js';
@@ -803,6 +804,72 @@ app.patch('/api/organisations', async (c) => {
   }
 });
 
+// ─── GET /api/organisations/settings ────────────────────────
+// Business Preferences (Batch A.1). Always returns a fully populated
+// object -- defaults merged with whatever has actually been saved --
+// even if organisations.settings is null. See organisationSettings.js
+// for the locked design doctrine this implements.
+app.get('/api/organisations/settings', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+    const settings = await getOrganisationSettings(organisationId, supabase);
+    return c.json({ settings });
+  } catch (err) {
+    console.error('[GET /api/organisations/settings] Error:', err);
+    return c.json({ error: 'internal_error' }, 500);
+  }
+});
+
+// ─── PATCH /api/organisations/settings ──────────────────────
+// Registry-authoritative: unknown setting paths are rejected, not
+// silently allowed. Permission check (editable_by) runs before value
+// validation. Deep-merges onto the currently SAVED settings only --
+// never onto the full defaults -- so only real overrides persist.
+app.patch('/api/organisations/settings', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { userId, organisationId } = auth;
+    const body = await c.req.json().catch(() => null);
+    if (!body || typeof body !== 'object') return c.json({ error: 'invalid_body' }, 400);
+
+    const { data: userRecord } = await supabase.from('users')
+      .select('role').eq('id', userId).maybeSingle();
+    const role = userRecord?.role || 'viewer';
+
+    const permission = checkPatchPermission(body, role);
+    if (!permission.allowed) {
+      return c.json({ error: 'forbidden', reason: permission.reason, path: permission.blockedPath }, 403);
+    }
+
+    const validation = validateSettingsPatch(body);
+    if (!validation.valid) {
+      return c.json({ error: 'validation_failed', errors: validation.errors }, 400);
+    }
+
+    const { data: org } = await supabase.from('organisations')
+      .select('industry, settings').eq('id', organisationId).maybeSingle();
+    if (!org) return c.json({ error: 'organisation_not_found' }, 404);
+
+    const currentSaved = org.settings || {};
+    const newSaved = deepMerge(currentSaved, body);
+
+    const { error: updateError } = await supabase.from('organisations')
+      .update({ settings: newSaved }).eq('id', organisationId);
+    if (updateError) {
+      console.error('[PATCH /api/organisations/settings] update error:', updateError);
+      return c.json({ error: 'update_failed' }, 500);
+    }
+
+    const fullSettings = deepMerge(buildDefaultSettings(org.industry), newSaved);
+    return c.json({ success: true, settings: fullSettings });
+  } catch (err) {
+    console.error('[PATCH /api/organisations/settings] Error:', err);
+    return c.json({ error: 'internal_error' }, 500);
+  }
+});
 
 // ─── POST /api/customers ────────────────────────────────────
 app.post('/api/customers', async (c) => {
