@@ -36,3 +36,19 @@ export const REMINDER_ESCALATION_OPTIONS: OptionDef[] = [
   { value: 'daily_until_done', label: 'Daily until done', description: 'Keeps reminding every day until resolved' },
   { value: 'escalate_if_overdue', label: 'Escalate if overdue', description: 'Increasing urgency the longer it sits' },
 ];
+
+// Mirrors PRIORITY_AREA_CATALOG (the values) in organisationSettings.js.
+// Labels/descriptions are presentation-only and have no backend counterpart --
+// the backend only knows and validates the value strings.
+export const PRIORITY_AREA_OPTIONS: OptionDef[] = [
+  { value: 'collections', label: 'Collections', description: 'Getting paid on time' },
+  { value: 'sales_growth', label: 'Sales Growth', description: 'Growing revenue' },
+  { value: 'new_customer_acquisition', label: 'New Customer Acquisition', description: 'Bringing in new business' },
+  { value: 'customer_retention', label: 'Customer Retention', description: 'Keeping existing customers active' },
+  { value: 'inventory_health', label: 'Inventory Health', description: 'Stock levels and movement' },
+  { value: 'vendor_supplier_payments', label: 'Vendor & Supplier Payments', description: 'Paying what you owe, on time' },
+  { value: 'cash_flow', label: 'Cash Flow', description: 'Money in vs money out' },
+  { value: 'profitability', label: 'Profitability', description: 'Margins, not just revenue' },
+  { value: 'delivery_operations', label: 'Delivery & Operations', description: 'Getting goods to customers' },
+  { value: 'team_management', label: 'Team Management', description: 'Staff productivity and workload' },
+];
