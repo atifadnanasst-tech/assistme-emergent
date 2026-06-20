@@ -5969,10 +5969,20 @@ async function jobMorningBriefing(orgId, userId) {
 async function jobPaymentReminders(orgId, userId) {
   const today = new Date().toISOString().split('T')[0];
   let fired = 0;
+  // reminder_escalation_mode governs USER-CREATED reminders only (this job).
+  // It must never reach jobOverdueEscalation -- that's a system risk signal,
+  // not a reminder preference, and always escalates regardless of this setting.
+  const settings = await getOrganisationSettings(orgId, supabase);
+  const escalationMode = settings?.notifications?.reminder_escalation_mode || 'notify_once';
   // entity_id is the customer id (canonical contract) -- invoice linkage, when present,
   // lives in custom_fields.invoice_id, not entity_id.
-  const { data: tasks } = await supabase.from('tasks').select('id, entity_id, custom_fields')
-    .eq('organisation_id', orgId).eq('entity_type', 'reminder').eq('status', 'pending').eq('due_date', today).is('deleted_at', null);
+  let query = supabase.from('tasks').select('id, entity_id, custom_fields, due_date')
+    .eq('organisation_id', orgId).eq('entity_type', 'reminder').eq('status', 'pending').is('deleted_at', null);
+  // notify_once (default): fires exactly once, on the exact due date -- unchanged
+  // from prior behavior. daily_until_done / escalate_if_overdue: keeps
+  // resurfacing every day the task remains pending and overdue.
+  query = escalationMode === 'notify_once' ? query.eq('due_date', today) : query.lte('due_date', today);
+  const { data: tasks } = await query;
   for (const task of (tasks || [])) {
     if (!task.entity_id) continue;
     const { data: cust } = await supabase.from('customers').select('name, outstanding_balance').eq('id', task.entity_id).maybeSingle();
@@ -5981,7 +5991,21 @@ async function jobPaymentReminders(orgId, userId) {
     const convId = await getConvForCustomer(orgId, userId, task.entity_id);
     if (convId && !(await alertAlreadyFired(orgId, convId, 'task_id', task.id, today))) {
       const amt = (cust.outstanding_balance || 0).toLocaleString('en-IN');
-      await insertAlert(orgId, convId, `💰 Payment reminder — ${cust.name || 'Customer'} owes ₹${amt}. Tap to send WhatsApp.`,
+      let message = `💰 Payment reminder — ${cust.name || 'Customer'} owes ₹${amt}. Tap to send WhatsApp.`;
+      if (escalationMode === 'escalate_if_overdue' && task.due_date < today) {
+        // UTC-midnight-anchored, matching the string-based date comparisons
+        // used everywhere else in this job -- avoids server-timezone drift
+        // around midnight that a naive Date.now() diff would be vulnerable to.
+        const due = new Date(task.due_date + 'T00:00:00Z');
+        const now = new Date(today + 'T00:00:00Z');
+        const daysOverdue = Math.floor((now.getTime() - due.getTime()) / 86400000);
+        if (daysOverdue >= 7) {
+          message = `🔴 Payment reminder — URGENT, ${daysOverdue} days overdue — ${cust.name || 'Customer'} owes ₹${amt}.`;
+        } else if (daysOverdue >= 3) {
+          message = `⚠️ Payment reminder — ${daysOverdue} days overdue — ${cust.name || 'Customer'} owes ₹${amt}.`;
+        }
+      }
+      await insertAlert(orgId, convId, message,
         { task_id: task.id, invoice_id: linkedInvoiceId, alert_type: 'reminder_due', alert_date: today, customer_id: task.entity_id });
       await supabase.from('entity_memory').upsert({ organisation_id: orgId, entity_type: 'customer', entity_id: task.entity_id, memory_key: 'last_reminder_alert_date', memory_value: today, confidence: 1.0 },
         { onConflict: 'organisation_id,entity_type,entity_id,memory_key' });
