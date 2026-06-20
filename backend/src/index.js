@@ -6254,7 +6254,17 @@ app.get('/api/activity', async (c) => {
       // Postgres-native ("... +00") timestamptz serialization, both of
       // which JS's Date constructor parses correctly either way.
       const nowMs = Date.now();
-      const tasks = showArchived ? rawTasks : (rawTasks || []).filter(t => !t.snoozed_until || new Date(t.snoozed_until).getTime() <= nowMs);
+      const visibleTasks = showArchived ? rawTasks : (rawTasks || []).filter(t => !t.snoozed_until || new Date(t.snoozed_until).getTime() <= nowMs);
+      // Overdue-pinned-to-top (Batch C.6). The SQL query already orders by
+      // due_date ascending, so a simple filter+concat partition preserves
+      // that ordering within each group -- no custom comparator needed.
+      // Archived view is left in its existing order (overdue framing
+      // doesn't apply to things already filed away).
+      const today = new Date().toISOString().split('T')[0];
+      const isOverdue = (t) => t.due_date && t.due_date < today && t.status !== 'completed';
+      const tasks = showArchived
+        ? visibleTasks
+        : [...(visibleTasks || []).filter(isOverdue), ...(visibleTasks || []).filter(t => !isOverdue(t))];
 
       const items = [];
       for (const task of (tasks || [])) {
