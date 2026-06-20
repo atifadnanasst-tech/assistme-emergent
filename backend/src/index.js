@@ -6232,10 +6232,29 @@ app.get('/api/activity', async (c) => {
 
     } else {
       // My Tasks
-      const { data: tasks } = await supabase.from('tasks').select('id, title, description, status, priority, due_date, entity_type, entity_id, custom_fields, created_at')
+      const showArchived = c.req.query('show_archived') === 'true';
+      let taskQuery = supabase.from('tasks').select('id, title, description, status, priority, due_date, entity_type, entity_id, custom_fields, snoozed_until, archived_at, created_at')
         .eq('organisation_id', organisationId).is('deleted_at', null)
-        .or(`created_by.eq.${userId},assigned_to.eq.${userId}`)
-        .order('due_date', { ascending: true }).limit(50);
+        .or(`created_by.eq.${userId},assigned_to.eq.${userId}`);
+      // Archive filtering stays in SQL using only .is()/.gte() -- both
+      // already proven to work in this exact file. A null archived_at
+      // fails a >= comparison in Postgres, so .gte() against an epoch
+      // correctly isolates genuinely-archived rows without needing an
+      // untested .not(col,'is',null) variant.
+      taskQuery = showArchived
+        ? taskQuery.gte('archived_at', '1970-01-01T00:00:00Z')
+        : taskQuery.is('archived_at', null);
+      const { data: rawTasks } = await taskQuery.order('due_date', { ascending: true }).limit(50);
+      // Snooze filtering done in JS, not a second chained .or() -- this
+      // codebase has zero existing precedent for chaining multiple .or()
+      // calls in one query, so it isn't something to assume without a
+      // live test. Doing it here is equally correct and fully verifiable.
+      // Compare as parsed Date objects, not raw strings -- format-agnostic
+      // regardless of whether Supabase returns ISO-8601 ("...T...Z") or
+      // Postgres-native ("... +00") timestamptz serialization, both of
+      // which JS's Date constructor parses correctly either way.
+      const nowMs = Date.now();
+      const tasks = showArchived ? rawTasks : (rawTasks || []).filter(t => !t.snoozed_until || new Date(t.snoozed_until).getTime() <= nowMs);
 
       const items = [];
       for (const task of (tasks || [])) {
@@ -6254,6 +6273,7 @@ app.get('/api/activity', async (c) => {
           status: task.status, priority: task.priority, due_date: task.due_date,
           entity_type: task.entity_type, entity_id: task.entity_id,
           customer_name: custName, customer_id: custId, customer_phone: custPhone,
+          snoozed_until: task.snoozed_until, archived_at: task.archived_at,
           created_at: task.created_at,
         });
       }
@@ -6351,6 +6371,26 @@ app.patch('/api/tasks/:task_id', async (c) => {
     const updateFields = {};
     if (body.status) updateFields.status = body.status;
     if (body.status === 'completed') updateFields.completed_at = new Date().toISOString();
+
+    // Snooze / archive / delete -- state transitions on the same task
+    // resource (Batch C.4), not separate endpoints. Each field accepts
+    // either a valid ISO timestamp (set the state) or null (clear/undo
+    // it -- e.g. the 24h delete-undo window is a frontend display
+    // decision only, this route just supports clearing deleted_at).
+    const isValidTimestampOrNull = (v) => v === null || (typeof v === 'string' && !isNaN(Date.parse(v)));
+    if ('snoozed_until' in body) {
+      if (!isValidTimestampOrNull(body.snoozed_until)) return c.json({ error: 'invalid_snoozed_until' }, 400);
+      updateFields.snoozed_until = body.snoozed_until;
+    }
+    if ('archived_at' in body) {
+      if (!isValidTimestampOrNull(body.archived_at)) return c.json({ error: 'invalid_archived_at' }, 400);
+      updateFields.archived_at = body.archived_at;
+    }
+    if ('deleted_at' in body) {
+      if (!isValidTimestampOrNull(body.deleted_at)) return c.json({ error: 'invalid_deleted_at' }, 400);
+      updateFields.deleted_at = body.deleted_at;
+    }
+
     updateFields.updated_at = new Date().toISOString();
 
     const { error } = await supabase.from('tasks').update(updateFields)
