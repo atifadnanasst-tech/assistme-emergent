@@ -5,6 +5,7 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { authService } from '../../../lib/auth';
+import SettingsSaveBar from '../../../components/settings/SettingsSaveBar';
 
 function timeStringToDate(timeStr: string): Date {
   const [h, m] = timeStr.split(':').map(Number);
@@ -89,7 +90,7 @@ export default function HoursAvailabilityScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
           <Ionicons name="arrow-back" size={24} color="#FFFFFF" />
@@ -153,15 +154,8 @@ export default function HoursAvailabilityScreen() {
         </View>
       )}
 
-      {dirty && !loading && (
-        <View style={styles.saveBar}>
-          <TouchableOpacity style={styles.discardButton} onPress={handleDiscard} disabled={saving}>
-            <Text style={styles.discardButtonText}>Discard</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.saveButton} onPress={handleSave} disabled={saving}>
-            {saving ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Text style={styles.saveButtonText}>Save Changes</Text>}
-          </TouchableOpacity>
-        </View>
+      {!loading && (
+        <SettingsSaveBar dirty={dirty} saving={saving} onSave={handleSave} onDiscard={handleDiscard} />
       )}
     </SafeAreaView>
   );
@@ -193,29 +187,4 @@ const styles = StyleSheet.create({
   fieldLabel: { fontSize: 15, color: '#111111', marginLeft: 12, flex: 1 },
   fieldValue: { flexDirection: 'row', alignItems: 'center' },
   fieldValueText: { fontSize: 15, color: '#075E54', fontWeight: '600', marginRight: 4 },
-  saveBar: {
-    flexDirection: 'row',
-    padding: 16,
-    borderTopWidth: 1,
-    borderTopColor: '#F0F0F0',
-    backgroundColor: '#FFFFFF',
-  },
-  discardButton: {
-    flex: 1,
-    paddingVertical: 12,
-    borderRadius: 8,
-    alignItems: 'center',
-    marginRight: 8,
-    backgroundColor: '#F5F5F5',
-  },
-  discardButtonText: { color: '#667781', fontWeight: '600', fontSize: 15 },
-  saveButton: {
-    flex: 1,
-    paddingVertical: 12,
-    borderRadius: 8,
-    alignItems: 'center',
-    marginLeft: 8,
-    backgroundColor: '#25D366',
-  },
-  saveButtonText: { color: '#FFFFFF', fontWeight: '600', fontSize: 15 },
 });
