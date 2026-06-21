@@ -9,6 +9,7 @@ import {
   RefreshControl,
   ActivityIndicator,
   Modal,
+  Pressable,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, useNavigation } from 'expo-router';
@@ -64,6 +65,13 @@ export default function HomeScreen() {
   
   const insets = useSafeAreaInsets();
   const [homeData, setHomeData] = useState<HomeData | null>(null);
+  // Home FAB redesign, Phase 1 -- Add Contact + Set Reminder only. Voice
+  // Reminder is deliberately NOT included yet: its real pipeline (Audio
+  // Intelligence Primitive, transcription, AI extraction, confirmation
+  // sheet) doesn't exist yet, and a visible button for something the
+  // owner can't actually use isn't shipped here -- it gets added as its
+  // own complete, reviewed patch once Phase 2 actually lands.
+  const [fabExpanded, setFabExpanded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [activeTab, setActiveTab] = useState<string | null>(null);
@@ -519,15 +527,40 @@ export default function HomeScreen() {
         contentContainerStyle={conversations.length === 0 && styles.emptyListContent}
       />
 
-      {/* FAB */}
+      {/* FAB -- expandable, Google Calendar style. "Add Contact" keeps its
+          exact original behavior and route. Tap-outside (the backdrop)
+          closes the menu. Known UX enhancement, deferred: hardware back
+          button doesn't close the menu first -- it falls through to
+          Home's default back behavior instead. Not a correctness issue,
+          no data loss, can be added as its own focused patch later. */}
+      {fabExpanded && (
+        <Pressable style={styles.fabBackdrop} onPress={() => setFabExpanded(false)}>
+          <View style={styles.fabPills}>
+            <TouchableOpacity
+              style={styles.fabPill}
+              onPress={() => { setFabExpanded(false); router.push('/task-detail'); }}
+            >
+              <Ionicons name="checkbox-outline" size={20} color="#075E54" />
+              <Text style={styles.fabPillText}>Set Reminder</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.fabPill}
+              onPress={() => { setFabExpanded(false); router.push('/customer/new'); }}
+            >
+              <Ionicons name="person-add-outline" size={20} color="#075E54" />
+              <Text style={styles.fabPillText}>Add Contact</Text>
+            </TouchableOpacity>
+          </View>
+        </Pressable>
+      )}
       <TouchableOpacity
         style={styles.fab}
-        onPress={() => router.push('/customer/new')}
+        onPress={() => setFabExpanded(!fabExpanded)}
       >
-        <Ionicons name="add" size={28} color="#FFFFFF" />
+        <Ionicons name={fabExpanded ? 'close' : 'add'} size={28} color="#FFFFFF" />
       </TouchableOpacity>
 
-      <Text style={{ textAlign: "center", fontSize: 10, color: "#CCC", paddingVertical: 2 }}>v1.3.328</Text>
+      <Text style={{ textAlign: "center", fontSize: 10, color: "#CCC", paddingVertical: 2 }}>v1.3.329</Text>
       {/* Bottom Navigation SafeAreaView */}
       <SafeAreaView style={styles.bottomNavSafeArea} edges={['bottom']}>
         <View style={styles.bottomNav}>
@@ -980,6 +1013,21 @@ const styles = StyleSheet.create({
   emptyListContent: {
     flexGrow: 1,
   },
+  fabBackdrop: {
+    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.2)', justifyContent: 'flex-end', alignItems: 'flex-end',
+  },
+  // bottom: 184 = fab's own bottom (120) + fab's height (56) + an 8px
+  // gap -- anchored to the FAB's actual position, not an arbitrary guess,
+  // so it stays correct if a 3rd pill (Voice Reminder) is added later
+  // (pills stack upward via `gap`, this anchor doesn't need to change).
+  fabPills: { position: 'absolute', right: 16, bottom: 184, gap: 10 },
+  fabPill: {
+    flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#FFF',
+    paddingHorizontal: 18, paddingVertical: 12, borderRadius: 24,
+    elevation: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4,
+  },
+  fabPillText: { fontSize: 15, color: '#1A1A1A', fontWeight: '600' },
   fab: {
     position: 'absolute',
     right: 16,
