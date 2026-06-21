@@ -5905,6 +5905,20 @@ app.post('/api/catalog/share', async (c) => {
 // ══════════════════════════════════════════════════════════════
 
 // ── Idempotency check ────────────────────────────────────────
+// Batch C.10: next month, same day number, clamped to that month's actual
+// last day -- not JS's default overflow behavior (Jan 31 -> Mar 3 is wrong
+// for a business reminder; it should land on Feb 28/29).
+function addMonthClamped(dateStr) {
+  const d = new Date(dateStr + 'T00:00:00Z');
+  const day = d.getUTCDate();
+  const totalMonths = d.getUTCFullYear() * 12 + d.getUTCMonth() + 1;
+  const targetYear = Math.floor(totalMonths / 12);
+  const targetMonth = totalMonths % 12;
+  const lastDayOfTargetMonth = new Date(Date.UTC(targetYear, targetMonth + 1, 0)).getUTCDate();
+  const clampedDay = Math.min(day, lastDayOfTargetMonth);
+  return new Date(Date.UTC(targetYear, targetMonth, clampedDay)).toISOString().split('T')[0];
+}
+
 async function alertAlreadyFired(orgId, convId, idKey, idValue, today) {
   try {
     const { data } = await supabase.from('messages').select('id')
@@ -6460,7 +6474,7 @@ app.patch('/api/tasks/:task_id', async (c) => {
 
     // Write entity_memory if completed
     if (body.status === 'completed') {
-      const { data: task } = await supabase.from('tasks').select('entity_id, entity_type, due_date').eq('id', taskId).single();
+      const { data: task } = await supabase.from('tasks').select('entity_id, entity_type, due_date, title, description, priority, repeat_pattern, created_by, assigned_to, organisation_id').eq('id', taskId).single();
       // entity_id is the customer id directly (canonical contract, locked
       // in Batch 0.2) -- this used to wrongly look it up as an invoice id,
       // which silently found nothing for every single task completion.
@@ -6473,6 +6487,47 @@ app.patch('/api/tasks/:task_id', async (c) => {
             memory_key: 'task_completed_on_time', memory_value: onTime ? 'true' : 'false', confidence: 1.0,
           }, { onConflict: 'organisation_id,entity_type,entity_id,memory_key' });
         } catch {}
+      }
+      // Batch C.10 Patch B: auto-create the next occurrence right now, if
+      // this task repeats. Deliberately NOT a scheduler/cron job -- the
+      // next copy is created at the exact moment this one is completed.
+      // Guarded against duplication: complete -> undo -> complete again
+      // must not create a second next-occurrence, since
+      // SharedActivityCard's toggle button already supports exactly that
+      // flow. This is a parent-child chain (recurrence_source_task_id
+      // points one level back), not a series identifier -- sufficient for
+      // v1, intentionally not solving "edit the whole series" yet.
+      if (task?.repeat_pattern && task.due_date) {
+        const { data: existingChild } = await supabase.from('tasks')
+          .select('id').eq('recurrence_source_task_id', taskId).limit(1).maybeSingle();
+        if (!existingChild) {
+          let nextDueStr;
+          if (task.repeat_pattern === 'monthly') {
+            nextDueStr = addMonthClamped(task.due_date);
+          } else {
+            const nextDue = new Date(task.due_date + 'T00:00:00Z');
+            nextDue.setUTCDate(nextDue.getUTCDate() + (task.repeat_pattern === 'weekly' ? 7 : 1));
+            nextDueStr = nextDue.toISOString().split('T')[0];
+          }
+          try {
+            await supabase.from('tasks').insert({
+              organisation_id: task.organisation_id,
+              title: task.title,
+              description: task.description,
+              status: 'pending',
+              priority: task.priority || 'medium',
+              created_by: task.created_by,
+              assigned_to: task.assigned_to,
+              due_date: nextDueStr,
+              entity_type: task.entity_type,
+              entity_id: task.entity_id,
+              repeat_pattern: task.repeat_pattern,
+              recurrence_source_task_id: taskId,
+            });
+          } catch (e) {
+            console.error('[PATCH /api/tasks] failed to create next recurring occurrence:', e);
+          }
+        }
       }
     }
 
