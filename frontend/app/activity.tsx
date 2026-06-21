@@ -130,7 +130,7 @@ const s = StyleSheet.create({
   tabTextActive: { color: '#075E54', fontWeight: '700' },
   listContent: { padding: 12 },
   emptyText: { fontSize: 15, color: '#999' },
-  modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.3)', justifyContent: 'flex-start', alignItems: 'flex-end', paddingTop: 70, paddingRight: 12 },
+  modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.3)', justifyContent: 'flex-start', alignItems: 'flex-end', paddingTop: 95, paddingRight: 12 },
   menuBox: { backgroundColor: '#FFF', borderRadius: 12, paddingVertical: 6, minWidth: 200, shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 12, elevation: 8 },
   menuItem: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 18, paddingVertical: 14, gap: 12 },
   menuItemText: { fontSize: 15, color: '#333' },
