@@ -5908,6 +5908,137 @@ app.post('/api/catalog/share', async (c) => {
 // Batch C.10: next month, same day number, clamped to that month's actual
 // last day -- not JS's default overflow behavior (Jan 31 -> Mar 3 is wrong
 // for a business reminder; it should land on Feb 28/29).
+// ─── Audio Intelligence Primitive ─────────────────────────────
+// Two composable pieces, not one combined function -- keeps each
+// honestly scoped to what it actually does, and lets future callers
+// (Customer Chat reminders, Org AI, expense capture, meeting notes) reuse
+// transcribeAudio() without being forced through reminder-specific
+// extraction.
+//
+// Part 1 is extracted from Spark's existing forwarded-audio handling
+// (still inline there, untouched -- zero risk of behavioral drift in an
+// already-proven flow). Part 2 is new code; no equivalent existed before.
+
+// transcribeAudio: audio in, text out. Generic, reusable for any future
+// audio use case. success flag makes UI branching logic cleaner than
+// inferring state from a falsy transcript.
+async function transcribeAudio(url, name, mime) {
+  const ext = name.split('.').pop()?.toLowerCase() || '';
+  const supabaseHost = process.env.SUPABASE_URL ? new URL(process.env.SUPABASE_URL).hostname : '';
+  const isValidMime = (mime || '').startsWith('audio/');
+  const isValidExt = ['m4a', 'mp3', 'wav', 'ogg', 'webm'].includes(ext);
+  let isValidUrl = false;
+  try { const parsedUrl = new URL(url); isValidUrl = supabaseHost && parsedUrl.hostname === supabaseHost; } catch {}
+  if (!isValidMime || !isValidExt || !isValidUrl) {
+    return { success: false, transcript: null, error: 'invalid_audio' };
+  }
+  let fetchController, fetchTimeout;
+  try {
+    fetchController = new AbortController();
+    fetchTimeout = setTimeout(() => fetchController.abort(), 10000);
+    const audioRes = await fetch(url, { signal: fetchController.signal });
+    if (!audioRes.ok) return { success: false, transcript: null, error: 'fetch_failed' };
+    const audioBuffer = await audioRes.arrayBuffer();
+    if (audioBuffer.byteLength > 8 * 1024 * 1024) return { success: false, transcript: null, error: 'too_large' };
+    const { toFile } = await import('openai');
+    const audioFile = await toFile(Buffer.from(audioBuffer), name, { type: mime });
+    const whisperClient = getOpenAI();
+    if (!whisperClient) return { success: false, transcript: null, error: 'client_unavailable' };
+    let whisperTimeout;
+    try {
+      const whisperController = new AbortController();
+      whisperTimeout = setTimeout(() => whisperController.abort(), 30000);
+      const transcription = await whisperClient.audio.transcriptions.create({
+        model: 'whisper-1',
+        file: audioFile,
+      }, { signal: whisperController.signal });
+      const transcript = transcription.text?.trim() || '';
+      if (!transcript) return { success: false, transcript: null, error: 'empty_transcript' };
+      return { success: true, transcript, error: null };
+    } finally {
+      clearTimeout(whisperTimeout);
+    }
+  } catch (err) {
+    console.error('[transcribeAudio] failed:', err.message);
+    return { success: false, transcript: null, error: 'transcription_failed' };
+  } finally {
+    clearTimeout(fetchTimeout);
+  }
+}
+
+// draftReminderFromTranscript: transcript in, structured reminder draft
+// out. context carries the full envelope (organisationId, userId,
+// customerId, conversationId, source) per the locked doctrine -- most
+// fields unused today (voice-driven customer resolution from free speech
+// isn't built), but present now so future callers don't need a payload
+// redesign. customer_name is extracted even though customer_id resolution
+// isn't built yet -- "Basharat Book Depot" can be captured now and linked
+// by a resolver later, without re-extracting. Uses JSON-mode
+// response_format for reliability -- new code, not modifying Spark's
+// existing free-text parser, so free to use the more robust option for a
+// focused, single-purpose extraction. Transcript is capped (on a whole
+// word, not mid-word) before being sent to GPT to bound token spend on
+// long recordings, and is returned alongside the draft so the
+// confirmation UI can show "I heard: ..." without carrying the
+// transcript separately through the pipeline. source is echoed back into
+// the draft for future analytics/debugging across multiple calling
+// surfaces.
+async function draftReminderFromTranscript(transcript, context) {
+  const client = getOpenAI();
+  if (!client) return null;
+  let trimmedTranscript = transcript;
+  if (transcript.length > 4000) {
+    const cut = transcript.slice(0, 4000);
+    const lastSpace = cut.lastIndexOf(' ');
+    trimmedTranscript = lastSpace > 3000 ? cut.slice(0, lastSpace) : cut;
+  }
+  const today = new Date().toISOString().split('T')[0];
+  const systemPrompt = `You turn a spoken reminder request into a structured draft. Today's date is ${today} (India).
+Resolve relative dates the same way as elsewhere in this app: tomorrow/kal = next day, 7 din baad = plus 7 days, agla hafta = next week, and so on.
+If no date or time can be inferred at all, return due_date as null -- do not invent a date.
+Only use payment/collection framing in the title if the request is clearly about a pending payment or invoice -- do not assume every reminder is about money (e.g. "remind me to renew the trade license" is not financial).
+If a specific customer or business name is mentioned, extract it as customer_name -- do not try to resolve or guess an ID, just capture the name as spoken.
+Return strict JSON only, no other text:
+{
+  "title": "short title, in the owner's own words",
+  "description": null or a short elaboration if the request had more detail than fits in the title,
+  "due_date": "YYYY-MM-DD" or null if no date could be inferred,
+  "repeat_pattern": null, "daily", "weekly", or "monthly",
+  "customer_name": null or the name as spoken, if one was mentioned,
+  "confidence": a number from 0 to 1 for how confident you are in this extraction
+}`;
+  try {
+    const completion = await client.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: trimmedTranscript },
+      ],
+      temperature: 0.2,
+      response_format: { type: 'json_object' },
+    });
+    const raw = completion.choices[0]?.message?.content || '{}';
+    const parsed = JSON.parse(raw);
+    const allowedRepeatPatterns = ['daily', 'weekly', 'monthly'];
+    const rawConfidence = Number(parsed.confidence);
+    const confidence = Number.isFinite(rawConfidence) ? Math.max(0, Math.min(1, rawConfidence)) : 0.5;
+    return {
+      transcript,
+      title: parsed.title || transcript.slice(0, 80),
+      description: parsed.description || null,
+      due_date: parsed.due_date || null,
+      repeat_pattern: allowedRepeatPatterns.includes(parsed.repeat_pattern) ? parsed.repeat_pattern : null,
+      customer_id: context.customerId || null,
+      customer_name: parsed.customer_name || null,
+      confidence,
+      source: context.source || 'unknown',
+    };
+  } catch (err) {
+    console.error('[draftReminderFromTranscript] failed:', err.message);
+    return null;
+  }
+}
+
 function addMonthClamped(dateStr) {
   const d = new Date(dateStr + 'T00:00:00Z');
   const day = d.getUTCDate();
