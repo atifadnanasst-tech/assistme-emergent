@@ -538,6 +538,13 @@ export default function HomeScreen() {
           <View style={styles.fabPills}>
             <TouchableOpacity
               style={styles.fabPill}
+              onPress={() => { setFabExpanded(false); router.push('/voice-reminder'); }}
+            >
+              <Ionicons name="mic" size={20} color="#075E54" />
+              <Text style={styles.fabPillText}>Voice Reminder</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.fabPill}
               onPress={() => { setFabExpanded(false); router.push('/task-detail'); }}
             >
               <Ionicons name="checkbox-outline" size={20} color="#075E54" />
@@ -560,7 +567,7 @@ export default function HomeScreen() {
         <Ionicons name={fabExpanded ? 'close' : 'add'} size={28} color="#FFFFFF" />
       </TouchableOpacity>
 
-      <Text style={{ textAlign: "center", fontSize: 10, color: "#CCC", paddingVertical: 2 }}>v1.3.329</Text>
+      <Text style={{ textAlign: "center", fontSize: 10, color: "#CCC", paddingVertical: 2 }}>v1.3.334</Text>
       {/* Bottom Navigation SafeAreaView */}
       <SafeAreaView style={styles.bottomNavSafeArea} edges={['bottom']}>
         <View style={styles.bottomNav}>
