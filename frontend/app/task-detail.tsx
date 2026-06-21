@@ -44,7 +44,19 @@ const REPEAT_OPTIONS: { value: string | null; label: string }[] = [
 
 export default function TaskDetailScreen() {
   const router = useRouter();
-  const { task_id } = useLocalSearchParams<{ task_id?: string }>();
+  // draft_* params come from Voice Reminder's "Edit" path -- only ever
+  // applied when task_id is absent (create mode). Full envelope parsed
+  // now even though only title/description/due_date/repeat_pattern are
+  // used yet -- avoids a second route-contract migration once the
+  // confirmation sheet wants to pass customer_name/confidence/transcript
+  // into Edit too.
+  const {
+    task_id, draft_title, draft_due_date, draft_repeat_pattern, draft_description,
+    draft_customer_name, draft_customer_id, draft_confidence, draft_transcript,
+  } = useLocalSearchParams<{
+    task_id?: string; draft_title?: string; draft_due_date?: string; draft_repeat_pattern?: string; draft_description?: string;
+    draft_customer_name?: string; draft_customer_id?: string; draft_confidence?: string; draft_transcript?: string;
+  }>();
   const isEditMode = !!task_id;
   const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
 
@@ -59,6 +71,17 @@ export default function TaskDetailScreen() {
   const [status, setStatus] = useState('pending');
   const [repeatPattern, setRepeatPattern] = useState<string | null>(null);
   const [customer, setCustomer] = useState<Customer | null>(null);
+
+  // Applies draft values via effect, not lazy useState init -- stays
+  // correct if Expo Router ever reuses this screen instance with
+  // different params, instead of only running once on first mount.
+  useEffect(() => {
+    if (isEditMode) return;
+    if (draft_title) setTitle(String(draft_title));
+    if (draft_description) setDescription(String(draft_description));
+    if (draft_due_date) setDueDate(new Date(`${draft_due_date}T00:00:00`));
+    setRepeatPattern(typeof draft_repeat_pattern === 'string' ? draft_repeat_pattern : null);
+  }, [isEditMode, draft_title, draft_description, draft_due_date, draft_repeat_pattern]);
 
   const [pickerVisible, setPickerVisible] = useState(false);
   const [customerSearch, setCustomerSearch] = useState('');
