@@ -1,13 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, TextInput, ScrollView,
-  Platform, ActivityIndicator, Alert, Modal, FlatList,
+  Platform, ActivityIndicator, Alert, Modal, FlatList, Linking,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
+import * as DocumentPicker from 'expo-document-picker';
 import { authService } from '../lib/auth';
+import { uploadFile } from '../lib/upload';
 
 // Batch C.10 -- the calendar-event-style detail/creation screen. Three
 // entry points share this one screen: tap-to-expand on an existing card,
@@ -20,6 +22,7 @@ import { authService } from '../lib/auth';
 // actions; this screen covers editable content only.
 
 interface Customer { id: string; name: string; company?: string | null; phone?: string | null; city?: string | null; }
+interface Attachment { id: string; file_name: string; file_size?: number | null; mime_type?: string | null; public_url?: string | null; }
 
 const PRIORITY_OPTIONS = [
   { value: 'low', label: 'Low' },
@@ -61,8 +64,11 @@ export default function TaskDetailScreen() {
   const [customerSearch, setCustomerSearch] = useState('');
   const [allCustomers, setAllCustomers] = useState<Customer[]>([]);
 
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [uploadingAttachment, setUploadingAttachment] = useState(false);
+
   useEffect(() => {
-    if (isEditMode) loadTask();
+    if (isEditMode) { loadTask(); loadAttachments(); }
   }, [task_id]);
 
   const getToken = async () => {
@@ -92,6 +98,70 @@ export default function TaskDetailScreen() {
     } finally {
       setLoading(false);
     }
+  };
+
+  // Batch C.18 -- attachments only make sense in edit mode, since a new,
+  // unsaved task has no id yet for the attachment to point at.
+  const loadAttachments = async () => {
+    try {
+      const token = await getToken();
+      if (!token) return;
+      const res = await fetch(`${backendUrl}/api/tasks/${task_id}/attachments`, { headers: { 'Authorization': `Bearer ${token}` } });
+      const data = await res.json();
+      setAttachments(data.attachments || []);
+    } catch {}
+  };
+
+  const handleAddAttachment = async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({ type: '*/*', copyToCacheDirectory: true });
+      if (result.canceled || !result.assets?.[0]) return;
+      const file = result.assets[0];
+      setUploadingAttachment(true);
+      const token = await getToken();
+      if (!token) return;
+      // uploadFile() returns { url, name, size, ... } -- mapped here to
+      // public_url/file_name/file_size, which match the attachments
+      // table's own column names, not the upload utility's response shape.
+      const uploaded = await uploadFile(file.uri, file.name, file.mimeType || 'application/octet-stream');
+      if (!uploaded) { Alert.alert('Error', 'Upload failed. Please try again.'); return; }
+      const res = await fetch(`${backendUrl}/api/tasks/${task_id}/attachments`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          public_url: uploaded.url,
+          storage_path: uploaded.storage_path,
+          file_name: uploaded.name || file.name,
+          file_size: uploaded.size || file.size,
+          mime_type: uploaded.mime_type || file.mimeType,
+        }),
+      });
+      if (!res.ok) { Alert.alert('Error', 'File uploaded but could not be saved. Please try again.'); return; }
+      await loadAttachments();
+    } catch (err) {
+      console.error('Attach file error:', err);
+      Alert.alert('Error', 'Failed to attach file');
+    } finally {
+      setUploadingAttachment(false);
+    }
+  };
+
+  const handleRemoveAttachment = (attachmentId: string) => {
+    Alert.alert('Remove attachment?', undefined, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Remove', style: 'destructive', onPress: async () => {
+          const token = await getToken();
+          if (!token) return;
+          await fetch(`${backendUrl}/api/attachments/${attachmentId}`, {
+            method: 'PATCH',
+            headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ deleted_at: new Date().toISOString() }),
+          });
+          await loadAttachments();
+        }
+      },
+    ]);
   };
 
   const openCustomerPicker = async () => {
@@ -274,6 +344,37 @@ export default function TaskDetailScreen() {
             textAlignVertical="top"
           />
         </View>
+
+        {/* Attachments -- edit mode only (Batch C.18) */}
+        {isEditMode && (
+          <View style={s.section}>
+            <Text style={s.sectionLabel}>Attachments</Text>
+            {attachments.map(att => (
+              <View key={att.id} style={s.attachmentRow}>
+                <Ionicons name="document-attach-outline" size={20} color="#667781" style={s.rowIcon} />
+                <TouchableOpacity
+                  style={{ flex: 1 }}
+                  onPress={() => att.public_url && Linking.openURL(att.public_url).catch(() => {})}
+                >
+                  <Text style={s.attachmentName} numberOfLines={1}>{att.file_name}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => handleRemoveAttachment(att.id)} style={{ padding: 4 }}>
+                  <Ionicons name="trash-outline" size={18} color="#D32F2F" />
+                </TouchableOpacity>
+              </View>
+            ))}
+            <TouchableOpacity style={s.addAttachmentBtn} onPress={handleAddAttachment} disabled={uploadingAttachment}>
+              {uploadingAttachment ? (
+                <ActivityIndicator size="small" color="#075E54" />
+              ) : (
+                <>
+                  <Ionicons name="add-circle-outline" size={20} color="#075E54" />
+                  <Text style={s.addAttachmentText}>Add Attachment</Text>
+                </>
+              )}
+            </TouchableOpacity>
+          </View>
+        )}
       </ScrollView>
 
       {/* Customer picker */}
@@ -358,4 +459,8 @@ const s = StyleSheet.create({
   searchInput: { flex: 1, fontSize: 16, color: '#1A1A1A', paddingVertical: 4 },
   pickerItem: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#F5F5F5' },
   pickerItemText: { fontSize: 16, color: '#1A1A1A' },
+  attachmentRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#F5F5F5' },
+  attachmentName: { flex: 1, fontSize: 14, color: '#1A1A1A' },
+  addAttachmentBtn: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, gap: 8 },
+  addAttachmentText: { fontSize: 15, color: '#075E54', fontWeight: '600' },
 });
