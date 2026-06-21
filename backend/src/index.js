@@ -6519,6 +6519,47 @@ app.patch('/api/tasks/:task_id', async (c) => {
       updateFields.deleted_at = body.deleted_at;
     }
 
+    // Batch C.10: content-field editing -- this route previously only
+    // handled state transitions (status/snoozed_until/archived_at/
+    // deleted_at). The detail/edit screen needs to actually edit a task's
+    // content too. Validation mirrors POST /api/tasks exactly, for
+    // consistency.
+    if ('title' in body) {
+      const t = (body.title || '').trim();
+      if (!t) return c.json({ error: 'title_required' }, 400);
+      updateFields.title = t;
+    }
+    if ('description' in body) updateFields.description = body.description || null;
+    if ('priority' in body) {
+      const allowedPriorities = ['low', 'medium', 'high', 'urgent'];
+      if (!allowedPriorities.includes(body.priority)) return c.json({ error: 'invalid_priority' }, 400);
+      updateFields.priority = body.priority;
+    }
+    if ('due_date' in body) {
+      const due = body.due_date;
+      const dueValid = typeof due === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(due)
+        && new Date(due + 'T00:00:00Z').toISOString().slice(0, 10) === due;
+      if (!dueValid) return c.json({ error: 'invalid_due_date' }, 400);
+      updateFields.due_date = due;
+    }
+    if ('repeat_pattern' in body) {
+      const allowedRepeatPatterns = ['daily', 'weekly', 'monthly'];
+      if (body.repeat_pattern !== null && !allowedRepeatPatterns.includes(body.repeat_pattern)) {
+        return c.json({ error: 'invalid_repeat_pattern' }, 400);
+      }
+      updateFields.repeat_pattern = body.repeat_pattern;
+    }
+    if ('customer_id' in body) {
+      if (body.customer_id === null) {
+        updateFields.entity_id = null;
+      } else {
+        const { data: cust } = await supabase.from('customers').select('id')
+          .eq('id', body.customer_id).eq('organisation_id', auth.organisationId).maybeSingle();
+        if (!cust) return c.json({ error: 'customer_not_found' }, 404);
+        updateFields.entity_id = body.customer_id;
+      }
+    }
+
     updateFields.updated_at = new Date().toISOString();
 
     const { error } = await supabase.from('tasks').update(updateFields)
