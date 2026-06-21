@@ -6356,6 +6356,59 @@ app.get('/api/activity', async (c) => {
   }
 });
 
+// ─── GET /api/customers ──────────────────────────────────────
+// Minimal customer list for picker UIs (Batch C.10's customer picker).
+app.get('/api/customers', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { data: customers, error } = await supabase.from('customers')
+      .select('id, name, company, phone')
+      .eq('organisation_id', auth.organisationId).is('deleted_at', null)
+      .order('name', { ascending: true }).limit(500);
+    if (error) {
+      console.error('[GET /api/customers] error:', error);
+      return c.json({ error: 'server_error' }, 500);
+    }
+    return c.json({ customers: customers || [] });
+  } catch (error) {
+    console.error('[GET /api/customers] Error:', error);
+    return c.json({ error: 'internal_error' }, 500);
+  }
+});
+
+// ─── GET /api/tasks/:task_id ─────────────────────────────────
+// Full task details for edit-mode initialization (Batch C.10's
+// detail/edit screen). Customer-resolution condition copied verbatim from
+// /api/activity's My Tasks block, not reinvented -- only deviation is
+// adding 'id' to the select, needed here so the picker can identify which
+// customer is currently selected (unlike /api/activity, which already has
+// task.entity_id available separately).
+app.get('/api/tasks/:task_id', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const taskId = c.req.param('task_id');
+    const { data: task, error } = await supabase.from('tasks')
+      .select('id, title, description, status, priority, due_date, entity_type, entity_id, repeat_pattern, snoozed_until, archived_at')
+      .eq('id', taskId).eq('organisation_id', auth.organisationId).is('deleted_at', null).maybeSingle();
+    if (error) {
+      console.error('[GET /api/tasks/:task_id] error:', error);
+      return c.json({ error: 'server_error' }, 500);
+    }
+    if (!task) return c.json({ error: 'not_found' }, 404);
+    let customer = null;
+    if (task.entity_id && (task.entity_type === 'delivery' || task.entity_type === 'reminder' || task.entity_type === 'task')) {
+      const { data: cust } = await supabase.from('customers').select('id, name, phone').eq('id', task.entity_id).maybeSingle();
+      if (cust) customer = cust;
+    }
+    return c.json({ task: { ...task, customer } });
+  } catch (error) {
+    console.error('[GET /api/tasks/:task_id] Error:', error);
+    return c.json({ error: 'internal_error' }, 500);
+  }
+});
+
 // ─── POST /api/tasks ─────────────────────────────────────────
 // General-purpose task/reminder creation -- the 4th way to create a
 // reminder alongside Spark, Customer AI, and Org AI (Batch C.8/C.9).
