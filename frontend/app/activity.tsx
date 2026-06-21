@@ -20,6 +20,7 @@ export default function ActivityScreen() {
   const [items, setItems] = useState<any[]>([]);
   const [headerMenuVisible, setHeaderMenuVisible] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [searchExpanded, setSearchExpanded] = useState(false);
 
   const getToken = async () => {
     const token = await authService.getAccessToken();
@@ -27,7 +28,7 @@ export default function ActivityScreen() {
     return token;
   };
 
-  useEffect(() => { loadData(); }, [tab]);
+  useEffect(() => { loadData(); setSearchExpanded(false); setSearchQuery(''); }, [tab]);
 
   // Refetch whenever this screen regains focus -- catches returning from
   // task-detail.tsx (create or edit) without needing a manual pull-to-
@@ -69,16 +70,42 @@ export default function ActivityScreen() {
 
   return (
     <SafeAreaView style={s.safe} edges={['top', 'bottom']}>
-      {/* Header */}
+      {/* Header -- WhatsApp-style expand-in-place search. Tapping the
+          search icon (My Tasks only) replaces the title with an inline
+          input; the back arrow becomes "close search" instead of leaving
+          the screen while search is active. */}
       <View style={s.header}>
-        <TouchableOpacity onPress={() => router.back()} style={s.backBtn}>
+        <TouchableOpacity
+          onPress={() => { if (searchExpanded) { setSearchExpanded(false); setSearchQuery(''); } else { router.back(); } }}
+          style={s.backBtn}
+        >
           <Ionicons name="arrow-back" size={24} color="#FFF" />
         </TouchableOpacity>
-        <Text style={s.headerTitle}>Activity Center</Text>
-        <View style={{ flex: 1 }} />
-        <TouchableOpacity onPress={() => setHeaderMenuVisible(true)} style={s.backBtn}>
-          <Ionicons name="ellipsis-vertical" size={22} color="#FFF" />
-        </TouchableOpacity>
+        {searchExpanded ? (
+          <TextInput
+            style={s.headerSearchInput}
+            placeholder="Search reminders..."
+            placeholderTextColor="rgba(255,255,255,0.7)"
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            autoFocus
+          />
+        ) : (
+          <>
+            <Text style={s.headerTitle}>Activity Center</Text>
+            <View style={{ flex: 1 }} />
+          </>
+        )}
+        {!searchExpanded && tab === 'mytasks' && items.length > 0 && (
+          <TouchableOpacity onPress={() => setSearchExpanded(true)} style={s.backBtn}>
+            <Ionicons name="search" size={22} color="#FFF" />
+          </TouchableOpacity>
+        )}
+        {!searchExpanded && (
+          <TouchableOpacity onPress={() => setHeaderMenuVisible(true)} style={s.backBtn}>
+            <Ionicons name="ellipsis-vertical" size={22} color="#FFF" />
+          </TouchableOpacity>
+        )}
       </View>
 
       {/* Header 3-dot menu (Batch C.16) -- same centered-popup pattern as
@@ -118,27 +145,6 @@ export default function ActivityScreen() {
           <Text style={[s.tabText, tab === 'mytasks' && s.tabTextActive]}>My Tasks</Text>
         </TouchableOpacity>
       </View>
-
-      {/* Search -- My Tasks only, cheap client-side filter on the already-
-          fetched list. The fastest way to find a specific card without
-          building a full search backend. */}
-      {tab === 'mytasks' && items.length > 0 && (
-        <View style={s.searchBar}>
-          <Ionicons name="search" size={18} color="#999" style={{ marginRight: 8 }} />
-          <TextInput
-            style={s.searchInput}
-            placeholder="Search reminders..."
-            placeholderTextColor="#999"
-            value={searchQuery}
-            onChangeText={setSearchQuery}
-          />
-          {searchQuery.length > 0 && (
-            <TouchableOpacity onPress={() => setSearchQuery('')}>
-              <Ionicons name="close-circle" size={18} color="#999" />
-            </TouchableOpacity>
-          )}
-        </View>
-      )}
 
       {/* Content */}
       {loading ? (
@@ -190,11 +196,9 @@ const s = StyleSheet.create({
     backgroundColor: '#075E54', borderRadius: 28, justifyContent: 'center', alignItems: 'center',
     elevation: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 4,
   },
-  searchBar: {
-    flexDirection: 'row', alignItems: 'center', marginHorizontal: 12, marginBottom: 8,
-    paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, backgroundColor: '#FFF', borderWidth: 1, borderColor: '#E5E5E5',
+  headerSearchInput: {
+    flex: 1, fontSize: 17, color: '#FFF', paddingVertical: 4,
   },
-  searchInput: { flex: 1, fontSize: 15, color: '#1A1A1A' },
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.3)', justifyContent: 'flex-start', alignItems: 'flex-end', paddingTop: 95, paddingRight: 12 },
   menuBox: { backgroundColor: '#FFF', borderRadius: 12, paddingVertical: 6, minWidth: 200, shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 12, elevation: 8 },
   menuItem: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 18, paddingVertical: 14, gap: 12 },

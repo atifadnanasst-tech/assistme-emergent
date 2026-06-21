@@ -165,38 +165,43 @@ export default function SharedActivityCard({ item, source, onRefresh, onTapCard,
           )}
         </View>
 
-        {hasCustomer && (
+        {/* Single combined action row -- was two stacked rows; merged for
+            a slimmer card with more cards visible per screen. Same
+            conditional logic as before, just one wrapping View instead
+            of two. */}
+        {(hasCustomer || taskId) && (
           <View style={s.actionRow}>
-            <TouchableOpacity style={s.iconBtn} onPress={handleChat}>
-              <Ionicons name="chatbubble-outline" size={18} color="#075E54" />
-            </TouchableOpacity>
-            <TouchableOpacity style={s.iconBtn} onPress={handleWhatsApp}>
-              <Ionicons name="logo-whatsapp" size={18} color="#25D366" />
-            </TouchableOpacity>
-            <TouchableOpacity style={s.iconBtn} onPress={handleCall}>
-              <Ionicons name="call-outline" size={18} color="#075E54" />
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {taskId && (
-          <View style={s.actionRow}>
-            {busy ? (
-              <ActivityIndicator size="small" color="#075E54" style={{ marginRight: 8 }} />
-            ) : (
+            {hasCustomer && (
               <>
-                <TouchableOpacity style={s.iconBtn} onPress={handleToggleComplete}>
-                  <Ionicons name={isCompleted ? 'refresh-outline' : 'checkmark-circle-outline'} size={18} color="#4CAF50" />
+                <TouchableOpacity style={s.iconBtn} onPress={handleChat}>
+                  <Ionicons name="chatbubble-outline" size={18} color="#075E54" />
                 </TouchableOpacity>
-                <TouchableOpacity style={s.iconBtn} onPress={() => isSnoozed ? patchTask({ snoozed_until: null }) : setSnoozeVisible(true)}>
-                  <Ionicons name="time-outline" size={18} color="#075E54" />
+                <TouchableOpacity style={s.iconBtn} onPress={handleWhatsApp}>
+                  <Ionicons name="logo-whatsapp" size={18} color="#25D366" />
                 </TouchableOpacity>
-                <TouchableOpacity style={s.iconBtn} onPress={handleDelete}>
-                  <Ionicons name="trash-outline" size={18} color="#D32F2F" />
+                <TouchableOpacity style={s.iconBtn} onPress={handleCall}>
+                  <Ionicons name="call-outline" size={18} color="#075E54" />
                 </TouchableOpacity>
               </>
             )}
-            {hasMenuItems && (
+            {taskId && (
+              busy ? (
+                <ActivityIndicator size="small" color="#075E54" style={{ marginRight: 8 }} />
+              ) : (
+                <>
+                  <TouchableOpacity style={s.iconBtn} onPress={handleToggleComplete}>
+                    <Ionicons name={isCompleted ? 'refresh-outline' : 'checkmark-circle-outline'} size={18} color="#4CAF50" />
+                  </TouchableOpacity>
+                  <TouchableOpacity style={s.iconBtn} onPress={() => isSnoozed ? patchTask({ snoozed_until: null }) : setSnoozeVisible(true)}>
+                    <Ionicons name="time-outline" size={18} color="#075E54" />
+                  </TouchableOpacity>
+                  <TouchableOpacity style={s.iconBtn} onPress={handleDelete}>
+                    <Ionicons name="trash-outline" size={18} color="#D32F2F" />
+                  </TouchableOpacity>
+                </>
+              )
+            )}
+            {taskId && hasMenuItems && (
               <TouchableOpacity style={s.iconBtn} onPress={() => setMenuVisible(true)}>
                 <Ionicons name="ellipsis-vertical" size={18} color="#666" />
               </TouchableOpacity>
