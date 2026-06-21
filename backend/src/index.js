@@ -6647,6 +6647,65 @@ app.patch('/api/attachments/:attachment_id', async (c) => {
   }
 });
 
+// ─── POST /api/voice-reminder/draft ──────────────────────────
+// Phase 2 step 2 of the Voice Reminder feature. Composes the two Audio
+// Intelligence primitives -- transcribeAudio() then
+// draftReminderFromTranscript() -- and returns the draft for the owner
+// to review. Deliberately does NOT create the task here: "Confirm" on
+// the frontend's bottom sheet calls the existing POST /api/tasks
+// directly with the draft's fields, since they already map onto exactly
+// what that endpoint expects. No new "confirm" endpoint needed.
+app.post('/api/voice-reminder/draft', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ success: false, error: 'unauthorized' }, 401);
+    const body = await c.req.json().catch(() => null);
+    // audio_url, not public_url -- this endpoint only accepts a
+    // Supabase-hosted audio object URL, not an arbitrary public URL;
+    // transcribeAudio() validates the hostname, naming reflects that.
+    if (!body || !body.audio_url || !body.file_name) return c.json({ success: false, error: 'invalid_body' }, 400);
+
+    // Path-segment ownership validation, not a substring check. Confirmed
+    // against the actual URL shape Supabase's getPublicUrl() produces
+    // (used in POST /api/upload):
+    // .../storage/v1/object/public/chat-attachments/{organisationId}/{fileName}
+    // -- org id is reliably the second-to-last path segment, bucket name
+    // the third-to-last. Rejects anything not belonging to the calling
+    // user's own org/bucket before transcription, regardless of
+    // bucket-level ACLs.
+    let ownershipOk = false;
+    try {
+      const parsedUrl = new URL(body.audio_url);
+      const pathParts = parsedUrl.pathname.split('/').filter(Boolean);
+      const orgSegment = pathParts[pathParts.length - 2];
+      const bucketSegment = pathParts[pathParts.length - 3];
+      ownershipOk = bucketSegment === 'chat-attachments' && orgSegment === auth.organisationId;
+    } catch {}
+    if (!ownershipOk) {
+      return c.json({ success: false, error: 'forbidden' }, 403);
+    }
+
+    const transcription = await transcribeAudio(body.audio_url, body.file_name, body.mime_type || 'audio/m4a');
+    if (!transcription.success) {
+      return c.json({ success: false, error: transcription.error || 'transcription_failed' }, 422);
+    }
+
+    const draft = await draftReminderFromTranscript(transcription.transcript, {
+      organisationId: auth.organisationId,
+      userId: auth.userId,
+      customerId: null,
+      conversationId: null,
+      source: 'voice_reminder',
+    });
+    if (!draft) return c.json({ success: false, error: 'draft_failed' }, 500);
+
+    return c.json({ success: true, draft });
+  } catch (error) {
+    console.error('[POST /api/voice-reminder/draft] Error:', error);
+    return c.json({ success: false, error: 'internal_error' }, 500);
+  }
+});
+
 // ─── POST /api/tasks ─────────────────────────────────────────
 // General-purpose task/reminder creation -- the 4th way to create a
 // reminder alongside Spark, Customer AI, and Org AI (Batch C.8/C.9).
