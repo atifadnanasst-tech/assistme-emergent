@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Modal, Pressable, Linking, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Modal, Pressable, Linking, Alert, ActivityIndicator, Platform } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import { authService } from '../../lib/auth';
 
 export interface ActivityCardItem {
@@ -67,6 +68,7 @@ export default function SharedActivityCard({ item, source, onRefresh, onTapCard,
   const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
   const [menuVisible, setMenuVisible] = useState(false);
   const [snoozeVisible, setSnoozeVisible] = useState(false);
+  const [showCustomSnoozeDate, setShowCustomSnoozeDate] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const taskId = source === 'mytasks' ? item.id : (item.task_id || null);
@@ -107,6 +109,11 @@ export default function SharedActivityCard({ item, source, onRefresh, onTapCard,
     const until = new Date();
     until.setDate(until.getDate() + days);
     patchTask({ snoozed_until: until.toISOString() });
+  };
+
+  const handleCustomSnoozeDate = (event: any, date?: Date) => {
+    if (Platform.OS === 'android') setShowCustomSnoozeDate(false);
+    if (date) patchTask({ snoozed_until: date.toISOString() });
   };
 
   const handleDelete = () => {
@@ -246,9 +253,23 @@ export default function SharedActivityCard({ item, source, onRefresh, onTapCard,
                 <Text style={s.menuItemText}>{opt.label}</Text>
               </TouchableOpacity>
             ))}
+            <TouchableOpacity style={s.menuItem} onPress={() => { setSnoozeVisible(false); setShowCustomSnoozeDate(true); }}>
+              <Ionicons name="calendar-outline" size={20} color="#075E54" />
+              <Text style={s.menuItemText}>Pick a date...</Text>
+            </TouchableOpacity>
           </View>
         </Pressable>
       </Modal>
+
+      {showCustomSnoozeDate && (
+        <DateTimePicker
+          value={new Date()}
+          mode="date"
+          minimumDate={new Date()}
+          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+          onChange={handleCustomSnoozeDate}
+        />
+      )}
     </CardWrapper>
   );
 }
