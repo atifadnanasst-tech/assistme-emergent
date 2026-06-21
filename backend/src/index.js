@@ -6399,7 +6399,7 @@ app.get('/api/tasks/:task_id', async (c) => {
     if (!task) return c.json({ error: 'not_found' }, 404);
     let customer = null;
     if (task.entity_id && (task.entity_type === 'delivery' || task.entity_type === 'reminder' || task.entity_type === 'task')) {
-      const { data: cust } = await supabase.from('customers').select('id, name, phone').eq('id', task.entity_id).maybeSingle();
+      const { data: cust } = await supabase.from('customers').select('id, name, company, phone').eq('id', task.entity_id).maybeSingle();
       if (cust) customer = cust;
     }
     return c.json({ task: { ...task, customer } });

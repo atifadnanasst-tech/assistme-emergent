@@ -40,8 +40,20 @@ export default function ActivityScreen() {
     } catch {} finally { setLoading(false); setRefreshing(false); }
   };
 
+  // Mirrors SharedActivityCard's own internal taskId derivation exactly --
+  // for Watchlist items, item.id is the alert (a messages row), not a
+  // task. The real task id, if one exists, is item.task_id. Alerts with
+  // no task at all (e.g. bank_reconciliation, overdue_invoice) correctly
+  // have nothing to open here, same as Row 2/3-dot menu already
+  // conditionally hiding themselves for those same cases.
+  const handleTapCard = (item: any) => {
+    const taskId = tab === 'mytasks' ? item.id : item.task_id;
+    if (!taskId) return;
+    router.push({ pathname: '/task-detail', params: { task_id: taskId } });
+  };
+
   const renderItem = ({ item }: { item: any }) => (
-    <SharedActivityCard item={item} source={tab} onRefresh={loadData} />
+    <SharedActivityCard item={item} source={tab} onRefresh={loadData} onTapCard={handleTapCard} />
   );
 
   return (
@@ -113,6 +125,15 @@ export default function ActivityScreen() {
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); loadData(); }} />}
         />
       )}
+
+      {/* Batch C.9 -- 4th way to create a reminder (alongside Spark,
+          Customer AI, Org AI). My Tasks only -- Watchlist is exclusively
+          system-generated, creating a task there wouldn't make sense. */}
+      {tab === 'mytasks' && (
+        <TouchableOpacity style={s.fab} onPress={() => router.push('/task-detail')}>
+          <Ionicons name="add" size={28} color="#FFFFFF" />
+        </TouchableOpacity>
+      )}
     </SafeAreaView>
   );
 }
@@ -130,6 +151,11 @@ const s = StyleSheet.create({
   tabTextActive: { color: '#075E54', fontWeight: '700' },
   listContent: { padding: 12 },
   emptyText: { fontSize: 15, color: '#999' },
+  fab: {
+    position: 'absolute', right: 16, bottom: 24, width: 56, height: 56,
+    backgroundColor: '#075E54', borderRadius: 28, justifyContent: 'center', alignItems: 'center',
+    elevation: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 4,
+  },
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.3)', justifyContent: 'flex-start', alignItems: 'flex-end', paddingTop: 95, paddingRight: 12 },
   menuBox: { backgroundColor: '#FFF', borderRadius: 12, paddingVertical: 6, minWidth: 200, shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 12, elevation: 8 },
   menuItem: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 18, paddingVertical: 14, gap: 12 },
