@@ -6409,6 +6409,113 @@ app.get('/api/tasks/:task_id', async (c) => {
   }
 });
 
+// ─── POST /api/tasks/:task_id/attachments ────────────────────
+// Batch C.18 -- the actual Attachment Domain. The upload primitive
+// (frontend/lib/upload.ts -> POST /api/upload -> Supabase Storage) only
+// returns a URL; it never writes to the attachments table itself, and
+// neither does its one existing consumer (ai.tsx). This is the first
+// real write path into that table. Caller uploads first via the existing
+// primitive, then calls this with the result to persist it against a
+// task. NOTE: uploadFile() returns { url, name, size, ... } -- the
+// frontend integration must map these to public_url/file_name/file_size
+// below, which deliberately match the attachments table's own column
+// names rather than the upload utility's response shape.
+app.post('/api/tasks/:task_id/attachments', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const taskId = c.req.param('task_id');
+    const { data: task } = await supabase.from('tasks').select('id')
+      .eq('id', taskId).eq('organisation_id', auth.organisationId).is('deleted_at', null).maybeSingle();
+    if (!task) return c.json({ error: 'not_found' }, 404);
+
+    const body = await c.req.json().catch(() => null);
+    if (!body || !body.storage_path || !body.file_name) return c.json({ error: 'invalid_body' }, 400);
+
+    const { data: attachment, error } = await supabase.from('attachments').insert({
+      organisation_id: auth.organisationId,
+      entity_type: 'task',
+      entity_id: taskId,
+      file_name: body.file_name,
+      file_size: body.file_size || null,
+      mime_type: body.mime_type || null,
+      storage_path: body.storage_path,
+      public_url: body.public_url || null,
+      uploaded_by: auth.userId,
+    }).select('id, file_name, file_size, mime_type, public_url, created_at').single();
+
+    if (error) {
+      console.error('[POST /api/tasks/:task_id/attachments] error:', error);
+      return c.json({ error: 'server_error' }, 500);
+    }
+    return c.json({ attachment });
+  } catch (error) {
+    console.error('[POST /api/tasks/:task_id/attachments] Error:', error);
+    return c.json({ error: 'internal_error' }, 500);
+  }
+});
+
+// ─── GET /api/tasks/:task_id/attachments ─────────────────────
+app.get('/api/tasks/:task_id/attachments', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const taskId = c.req.param('task_id');
+    // Mirrors the POST endpoint's task-ownership check, for a consistent
+    // domain contract -- not strictly a security gap without it (the org
+    // filter below already scopes results correctly), but every other
+    // route touching a task verifies it exists and belongs to this org
+    // first, and this one should too.
+    const { data: task } = await supabase.from('tasks').select('id')
+      .eq('id', taskId).eq('organisation_id', auth.organisationId).is('deleted_at', null).maybeSingle();
+    if (!task) return c.json({ error: 'not_found' }, 404);
+
+    const { data: attachments, error } = await supabase.from('attachments')
+      .select('id, file_name, file_size, mime_type, public_url, created_at')
+      .eq('organisation_id', auth.organisationId).eq('entity_type', 'task').eq('entity_id', taskId)
+      .is('deleted_at', null).order('created_at', { ascending: false });
+    if (error) {
+      console.error('[GET /api/tasks/:task_id/attachments] error:', error);
+      return c.json({ error: 'server_error' }, 500);
+    }
+    return c.json({ attachments: attachments || [] });
+  } catch (error) {
+    console.error('[GET /api/tasks/:task_id/attachments] Error:', error);
+    return c.json({ error: 'internal_error' }, 500);
+  }
+});
+
+// ─── PATCH /api/attachments/:attachment_id ───────────────────
+// Soft-delete only, matching the same lifecycle pattern already
+// established for tasks (C.4) -- a state transition on the resource, not
+// a separate DELETE endpoint. organisation_id scoping is sufficient here:
+// this table has zero existing rows (confirmed -- no write path existed
+// before this patch), and the POST endpoint above is the only thing that
+// will ever create one, always setting organisation_id explicitly.
+app.patch('/api/attachments/:attachment_id', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const attachmentId = c.req.param('attachment_id');
+    const body = await c.req.json().catch(() => null);
+    if (!body || !('deleted_at' in body)) return c.json({ error: 'invalid_body' }, 400);
+    const isValidTimestampOrNull = (v) => v === null || (typeof v === 'string' && !isNaN(Date.parse(v)));
+    if (!isValidTimestampOrNull(body.deleted_at)) return c.json({ error: 'invalid_deleted_at' }, 400);
+
+    const { error } = await supabase.from('attachments')
+      .update({ deleted_at: body.deleted_at, updated_at: new Date().toISOString() })
+      .eq('id', attachmentId).eq('organisation_id', auth.organisationId);
+    if (error) {
+      console.error('[PATCH /api/attachments/:attachment_id] error:', error);
+      return c.json({ error: 'server_error' }, 500);
+    }
+    return c.json({ updated: true });
+  } catch (error) {
+    console.error('[PATCH /api/attachments/:attachment_id] Error:', error);
+    return c.json({ error: 'internal_error' }, 500);
+  }
+});
+
 // ─── POST /api/tasks ─────────────────────────────────────────
 // General-purpose task/reminder creation -- the 4th way to create a
 // reminder alongside Spark, Customer AI, and Org AI (Batch C.8/C.9).
