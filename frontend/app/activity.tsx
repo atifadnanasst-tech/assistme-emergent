@@ -1,10 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, FlatList,
-  ActivityIndicator, RefreshControl, Modal, Pressable,
+  ActivityIndicator, RefreshControl, Modal, Pressable, TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
@@ -19,6 +19,7 @@ export default function ActivityScreen() {
   const [tab, setTab] = useState<'watchlist' | 'mytasks'>('watchlist');
   const [items, setItems] = useState<any[]>([]);
   const [headerMenuVisible, setHeaderMenuVisible] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
 
   const getToken = async () => {
     const token = await authService.getAccessToken();
@@ -27,6 +28,16 @@ export default function ActivityScreen() {
   };
 
   useEffect(() => { loadData(); }, [tab]);
+
+  // Refetch whenever this screen regains focus -- catches returning from
+  // task-detail.tsx (create or edit) without needing a manual pull-to-
+  // refresh. The tab-change effect above doesn't cover this case, since
+  // switching tabs is a local state change, not a navigation focus event.
+  useFocusEffect(
+    useCallback(() => {
+      loadData();
+    }, [tab])
+  );
 
   const loadData = async () => {
     try {
@@ -108,6 +119,27 @@ export default function ActivityScreen() {
         </TouchableOpacity>
       </View>
 
+      {/* Search -- My Tasks only, cheap client-side filter on the already-
+          fetched list. The fastest way to find a specific card without
+          building a full search backend. */}
+      {tab === 'mytasks' && items.length > 0 && (
+        <View style={s.searchBar}>
+          <Ionicons name="search" size={18} color="#999" style={{ marginRight: 8 }} />
+          <TextInput
+            style={s.searchInput}
+            placeholder="Search reminders..."
+            placeholderTextColor="#999"
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+          />
+          {searchQuery.length > 0 && (
+            <TouchableOpacity onPress={() => setSearchQuery('')}>
+              <Ionicons name="close-circle" size={18} color="#999" />
+            </TouchableOpacity>
+          )}
+        </View>
+      )}
+
       {/* Content */}
       {loading ? (
         <View style={s.center}><ActivityIndicator size="large" color="#075E54" /></View>
@@ -118,7 +150,9 @@ export default function ActivityScreen() {
         </View>
       ) : (
         <FlatList
-          data={items}
+          data={tab === 'mytasks' && searchQuery.trim()
+            ? items.filter(i => (i.title || '').toLowerCase().includes(searchQuery.toLowerCase()))
+            : items}
           renderItem={renderItem}
           keyExtractor={item => item.id}
           contentContainerStyle={s.listContent}
@@ -152,10 +186,15 @@ const s = StyleSheet.create({
   listContent: { padding: 12 },
   emptyText: { fontSize: 15, color: '#999' },
   fab: {
-    position: 'absolute', right: 16, bottom: 24, width: 56, height: 56,
+    position: 'absolute', right: 16, bottom: 90, width: 56, height: 56,
     backgroundColor: '#075E54', borderRadius: 28, justifyContent: 'center', alignItems: 'center',
     elevation: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 4,
   },
+  searchBar: {
+    flexDirection: 'row', alignItems: 'center', marginHorizontal: 12, marginBottom: 8,
+    paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, backgroundColor: '#FFF', borderWidth: 1, borderColor: '#E5E5E5',
+  },
+  searchInput: { flex: 1, fontSize: 15, color: '#1A1A1A' },
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.3)', justifyContent: 'flex-start', alignItems: 'flex-end', paddingTop: 95, paddingRight: 12 },
   menuBox: { backgroundColor: '#FFF', borderRadius: 12, paddingVertical: 6, minWidth: 200, shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 12, elevation: 8 },
   menuItem: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 18, paddingVertical: 14, gap: 12 },
