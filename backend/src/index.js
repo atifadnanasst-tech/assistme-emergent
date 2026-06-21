@@ -6376,6 +6376,9 @@ app.post('/api/tasks', async (c) => {
 
     const entityType = body.entity_type === 'reminder' ? 'reminder' : 'task';
 
+    const allowedRepeatPatterns = ['daily', 'weekly', 'monthly'];
+    const repeatPattern = allowedRepeatPatterns.includes(body.repeat_pattern) ? body.repeat_pattern : null;
+
     let entityId = null;
     if (body.customer_id) {
       const { data: cust } = await supabase.from('customers').select('id')
@@ -6403,7 +6406,8 @@ app.post('/api/tasks', async (c) => {
       due_date: due,
       entity_type: entityType,
       entity_id: entityId,
-    }).select('id, title, description, due_date, status, priority, entity_id, entity_type, assigned_to, created_at').single();
+      repeat_pattern: repeatPattern,
+    }).select('id, title, description, due_date, status, priority, entity_id, entity_type, assigned_to, repeat_pattern, created_at').single();
 
     if (error) {
       console.error('[POST /api/tasks] insert error:', error);
