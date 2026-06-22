@@ -9,6 +9,7 @@ import { dirname, join } from 'path';
 import { registerAIRoutes, getOpenAI } from './ai-routes.js';
 import { registerOrgAiRoutes } from './services/ai/orgAi/routes.js';
 import { getBusinessProfile, updateBusinessProfileFields } from './services/capabilities/setBusinessProfileCapability.js';
+import { resolveCustomerSelector } from './services/capabilities/customerSelector.js';
 import { registerSupplierRoutes } from './services/business/supplierRoutes.js';
 import { recordPayment } from './services/business/recordPayment.js';
 import { recordOpeningPosition, isOpeningPositionAllowed } from './services/business/recordOpeningPosition.js';
@@ -6698,6 +6699,25 @@ app.post('/api/voice-reminder/draft', async (c) => {
       source: 'voice_reminder',
     });
     if (!draft) return c.json({ success: false, error: 'draft_failed' }, 500);
+
+    // Attempt resolution using the existing 4-layer customer resolver
+    // (UUID -> learned alias -> exact/partial/fuzzy name -> phone),
+    // already proven elsewhere (paymentCapabilities.js) -- not
+    // reimplemented. Only links when exactly one customer resolves; a
+    // zero or multiple-candidate match stays unlinked, since the draft
+    // review UI isn't built to show a disambiguation list yet -- safer
+    // to leave it for manual linking via Edit than to guess.
+    if (draft.customer_name) {
+      const resolution = await resolveCustomerSelector({
+        selector: { name: draft.customer_name },
+        orgId: auth.organisationId,
+        supabase,
+      });
+      if (resolution.customer) {
+        draft.customer_id = resolution.customer.id;
+        draft.customer_name = resolution.customer.name;
+      }
+    }
 
     return c.json({ success: true, draft });
   } catch (error) {

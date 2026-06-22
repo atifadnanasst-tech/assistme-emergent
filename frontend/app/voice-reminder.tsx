@@ -192,7 +192,13 @@ export default function VoiceReminderScreen() {
 
   const handleEdit = () => {
     if (!draft) return;
-    router.push({
+    // router.replace, not router.push -- Edit hands off completely (no
+    // return path to this draft sheet, per the original design intent).
+    // push() was leaving this screen in the navigation stack, so
+    // task-detail.tsx's own router.back() (on X or Save) was incorrectly
+    // landing back on this draft sheet instead of wherever Voice
+    // Reminder was originally opened from.
+    router.replace({
       pathname: '/task-detail',
       params: {
         draft_title: draft.title,
