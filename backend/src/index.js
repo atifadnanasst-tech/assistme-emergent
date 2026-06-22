@@ -6700,13 +6700,16 @@ app.post('/api/voice-reminder/draft', async (c) => {
     });
     if (!draft) return c.json({ success: false, error: 'draft_failed' }, 500);
 
-    // Attempt resolution using the existing 4-layer customer resolver
-    // (UUID -> learned alias -> exact/partial/fuzzy name -> phone),
-    // already proven elsewhere (paymentCapabilities.js) -- not
-    // reimplemented. Only links when exactly one customer resolves; a
-    // zero or multiple-candidate match stays unlinked, since the draft
-    // review UI isn't built to show a disambiguation list yet -- safer
-    // to leave it for manual linking via Edit than to guess.
+    // Attempt resolution using the existing 4-layer customer resolver.
+    // customer_name_spoken is preserved separately -- after resolution,
+    // customer_name becomes the canonical DB name, but alias learning
+    // needs the original Whisper phrase ("a jalil sipsagar", not
+    // "A. Jalil, Shipsagar") to be useful next time.
+    // Candidates are { id, name } only -- baseSelect in customerSelector
+    // doesn't include company, confirmed directly.
+    const customerNameSpoken = draft.customer_name || null;
+    let customerResolution = { status: 'unresolved', candidates: [] };
+
     if (draft.customer_name) {
       const resolution = await resolveCustomerSelector({
         selector: { name: draft.customer_name },
@@ -6716,12 +6719,92 @@ app.post('/api/voice-reminder/draft', async (c) => {
       if (resolution.customer) {
         draft.customer_id = resolution.customer.id;
         draft.customer_name = resolution.customer.name;
+        customerResolution = { status: 'resolved', candidates: [] };
+      } else if (resolution.candidates && resolution.candidates.length > 0) {
+        customerResolution = { status: 'ambiguous', candidates: resolution.candidates.map(c => ({ id: c.id, name: c.name })) };
       }
     }
 
-    return c.json({ success: true, draft });
+    return c.json({ success: true, draft: { ...draft, customer_name_spoken: customerNameSpoken }, customer_resolution: customerResolution });
   } catch (error) {
     console.error('[POST /api/voice-reminder/draft] Error:', error);
+    return c.json({ success: false, error: 'internal_error' }, 500);
+  }
+});
+
+// ─── POST /api/customer-aliases ──────────────────────────────
+// Standalone alias write -- extracted from Org AI's inline select-entity
+// handler so Voice Reminder (and future callers) can learn aliases
+// without coupling to that flow. Payload and conflict target mirror
+// orgAi/routes.js exactly, verified directly against production code.
+// Conflict doctrine: query first, decide explicitly.
+//   Same customer  -> update timestamps only (confirmed_count increment
+//                     deferred until an RPC or alias service exists --
+//                     setting it to 1 every time is not an increment).
+//   Diff customer  -> return alias_conflict (non-fatal, v1 frontend
+//                     ignores it, future tooling can resolve).
+// Token rule: >= 2 tokens (filter(Boolean), not filter(len>1)) to
+// correctly allow South Asian patterns like "A Rahman", "M K Ghosh" --
+// initials count as tokens; bare single words like "shahid" are the
+// actual ambiguity risk. Frontend enforces: only call after successful
+// task creation, only when manually linked.
+app.post('/api/customer-aliases', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ success: false, error: 'unauthorized' }, 401);
+    const body = await c.req.json().catch(() => null);
+    if (!body || !body.customer_id || !body.spoken_phrase) return c.json({ success: false, error: 'invalid_body' }, 400);
+
+    const normalised = String(body.spoken_phrase).toLowerCase().trim().replace(/\s+/g, ' ');
+    const tokens = normalised.split(' ').filter(Boolean);
+    if (tokens.length < 2) return c.json({ success: false, error: 'phrase_too_short' }, 400);
+
+    const { data: cust } = await supabase.from('customers').select('id')
+      .eq('id', body.customer_id).eq('organisation_id', auth.organisationId).maybeSingle();
+    if (!cust) return c.json({ success: false, error: 'customer_not_found' }, 404);
+
+    const { data: existing } = await supabase.from('entity_aliases')
+      .select('entity_id')
+      .eq('organisation_id', auth.organisationId)
+      .eq('entity_type', 'customer')
+      .eq('normalised', normalised)
+      .maybeSingle();
+
+    if (existing) {
+      if (existing.entity_id === body.customer_id) {
+        await supabase.from('entity_aliases').update({
+          last_confirmed_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        }).eq('organisation_id', auth.organisationId)
+          .eq('entity_type', 'customer')
+          .eq('normalised', normalised);
+        return c.json({ success: true });
+      } else {
+        console.log('[POST /api/customer-aliases] conflict:', normalised, 'already points to', existing.entity_id);
+        return c.json({ success: false, error: 'alias_conflict', existing_customer_id: existing.entity_id });
+      }
+    }
+
+    const { error: aliasErr } = await supabase.from('entity_aliases').insert({
+      organisation_id: auth.organisationId,
+      entity_type: 'customer',
+      entity_id: body.customer_id,
+      alias: normalised,
+      normalised,
+      source_type: 'owner_selection',
+      usage_count: 1,
+      confirmed_count: 1,
+      last_confirmed_at: new Date().toISOString(),
+    });
+
+    if (aliasErr) {
+      console.error('[POST /api/customer-aliases] insert error:', aliasErr.message);
+      return c.json({ success: false, error: 'alias_write_failed' }, 500);
+    }
+    console.log('[POST /api/customer-aliases] alias stored:', normalised, '→', body.customer_id);
+    return c.json({ success: true });
+  } catch (error) {
+    console.error('[POST /api/customer-aliases] Error:', error);
     return c.json({ success: false, error: 'internal_error' }, 500);
   }
 });
