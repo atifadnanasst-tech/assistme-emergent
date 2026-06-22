@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Alert,
+  Modal, TextInput, FlatList,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -37,8 +38,11 @@ interface Draft {
   repeat_pattern: string | null;
   customer_id: string | null;
   customer_name: string | null;
+  customer_name_spoken: string | null;
   confidence: number;
 }
+interface CustomerCandidate { id: string; name: string; }
+interface CustomerResolution { status: 'resolved' | 'ambiguous' | 'unresolved'; candidates: CustomerCandidate[]; }
 
 const REPEAT_LABELS: Record<string, string> = { daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly' };
 
@@ -52,6 +56,17 @@ export default function VoiceReminderScreen() {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [errorMsg, setErrorMsg] = useState('');
   const [confirming, setConfirming] = useState(false);
+  const [customerResolution, setCustomerResolution] = useState<CustomerResolution | null>(null);
+  const [linkModalVisible, setLinkModalVisible] = useState(false);
+  const [allCustomers, setAllCustomers] = useState<CustomerCandidate[]>([]);
+  const [customerSearch, setCustomerSearch] = useState('');
+  const [loadingCustomers, setLoadingCustomers] = useState(false);
+  // manuallyLinked tracks whether the owner explicitly picked a customer
+  // (vs auto-resolved by the backend). customerResolution preserves the
+  // original backend conclusion -- never overwritten by owner actions,
+  // so alias learning correctly evaluates what the backend originally
+  // returned, not what UI state became after selection.
+  const [manuallyLinked, setManuallyLinked] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -151,6 +166,7 @@ export default function VoiceReminderScreen() {
         return;
       }
       setDraft(data.draft);
+      setCustomerResolution(data.customer_resolution || { status: 'unresolved', candidates: [] });
       setState('draft');
     } catch (e) {
       console.error('Voice reminder processing error:', e);
@@ -181,6 +197,24 @@ export default function VoiceReminderScreen() {
         }),
       });
       if (!res.ok) throw new Error('Create failed');
+
+      // Alias learning: fire-and-forget after successful creation.
+      // Only when manually linked AND originally unresolved/ambiguous --
+      // auto-resolved customers already matched correctly, no redundant alias.
+      // customerResolution reflects the original backend conclusion (never
+      // overwritten by owner actions), so this condition is reliable.
+      // alias_conflict is non-fatal -- logged, never shown as error toast.
+      if (manuallyLinked && customerResolution?.status !== 'resolved' && draft.customer_id && draft.customer_name_spoken) {
+        const spokenTokens = (draft.customer_name_spoken || '').trim().split(/\s+/).filter(Boolean);
+        if (spokenTokens.length >= 2) {
+          fetch(`${backendUrl}/api/customer-aliases`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ customer_id: draft.customer_id, spoken_phrase: draft.customer_name_spoken }),
+          }).catch(err => console.warn('[Voice Reminder] alias write failed:', err));
+        }
+      }
+
       router.back();
     } catch (e) {
       console.error('Voice reminder confirm error:', e);
@@ -188,6 +222,35 @@ export default function VoiceReminderScreen() {
     } finally {
       setConfirming(false);
     }
+  };
+
+  const handleOpenLinkModal = async () => {
+    const prefill = draft?.customer_name_spoken || draft?.customer_name || '';
+    setCustomerSearch(prefill);
+    setLinkModalVisible(true);
+    if (allCustomers.length === 0) {
+      setLoadingCustomers(true);
+      try {
+        const token = await getToken();
+        if (!token) return;
+        const res = await fetch(`${backendUrl}/api/customers`, { headers: { 'Authorization': `Bearer ${token}` } });
+        const data = await res.json();
+        setAllCustomers((data.customers || []).map((c: any) => ({ id: c.id, name: c.name })));
+      } catch {} finally { setLoadingCustomers(false); }
+    }
+  };
+
+  const handleSelectCustomer = (candidate: CustomerCandidate) => {
+    // customerResolution is intentionally NOT updated here -- it preserves
+    // the original backend conclusion. Alias learning checks
+    // customerResolution.status !== 'resolved' to know whether the owner
+    // was fixing a failed resolution; overwriting it would suppress alias
+    // writes for the exact flow they're meant to learn from.
+    // Chip visibility is handled by the render logic: draft.customer_id
+    // being set causes the chips branch to not render, no extra state needed.
+    setDraft(prev => prev ? { ...prev, customer_id: candidate.id, customer_name: candidate.name } : prev);
+    setManuallyLinked(true);
+    setLinkModalVisible(false);
   };
 
   const handleEdit = () => {
@@ -279,11 +342,43 @@ export default function VoiceReminderScreen() {
               <Text style={s.draftFieldValue}>{REPEAT_LABELS[draft.repeat_pattern]}</Text>
             </View>
           )}
-          {draft.customer_name && (
-            <View style={s.draftField}>
-              <Text style={s.draftFieldLabel}>Mentioned customer (not linked yet)</Text>
-              <Text style={s.draftFieldValue}>{draft.customer_name}</Text>
-            </View>
+          {(draft.customer_name || draft.customer_name_spoken) && (
+            <>
+              {customerResolution?.status === 'resolved' && !manuallyLinked ? (
+                <View style={s.draftField}>
+                  <Text style={s.draftFieldLabel}>Customer</Text>
+                  <Text style={[s.draftFieldValue, { color: '#075E54' }]}>{draft.customer_name}</Text>
+                </View>
+              ) : draft.customer_id ? (
+                <TouchableOpacity style={s.draftField} onPress={handleOpenLinkModal}>
+                  <Text style={s.draftFieldLabel}>Customer (linked)</Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                    <Text style={[s.draftFieldValue, { color: '#075E54' }]}>{draft.customer_name}</Text>
+                    <Text style={{ color: '#667781' }}>›</Text>
+                  </View>
+                </TouchableOpacity>
+              ) : (
+                <>
+                  <TouchableOpacity style={s.draftField} onPress={handleOpenLinkModal}>
+                    <Text style={s.draftFieldLabel}>Mentioned (not linked yet)</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                      <Text style={s.draftFieldValue} numberOfLines={1}>{draft.customer_name || draft.customer_name_spoken}</Text>
+                      <Text style={{ color: '#667781' }}>›</Text>
+                    </View>
+                  </TouchableOpacity>
+                  {customerResolution?.status === 'ambiguous' && customerResolution.candidates.length > 0 && (
+                    <View style={s.candidatesBox}>
+                      <Text style={s.candidatesLabel}>Did you mean:</Text>
+                      {customerResolution.candidates.slice(0, 4).map(c => (
+                        <TouchableOpacity key={c.id} style={s.candidateChip} onPress={() => handleSelectCustomer(c)}>
+                          <Text style={s.candidateChipText}>{c.name}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  )}
+                </>
+              )}
+            </>
           )}
 
           <View style={s.draftActions}>
@@ -299,6 +394,42 @@ export default function VoiceReminderScreen() {
           </TouchableOpacity>
         </View>
       )}
+      <Modal visible={linkModalVisible} transparent animationType="slide" onRequestClose={() => setLinkModalVisible(false)}>
+        <View style={s.modalOverlay}>
+          <View style={s.modalSheet}>
+            <Text style={s.modalHeading}>Link Customer</Text>
+            <TextInput
+              style={s.modalSearch}
+              placeholder="Search..."
+              placeholderTextColor="#999"
+              value={customerSearch}
+              onChangeText={setCustomerSearch}
+              autoFocus
+            />
+            {loadingCustomers ? (
+              <ActivityIndicator size="small" color="#075E54" style={{ marginVertical: 12 }} />
+            ) : (
+              <FlatList
+                data={allCustomers.filter(c => {
+                  if (!customerSearch.trim()) return true;
+                  return c.name.toLowerCase().includes(customerSearch.toLowerCase());
+                })}
+                keyExtractor={item => item.id}
+                renderItem={({ item }) => (
+                  <TouchableOpacity style={s.modalItem} onPress={() => handleSelectCustomer(item)}>
+                    <Text style={s.modalItemText}>{item.name}</Text>
+                  </TouchableOpacity>
+                )}
+                ListEmptyComponent={<Text style={s.modalEmpty}>No matches found</Text>}
+                style={{ maxHeight: 280 }}
+              />
+            )}
+            <TouchableOpacity style={s.modalCancel} onPress={() => setLinkModalVisible(false)}>
+              <Text style={s.modalCancelText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -337,4 +468,17 @@ const s = StyleSheet.create({
   editBtnText: { color: '#075E54', fontSize: 16, fontWeight: '600' },
   confirmBtn: { flex: 1, paddingVertical: 14, borderRadius: 24, backgroundColor: '#075E54', alignItems: 'center' },
   confirmBtnText: { color: '#FFF', fontSize: 16, fontWeight: '700' },
+  candidatesBox: { paddingVertical: 8, paddingHorizontal: 4, gap: 6 },
+  candidatesLabel: { fontSize: 12, color: '#667781', marginBottom: 4 },
+  candidateChip: { paddingVertical: 10, paddingHorizontal: 14, backgroundColor: '#F0FAF8', borderRadius: 20, borderWidth: 1, borderColor: '#075E54', marginBottom: 4 },
+  candidateChipText: { fontSize: 14, color: '#075E54', fontWeight: '600' },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
+  modalSheet: { backgroundColor: '#FFF', borderTopLeftRadius: 16, borderTopRightRadius: 16, padding: 20, paddingBottom: 32 },
+  modalHeading: { fontSize: 17, fontWeight: '700', color: '#1A1A1A', marginBottom: 14 },
+  modalSearch: { borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 10, paddingHorizontal: 14, paddingVertical: 10, fontSize: 15, color: '#1A1A1A', marginBottom: 10 },
+  modalItem: { paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#F5F5F5' },
+  modalItemText: { fontSize: 15, color: '#1A1A1A' },
+  modalEmpty: { fontSize: 14, color: '#999', textAlign: 'center', paddingVertical: 16 },
+  modalCancel: { marginTop: 14, alignItems: 'center', paddingVertical: 10 },
+  modalCancelText: { fontSize: 15, color: '#667781', fontWeight: '600' },
 });
