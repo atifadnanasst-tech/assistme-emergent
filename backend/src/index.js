@@ -713,7 +713,7 @@ app.get('/api/home', async (c) => {
       if ((overdueInvCount || 0) > 0) {
         insightCards.push({
           type: 'collections',
-          label: `${overdueInvCount} overdue ${overdueInvCount === 1 ? 'invoice' : 'invoices'}`,
+          label: `${overdueInvCount} ${overdueInvCount === 1 ? 'payment' : 'payments'} overdue`,
           count: overdueInvCount,
           tab: 'watchlist',
         });
@@ -727,7 +727,7 @@ app.get('/api/home', async (c) => {
       if ((deliveryCount || 0) > 0) {
         insightCards.push({
           type: 'deliveries',
-          label: `${deliveryCount} ${deliveryCount === 1 ? 'delivery' : 'deliveries'} today`,
+          label: `${deliveryCount} ${deliveryCount === 1 ? 'delivery' : 'deliveries'} need dispatch`,
           count: deliveryCount,
           tab: 'watchlist',
         });
@@ -741,7 +741,7 @@ app.get('/api/home', async (c) => {
       if ((myTaskCount || 0) > 0) {
         insightCards.push({
           type: 'my_tasks',
-          label: `${myTaskCount} ${myTaskCount === 1 ? 'task' : 'tasks'} due`,
+          label: `${myTaskCount} ${myTaskCount === 1 ? 'follow-up' : 'follow-ups'} pending`,
           count: myTaskCount,
           tab: 'mytasks',
         });

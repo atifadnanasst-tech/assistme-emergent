@@ -507,7 +507,12 @@ export default function HomeScreen() {
           <View style={styles.insightStrip}>
             <Ionicons name="bulb" size={20} color="#8B6914" />
             <Text style={styles.insightText}>
-              {insightCards.map(c => c.label).join('  ·  ')}
+              {insightCards[0]?.type === 'collections'
+                ? `⚠️ Collections require attention`
+                : insightCards[0]?.type === 'deliveries'
+                ? `🚚 Deliveries need dispatch today`
+                : `✅ Follow-ups pending today`}
+              {insightCards.length > 1 ? ` +${insightCards.length - 1} more` : ''}
             </Text>
             <TouchableOpacity onPress={() => setInsightExpanded(!insightExpanded)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
               <Ionicons name={insightExpanded ? 'chevron-up' : 'chevron-down'} size={18} color="#8B6914" />
