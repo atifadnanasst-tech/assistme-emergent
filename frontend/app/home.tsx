@@ -33,12 +33,6 @@ interface InsightStrip {
   content: string;
   items: Array<{ id: string; text: string; completed: boolean }>;
 }
-interface InsightCard {
-  type: 'collections' | 'deliveries' | 'my_tasks';
-  label: string;
-  count: number;
-  tab: 'watchlist' | 'mytasks';
-}
 
 interface Conversation {
   customer_id: string;
@@ -59,7 +53,6 @@ interface Conversation {
 
 interface HomeData {
   insight_strip: InsightStrip | null;
-  insight_cards: InsightCard[];
   filter_tabs: FilterTab[];
   conversations: Conversation[];
   subscription_plan?: string;
@@ -418,8 +411,6 @@ export default function HomeScreen() {
   const conversations = homeData?.conversations || [];
   const filterTabs = homeData?.filter_tabs || [];
   const insightStrip = homeData?.insight_strip;
-  const insightCards = homeData?.insight_cards || [];
-  const [insightExpanded, setInsightExpanded] = useState(false);
 
   return (
     <>
@@ -496,21 +487,8 @@ export default function HomeScreen() {
           </TouchableOpacity>
         </ScrollView>
 
-        {/* Insight Strip -- expandable yellow banner matching the original
-            style. Shows summary count collapsed; tap chevron to expand
-            individual items as tappable bullets. Falls back to morning
-            brief text if no live cards. */}
-        {insightCards.length > 0 ? (
-          <View style={styles.insightStrip}>
-            <Ionicons name="bulb" size={20} color="#8B6914" />
-            <Text style={styles.insightText}>
-              {insightCards.map(c => c.label).join(' · ')}
-            </Text>
-            <TouchableOpacity onPress={() => setInsightExpanded(!insightExpanded)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-              <Ionicons name={insightExpanded ? 'chevron-up' : 'chevron-down'} size={18} color="#8B6914" />
-            </TouchableOpacity>
-          </View>
-        ) : insightStrip && insightStrip.content ? (
+        {/* Insight Strip */}
+        {insightStrip && insightStrip.content && (
           <TouchableOpacity
             style={styles.insightStrip}
             activeOpacity={0.7}
@@ -522,24 +500,6 @@ export default function HomeScreen() {
             </Text>
             <Text style={styles.insightDetails}>Details ›</Text>
           </TouchableOpacity>
-        ) : null}
-        {insightExpanded && insightCards.length > 0 && (
-          <View style={styles.insightExpanded}>
-            {insightCards.map(card => (
-              <TouchableOpacity
-                key={card.type}
-                style={styles.insightBullet}
-                onPress={() => { setInsightExpanded(false); router.push({ pathname: '/activity', params: { tab: card.tab } }); }}
-                activeOpacity={0.7}
-              >
-                <Text style={styles.insightBulletIcon}>
-                  {card.type === 'collections' ? '⚠️' : card.type === 'deliveries' ? '🚚' : '✅'}
-                </Text>
-                <Text style={styles.insightBulletText}>{card.label}</Text>
-                <Ionicons name="chevron-forward" size={14} color="#8B6914" />
-              </TouchableOpacity>
-            ))}
-          </View>
         )}
       </SafeAreaView>
 
@@ -607,7 +567,7 @@ export default function HomeScreen() {
         <Ionicons name={fabExpanded ? 'close' : 'add'} size={28} color="#FFFFFF" />
       </TouchableOpacity>
 
-      <Text style={{ textAlign: "center", fontSize: 10, color: "#CCC", paddingVertical: 2 }}>v1.3.341</Text>
+      <Text style={{ textAlign: "center", fontSize: 10, color: "#CCC", paddingVertical: 2 }}>v1.3.337</Text>
       {/* Bottom Navigation SafeAreaView */}
       <SafeAreaView style={styles.bottomNavSafeArea} edges={['bottom']}>
         <View style={styles.bottomNav}>
@@ -923,19 +883,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  insightExpanded: {
-    backgroundColor: '#FFF8E1',
-    paddingHorizontal: 16,
-    paddingBottom: 8,
-    borderTopWidth: 1,
-    borderTopColor: '#F0E0A0',
-  },
-  insightBullet: {
-    flexDirection: 'row', alignItems: 'center', gap: 10,
-    paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#F0E0A0',
-  },
-  insightBulletIcon: { fontSize: 15 },
-  insightBulletText: { flex: 1, fontSize: 14, color: '#8B6914', fontWeight: '500' },
   insightStrip: {
     flexDirection: 'row',
     alignItems: 'center',
