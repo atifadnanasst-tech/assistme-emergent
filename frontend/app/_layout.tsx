@@ -1,5 +1,5 @@
 import { Stack, useRouter, useSegments } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { View, ActivityIndicator, StyleSheet } from 'react-native';
 import * as SplashScreen from 'expo-splash-screen';
 import * as Notifications from 'expo-notifications';
@@ -62,11 +62,20 @@ async function registerForPushNotifications() {
   }
 }
 
+// Module-level dedup: getLastNotificationResponseAsync returns the stale last
+// response on every mount. We track its identifier so we only process each
+// unique notification once, regardless of how many times the layout remounts.
+let _lastHandledNotificationId: string | null = null;
+
 function RootLayoutNav() {
   const [isReady, setIsReady] = useState(false);
   const { isAuthenticated, isCheckingAuth } = useAuth();
   const router = useRouter();
   const segments = useSegments();
+  // Holds a pending deep-link tab from a notification tap.
+  // Set by the notification effect; consumed by the isReady effect.
+  // Ensures navigation only happens after the router is fully initialized.
+  const pendingNotificationRouteRef = useRef<string | null>(null);
 
   useEffect(() => {
     // Hide splash when auth check is complete
@@ -81,31 +90,34 @@ function RootLayoutNav() {
   }, [isCheckingAuth, isReady, isAuthenticated]);
 
   // Notification tap deep-link handler.
-  // Covers all three app states:
-  // 1. getLastNotificationResponseAsync: app was fully terminated and
-  //    launched by tapping the notification -- the response exists before
-  //    the listener is registered, so must be checked on mount.
-  // 2. addNotificationResponseReceivedListener: app was backgrounded.
-  // route_hint (set in sendOwnerNotification) drives routing -- client
-  // never needs to know the alert_type -> tab mapping rules directly.
+  // Architecture:
+  // - CAPTURE: store the intended tab in pendingNotificationRouteRef.
+  //   Never call router.push() here — router is not ready on mount.
+  // - EXECUTE: the isReady useEffect drains the ref once app is initialized.
+  // Dedup by notification identifier (not a boolean) so future real taps
+  // in the same process are still handled correctly.
   useEffect(() => {
-    const handleNotificationData = (data: any) => {
+    const captureNotificationRoute = (response: Notifications.NotificationResponse | null) => {
+      if (!response) return;
+      const id = response.notification.request.identifier;
+      if (_lastHandledNotificationId === id) {
+        console.log('[PUSH] Duplicate notification ignored, id:', id);
+        return;
+      }
+      _lastHandledNotificationId = id;
+      const data = response.notification.request.content.data as any;
       if (!data) return;
       const tab = data.route_hint === 'mytasks' ? 'mytasks' : 'watchlist';
-      console.log('[PUSH] Notification tapped, routing to activity tab:', tab);
-      router.push({ pathname: '/activity', params: { tab } });
+      console.log('[PUSH] Notification captured, pending route to activity tab:', tab);
+      pendingNotificationRouteRef.current = tab;
     };
 
-    // Terminated app: check if launched via notification tap
-    Notifications.getLastNotificationResponseAsync().then(response => {
-      const data = response?.notification?.request?.content?.data;
-      if (data) handleNotificationData(data);
-    });
+    // Terminated app: check if launched via notification tap.
+    // Identifier dedup prevents stale response re-processing on remount.
+    Notifications.getLastNotificationResponseAsync().then(captureNotificationRoute);
 
-    // Backgrounded app: listen for future taps
-    const sub = Notifications.addNotificationResponseReceivedListener(response => {
-      handleNotificationData(response.notification.request.content.data || {});
-    });
+    // Backgrounded app: listen for future taps.
+    const sub = Notifications.addNotificationResponseReceivedListener(captureNotificationRoute);
 
     return () => sub.remove();
   }, []);
@@ -114,6 +126,15 @@ function RootLayoutNav() {
     // LOADING GATE: Do not run redirect logic while auth state is loading
     if (!isReady || isCheckingAuth) {
       console.log('🚦 [LAYOUT] Auth check in progress, skipping navigation logic');
+      return;
+    }
+
+    // Drain any pending notification deep-link now that router is ready.
+    if (pendingNotificationRouteRef.current) {
+      const tab = pendingNotificationRouteRef.current;
+      pendingNotificationRouteRef.current = null;
+      console.log('[PUSH] Executing pending notification route to activity tab:', tab);
+      router.push({ pathname: '/activity', params: { tab } });
       return;
     }
 
