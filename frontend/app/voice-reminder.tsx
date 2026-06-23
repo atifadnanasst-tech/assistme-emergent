@@ -35,6 +35,8 @@ interface Draft {
   title: string;
   description: string | null;
   due_date: string | null;
+  due_time: string | null;
+  due_at: string | null;
   repeat_pattern: string | null;
   customer_id: string | null;
   customer_name: string | null;
@@ -192,6 +194,7 @@ export default function VoiceReminderScreen() {
           title: draft.title,
           description: draft.description,
           due_date: draft.due_date || new Date().toISOString().split('T')[0],
+          due_at: draft.due_at || null,
           repeat_pattern: draft.repeat_pattern,
           customer_id: draft.customer_id,
         }),
@@ -278,6 +281,16 @@ export default function VoiceReminderScreen() {
 
   const fmtTime = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
   const fmtDate = (d: string | null) => d ? new Date(d + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' }) : 'No date set';
+  // Converts HH:MM (24h) from draft.due_time to 12h display (e.g. "7:00 PM").
+  // Computed here rather than inline in JSX for readability.
+  // draft is Draft | null -- optional chaining guards the null case.
+  const formattedDueTime = (() => {
+    if (!draft?.due_time) return null;
+    const [h, m] = draft.due_time.split(':').map(Number);
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    const h12 = h % 12 || 12;
+    return `${h12}:${String(m).padStart(2, '0')} ${ampm}`;
+  })();
 
   return (
     <SafeAreaView style={s.container} edges={['top', 'bottom']}>
@@ -334,7 +347,9 @@ export default function VoiceReminderScreen() {
           </View>
           <View style={s.draftField}>
             <Text style={s.draftFieldLabel}>Due Date</Text>
-            <Text style={s.draftFieldValue}>{fmtDate(draft.due_date)}</Text>
+            <Text style={s.draftFieldValue}>
+              {fmtDate(draft.due_date)}{formattedDueTime ? ` at ${formattedDueTime}` : ''}
+            </Text>
           </View>
           {draft.repeat_pattern && (
             <View style={s.draftField}>

@@ -6065,6 +6065,7 @@ Return strict JSON only, no other text:
   "title": "short title, in the owner's own words",
   "description": null or a short elaboration if the request had more detail than fits in the title,
   "due_date": "YYYY-MM-DD" or null if no date could be inferred,
+  "due_time": "HH:MM" in 24-hour format or null -- return null unless the speaker explicitly mentioned a time, do not infer business hours, morning, afternoon, end of day, or any default time,
   "repeat_pattern": null, "daily", "weekly", or "monthly",
   "customer_name": null or the name as spoken, if one was mentioned,
   "confidence": a number from 0 to 1 for how confident you are in this extraction
@@ -6084,11 +6085,31 @@ Return strict JSON only, no other text:
     const allowedRepeatPatterns = ['daily', 'weekly', 'monthly'];
     const rawConfidence = Number(parsed.confidence);
     const confidence = Number.isFinite(rawConfidence) ? Math.max(0, Math.min(1, rawConfidence)) : 0.5;
+    // Deterministic IST -> UTC conversion. GPT returns due_date (YYYY-MM-DD) and
+    // due_time (HH:MM 24h) separately. Code owns all timezone logic, not the LLM.
+    // Uses Date.UTC() directly so server timezone setting is irrelevant.
+    // IST = UTC+05:30 (no DST). Negative values for hours/minutes are fine --
+    // Date.UTC handles rollover automatically.
+    // Example: 2026-06-24 00:15 IST -> 2026-06-23T18:45:00Z
+    // due_at is null if either due_date or due_time is missing -- never invent a time.
+    const dueDate = parsed.due_date || null;
+    const rawDueTime = typeof parsed.due_time === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(parsed.due_time.trim())
+      ? parsed.due_time.trim()
+      : null;
+    let dueAt = null;
+    if (dueDate && rawDueTime) {
+      const [year, month, day] = dueDate.split('-').map(Number);
+      const [hours, minutes] = rawDueTime.split(':').map(Number);
+      // Subtract IST offset (5h 30m) to convert to UTC.
+      dueAt = new Date(Date.UTC(year, month - 1, day, hours - 5, minutes - 30, 0, 0)).toISOString();
+    }
     return {
       transcript,
       title: parsed.title || transcript.slice(0, 80),
       description: parsed.description || null,
-      due_date: parsed.due_date || null,
+      due_date: dueDate,
+      due_time: rawDueTime,
+      due_at: dueAt,
       repeat_pattern: allowedRepeatPatterns.includes(parsed.repeat_pattern) ? parsed.repeat_pattern : null,
       customer_id: context.customerId || null,
       customer_name: parsed.customer_name || null,
