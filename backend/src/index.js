@@ -7089,6 +7089,7 @@ app.patch('/api/tasks/:task_id', async (c) => {
       const isValidTimestampOrNull = (v) => v === null || (typeof v === 'string' && !isNaN(Date.parse(v)));
       if (!isValidTimestampOrNull(body.due_at)) return c.json({ error: 'invalid_due_at' }, 400);
       updateFields.due_at = body.due_at;
+      updateFields.reminder_sent_at = null;
     }
     if ('repeat_pattern' in body) {
       const allowedRepeatPatterns = ['daily', 'weekly', 'monthly'];
@@ -7304,6 +7305,50 @@ if (supabase) {
   console.log('✅ AI routes registered');
 }
 
+// ── Job 7: Exact-time Task Reminders (A.2b) ─────────────────
+// Runs every 5 minutes. Fires for My Tasks / Voice Reminders with
+// a specific due_at timestamp. Fundamentally different from 8 AM
+// batch jobs -- owner-intention reminders must fire at the intended
+// time, not at a morning digest.
+// Push: insertAlert() with alert_type='reminder_due' triggers
+// sendOwnerNotification() automatically via PUSH_ACTIONABLE_TYPES.
+// Deduplication: reminder_sent_at IS NULL in query (partial index).
+// Reschedule safety: PATCH /api/tasks resets reminder_sent_at=null
+// when due_at changes, making the task eligible again.
+// Ordering: alert FIRST, mark sent SECOND. If mark fails, re-fires
+// next tick (acceptable). Reverse loses the reminder permanently.
+async function jobTaskReminders(orgId, userId) {
+  const now = new Date().toISOString();
+  let fired = 0;
+  const { data: tasks } = await supabase.from('tasks')
+    .select('id, title, entity_id, due_at')
+    .eq('organisation_id', orgId)
+    .eq('status', 'pending')
+    .is('deleted_at', null)
+    .is('reminder_sent_at', null)
+    .not('due_at', 'is', null)
+    .lte('due_at', now);
+  for (const task of (tasks || [])) {
+    try {
+      let convId = null;
+      if (task.entity_id) {
+        convId = await getConvForCustomer(orgId, userId, task.entity_id);
+      }
+      if (!convId) convId = await getGlobalConv(orgId, userId);
+      if (!convId) continue;
+      const label = task.title.length > 80 ? task.title.slice(0, 80) + '...' : task.title;
+      await insertAlert(orgId, convId, `⏰ Reminder: ${label}`,
+        { task_id: task.id, alert_type: 'reminder_due', alert_date: now.split('T')[0] });
+      await supabase.from('tasks').update({ reminder_sent_at: now })
+        .eq('id', task.id).eq('organisation_id', orgId);
+      fired++;
+    } catch (err) {
+      console.error(`[jobTaskReminders] failed for task ${task.id}:`, err.message);
+    }
+  }
+  return fired;
+}
+
 // ── Watch Engine cron schedule (interim, Batch 0.5) — IST (Asia/Kolkata) ──
 const CRON_TZ = { timezone: 'Asia/Kolkata' };
 cron.schedule('0 8 * * *', () => runWatchJobForAllOrgs('jobMorningBriefing', jobMorningBriefing), CRON_TZ);
@@ -7314,7 +7359,8 @@ cron.schedule('0 8 * * *', () => runWatchJobForAllOrgs('jobDailyInsight', jobDai
 // once the Preferences Center exists -- 20:00 here is a placeholder, not business logic.
 cron.schedule('0 20 * * *', () => runWatchJobForAllOrgs('jobBankReconciliation', jobBankReconciliation), CRON_TZ);
 cron.schedule('0 */4 * * *', () => runWatchJobForAllOrgs('jobDraftCleanup', jobDraftCleanup), CRON_TZ);
-console.log('[WatchEngine] Scheduler initialized -- 6 jobs scheduled (interim fixed schedule, IST)');
+cron.schedule('*/5 * * * *', () => runWatchJobForAllOrgs('jobTaskReminders', jobTaskReminders), CRON_TZ);
+console.log('[WatchEngine] Scheduler initialized -- 7 jobs scheduled (interim fixed schedule, IST)');
 
 // Start server
 const port = process.env.PORT ? parseInt(process.env.PORT) : 3000;
