@@ -419,6 +419,7 @@ export default function HomeScreen() {
   const filterTabs = homeData?.filter_tabs || [];
   const insightStrip = homeData?.insight_strip;
   const insightCards = homeData?.insight_cards || [];
+  const [insightExpanded, setInsightExpanded] = useState(false);
 
   return (
     <>
@@ -495,36 +496,20 @@ export default function HomeScreen() {
           </TouchableOpacity>
         </ScrollView>
 
-        {/* Insight Strip -- horizontal chips when live cards exist,
-            falls back to morning-brief text banner otherwise.
-            Chip tap passes tab param to activity.tsx which reads it on
-            mount to pre-select the right tab. */}
+        {/* Insight Strip -- expandable yellow banner matching the original
+            style. Shows summary count collapsed; tap chevron to expand
+            individual items as tappable bullets. Falls back to morning
+            brief text if no live cards. */}
         {insightCards.length > 0 ? (
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            style={styles.chipStrip}
-            contentContainerStyle={styles.chipStripContent}
-          >
-            {insightCards.map(card => (
-              <TouchableOpacity
-                key={card.type}
-                style={[
-                  styles.chip,
-                  card.type === 'collections' && styles.chipCollections,
-                  card.type === 'deliveries' && styles.chipDeliveries,
-                  card.type === 'my_tasks' && styles.chipMyTasks,
-                ]}
-                onPress={() => router.push({ pathname: '/activity', params: { tab: card.tab } })}
-                activeOpacity={0.75}
-              >
-                <Text style={styles.chipIcon}>
-                  {card.type === 'collections' ? '⚠️' : card.type === 'deliveries' ? '🚚' : '✅'}
-                </Text>
-                <Text style={styles.chipLabel}>{card.label}</Text>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
+          <View style={styles.insightStrip}>
+            <Ionicons name="bulb" size={20} color="#8B6914" />
+            <Text style={styles.insightText}>
+              {insightCards.map(c => c.label).join(' · ')}
+            </Text>
+            <TouchableOpacity onPress={() => setInsightExpanded(!insightExpanded)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <Ionicons name={insightExpanded ? 'chevron-up' : 'chevron-down'} size={18} color="#8B6914" />
+            </TouchableOpacity>
+          </View>
         ) : insightStrip && insightStrip.content ? (
           <TouchableOpacity
             style={styles.insightStrip}
@@ -538,6 +523,24 @@ export default function HomeScreen() {
             <Text style={styles.insightDetails}>Details ›</Text>
           </TouchableOpacity>
         ) : null}
+        {insightExpanded && insightCards.length > 0 && (
+          <View style={styles.insightExpanded}>
+            {insightCards.map(card => (
+              <TouchableOpacity
+                key={card.type}
+                style={styles.insightBullet}
+                onPress={() => { setInsightExpanded(false); router.push({ pathname: '/activity', params: { tab: card.tab } }); }}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.insightBulletIcon}>
+                  {card.type === 'collections' ? '⚠️' : card.type === 'deliveries' ? '🚚' : '✅'}
+                </Text>
+                <Text style={styles.insightBulletText}>{card.label}</Text>
+                <Ionicons name="chevron-forward" size={14} color="#8B6914" />
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
       </SafeAreaView>
 
       {/* Conversation List */}
@@ -604,7 +607,7 @@ export default function HomeScreen() {
         <Ionicons name={fabExpanded ? 'close' : 'add'} size={28} color="#FFFFFF" />
       </TouchableOpacity>
 
-      <Text style={{ textAlign: "center", fontSize: 10, color: "#CCC", paddingVertical: 2 }}>v1.3.340</Text>
+      <Text style={{ textAlign: "center", fontSize: 10, color: "#CCC", paddingVertical: 2 }}>v1.3.341</Text>
       {/* Bottom Navigation SafeAreaView */}
       <SafeAreaView style={styles.bottomNavSafeArea} edges={['bottom']}>
         <View style={styles.bottomNav}>
@@ -920,17 +923,19 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  chipStrip: { flexGrow: 0 },
-  chipStripContent: { paddingHorizontal: 16, paddingVertical: 10, gap: 8, flexDirection: 'row' },
-  chip: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20, borderWidth: 1,
+  insightExpanded: {
+    backgroundColor: '#FFF8E1',
+    paddingHorizontal: 16,
+    paddingBottom: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#F0E0A0',
   },
-  chipCollections: { backgroundColor: '#FFF3E0', borderColor: '#E65100' },
-  chipDeliveries: { backgroundColor: '#E3F2FD', borderColor: '#1565C0' },
-  chipMyTasks: { backgroundColor: '#E8F5E9', borderColor: '#2E7D32' },
-  chipIcon: { fontSize: 14 },
-  chipLabel: { fontSize: 13, fontWeight: '600', color: '#1A1A1A' },
+  insightBullet: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#F0E0A0',
+  },
+  insightBulletIcon: { fontSize: 15 },
+  insightBulletText: { flex: 1, fontSize: 14, color: '#8B6914', fontWeight: '500' },
   insightStrip: {
     flexDirection: 'row',
     alignItems: 'center',
