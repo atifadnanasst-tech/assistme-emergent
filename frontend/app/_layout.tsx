@@ -80,6 +80,36 @@ function RootLayoutNav() {
     }
   }, [isCheckingAuth, isReady, isAuthenticated]);
 
+  // Notification tap deep-link handler.
+  // Covers all three app states:
+  // 1. getLastNotificationResponseAsync: app was fully terminated and
+  //    launched by tapping the notification -- the response exists before
+  //    the listener is registered, so must be checked on mount.
+  // 2. addNotificationResponseReceivedListener: app was backgrounded.
+  // route_hint (set in sendOwnerNotification) drives routing -- client
+  // never needs to know the alert_type -> tab mapping rules directly.
+  useEffect(() => {
+    const handleNotificationData = (data: any) => {
+      if (!data) return;
+      const tab = data.route_hint === 'mytasks' ? 'mytasks' : 'watchlist';
+      console.log('[PUSH] Notification tapped, routing to activity tab:', tab);
+      router.push({ pathname: '/activity', params: { tab } });
+    };
+
+    // Terminated app: check if launched via notification tap
+    Notifications.getLastNotificationResponseAsync().then(response => {
+      const data = response?.notification?.request?.content?.data;
+      if (data) handleNotificationData(data);
+    });
+
+    // Backgrounded app: listen for future taps
+    const sub = Notifications.addNotificationResponseReceivedListener(response => {
+      handleNotificationData(response.notification.request.content.data || {});
+    });
+
+    return () => sub.remove();
+  }, []);
+
   useEffect(() => {
     // LOADING GATE: Do not run redirect logic while auth state is loading
     if (!isReady || isCheckingAuth) {

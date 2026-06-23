@@ -6144,7 +6144,7 @@ async function alertAlreadyFired(orgId, convId, idKey, idValue, today) {
 // structure mirrors the proven inline version exactly.
 const PUSH_ACTIONABLE_TYPES = new Set(['delivery_due', 'reminder_due', 'overdue_invoice']);
 
-async function sendOwnerNotification(orgId, pushTitle, pushBody) {
+async function sendOwnerNotification(orgId, pushTitle, pushBody, data = {}) {
   try {
     const { data: owner } = await supabase.from('users').select('push_token')
       .eq('organisation_id', orgId).eq('role', 'owner').eq('is_active', true)
@@ -6158,6 +6158,7 @@ async function sendOwnerNotification(orgId, pushTitle, pushBody) {
         to: owner.push_token,
         title: pushTitle,
         body: pushBody,
+        data,
         sound: 'default',
         channelId: 'messages_v2',
       }),
@@ -6193,8 +6194,12 @@ async function insertAlert(orgId, convId, content, meta) {
       pushTitle = 'Overdue Invoice';
       pushBody = content.replace(/^⚠️\s*/, '').slice(0, 120);
     }
-    sendOwnerNotification(orgId, pushTitle, pushBody)
-      .catch(err => console.error('[PUSH] fire-and-forget failed:', err.message));
+    sendOwnerNotification(orgId, pushTitle, pushBody, {
+        alert_type: meta.alert_type,
+        task_id: meta.task_id || null,
+        customer_id: meta.customer_id || null,
+        route_hint: meta.alert_type === 'reminder_due' ? 'mytasks' : 'watchlist',
+      }).catch(err => console.error('[PUSH] fire-and-forget failed:', err.message));
   }
 
   return result;
