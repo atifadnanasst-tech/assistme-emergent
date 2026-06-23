@@ -42,6 +42,18 @@ export default function ActivityScreen() {
     }, [tab])
   );
 
+  // Local status update for complete/uncomplete -- updates the item in-place
+  // without a full list reload, so the owner sees the strikethrough and can
+  // change their mind before navigating away. A full loadData() still runs
+  // on focus (useFocusEffect) so the list is always correct after navigation.
+  const handleStatusChange = (taskId: string, newStatus: string) => {
+    setItems(prev => prev.map(item =>
+      (item.id === taskId || item.task_id === taskId)
+        ? { ...item, status: newStatus }
+        : item
+    ));
+  };
+
   const loadData = async () => {
     try {
       const token = await getToken();
@@ -67,7 +79,7 @@ export default function ActivityScreen() {
   };
 
   const renderItem = ({ item }: { item: any }) => (
-    <SharedActivityCard item={item} source={tab} onRefresh={loadData} onTapCard={handleTapCard} />
+    <SharedActivityCard item={item} source={tab} onRefresh={loadData} onStatusChange={handleStatusChange} onTapCard={handleTapCard} />
   );
 
   return (

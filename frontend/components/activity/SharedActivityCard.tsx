@@ -27,6 +27,7 @@ interface SharedActivityCardProps {
   item: ActivityCardItem;
   source: 'watchlist' | 'mytasks';
   onRefresh: () => void;
+  onStatusChange?: (taskId: string, newStatus: string) => void;
   onTapCard?: (item: ActivityCardItem) => void;
   onLongPress?: (item: ActivityCardItem) => void;
   onAssign?: (item: ActivityCardItem) => void;
@@ -63,7 +64,7 @@ const SNOOZE_OPTIONS = [
   { label: 'Next week', days: 7 },
 ];
 
-export default function SharedActivityCard({ item, source, onRefresh, onTapCard, onLongPress, onAssign, onAddNotes }: SharedActivityCardProps) {
+export default function SharedActivityCard({ item, source, onRefresh, onStatusChange, onTapCard, onLongPress, onAssign, onAddNotes }: SharedActivityCardProps) {
   const router = useRouter();
   const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
   const [menuVisible, setMenuVisible] = useState(false);
@@ -84,7 +85,7 @@ export default function SharedActivityCard({ item, source, onRefresh, onTapCard,
   const hasCustomer = !!item.customer_id;
   const hasMenuItems = !!(taskId) || !!onAssign || !!onAddNotes;
 
-  const patchTask = async (body: Record<string, any>) => {
+  const patchTask = async (body: Record<string, any>, localStatusUpdate?: string) => {
     if (!taskId) return;
     setBusy(true);
     try {
@@ -94,7 +95,11 @@ export default function SharedActivityCard({ item, source, onRefresh, onTapCard,
         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
-      onRefresh();
+      if (localStatusUpdate && onStatusChange && taskId) {
+        onStatusChange(taskId, localStatusUpdate);
+      } else {
+        onRefresh();
+      }
     } catch {
       Alert.alert('Error', 'Something went wrong. Please try again.');
     } finally {
@@ -102,7 +107,10 @@ export default function SharedActivityCard({ item, source, onRefresh, onTapCard,
     }
   };
 
-  const handleToggleComplete = () => patchTask({ status: isCompleted ? 'pending' : 'completed' });
+  const handleToggleComplete = () => {
+    const newStatus = isCompleted ? 'pending' : 'completed';
+    patchTask({ status: newStatus }, newStatus);
+  };
 
   const handleSnoozePick = (days: number) => {
     setSnoozeVisible(false);
