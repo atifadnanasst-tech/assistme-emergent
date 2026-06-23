@@ -12,7 +12,7 @@ import {
   Pressable,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useRouter, useNavigation } from 'expo-router';
+import { useRouter, useNavigation, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
@@ -88,6 +88,11 @@ export default function HomeScreen() {
   // (if loading && !homeData) -- a useState after that return causes
   // "Rendered more hooks than during previous render" crash.
   const [insightExpanded, setInsightExpanded] = useState(false);
+  // Collapse on blur (leaving Home) and on scroll -- three ways to close:
+  // tap strip again, tap bullet, leave screen, or scroll away.
+  useFocusEffect(useCallback(() => {
+    return () => setInsightExpanded(false);
+  }, []));
 
   const channelRef = useRef<any>(null);
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
@@ -504,7 +509,7 @@ export default function HomeScreen() {
             text otherwise. insightExpanded state is in the hook block
             above the early return to avoid hooks-order crash. */}
         {insightCards.length > 0 ? (
-          <View style={styles.insightStrip}>
+          <TouchableOpacity style={styles.insightStrip} onPress={() => setInsightExpanded(!insightExpanded)} activeOpacity={0.8}>
             <Ionicons name="bulb" size={20} color="#8B6914" />
             <Text style={styles.insightText}>
               {insightCards[0]?.type === 'collections'
@@ -514,10 +519,8 @@ export default function HomeScreen() {
                 : `✅ Follow-ups pending today`}
               {insightCards.length > 1 ? ` +${insightCards.length - 1} more` : ''}
             </Text>
-            <TouchableOpacity onPress={() => setInsightExpanded(!insightExpanded)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-              <Ionicons name={insightExpanded ? 'chevron-up' : 'chevron-down'} size={18} color="#8B6914" />
-            </TouchableOpacity>
-          </View>
+            <Ionicons name={insightExpanded ? 'chevron-up' : 'chevron-down'} size={18} color="#8B6914" />
+          </TouchableOpacity>
         ) : insightStrip && insightStrip.content ? (
           <TouchableOpacity
             style={styles.insightStrip}
@@ -556,6 +559,7 @@ export default function HomeScreen() {
         data={conversations}
         renderItem={renderConversationItem}
         keyExtractor={(item) => item.customer_id}
+        onScrollBeginDrag={() => setInsightExpanded(false)}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -615,7 +619,7 @@ export default function HomeScreen() {
         <Ionicons name={fabExpanded ? 'close' : 'add'} size={28} color="#FFFFFF" />
       </TouchableOpacity>
 
-      <Text style={{ textAlign: "center", fontSize: 10, color: "#CCC", paddingVertical: 2 }}>v1.3.343</Text>
+      <Text style={{ textAlign: "center", fontSize: 10, color: "#CCC", paddingVertical: 2 }}>v1.3.345</Text>
       {/* Bottom Navigation SafeAreaView */}
       <SafeAreaView style={styles.bottomNavSafeArea} edges={['bottom']}>
         <View style={styles.bottomNav}>
