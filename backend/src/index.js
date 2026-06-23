@@ -6537,8 +6537,9 @@ app.get('/api/activity', async (c) => {
       // view yet -- verified via grep across the whole repo), so this is
       // a clean replacement, not a migration.
       const view = c.req.query('view') === 'archived' ? 'archived'
-        : c.req.query('view') === 'snoozed' ? 'snoozed' : 'active';
-      let taskQuery = supabase.from('tasks').select('id, title, description, status, priority, due_date, entity_type, entity_id, custom_fields, snoozed_until, archived_at, created_at')
+        : c.req.query('view') === 'snoozed' ? 'snoozed'
+        : c.req.query('view') === 'completed' ? 'completed' : 'active';
+      let taskQuery = supabase.from('tasks').select('id, title, description, status, priority, due_date, entity_type, entity_id, custom_fields, snoozed_until, archived_at, created_at, updated_at, completed_at')
         .eq('organisation_id', organisationId).is('deleted_at', null)
         .or(`created_by.eq.${userId},assigned_to.eq.${userId}`);
       // Archive/snooze filtering stays in SQL using only .is()/.gte() --
@@ -6569,14 +6570,25 @@ app.get('/api/activity', async (c) => {
       const nowMs = Date.now();
       let visibleTasks;
       if (view === 'archived') {
+        // Archived supersedes all other states -- archived tasks appear here
+        // regardless of status (a completed+archived task lives here, not
+        // in Completed view).
         visibleTasks = rawTasks;
       } else if (view === 'snoozed') {
-        // Only genuinely still-snoozed items -- once snoozed_until passes,
-        // the item already reappears in the active view on its own, and
-        // shouldn't also linger here as if still hidden.
-        visibleTasks = (rawTasks || []).filter(t => t.snoozed_until && new Date(t.snoozed_until).getTime() > nowMs);
+        visibleTasks = (rawTasks || []).filter(t =>
+          !t.archived_at && t.snoozed_until && new Date(t.snoozed_until).getTime() > nowMs);
+      } else if (view === 'completed') {
+        // Completed view: status=completed, not archived. Ordered by
+        // completed_at DESC (most recently completed first). completed_at
+        // confirmed in schema before writing this query.
+        visibleTasks = (rawTasks || [])
+          .filter(t => !t.archived_at && t.status === 'completed')
+          .sort((a, b) => new Date(b.completed_at || b.updated_at).getTime() - new Date(a.completed_at || a.updated_at).getTime());
       } else {
-        visibleTasks = (rawTasks || []).filter(t => !t.snoozed_until || new Date(t.snoozed_until).getTime() <= nowMs);
+        // Active: not completed, not archived, snooze filter
+        visibleTasks = (rawTasks || []).filter(t =>
+          !t.archived_at && t.status !== 'completed' &&
+          (!t.snoozed_until || new Date(t.snoozed_until).getTime() <= nowMs));
       }
       // Overdue-pinned-to-top (Batch C.6). The SQL query already orders by
       // due_date ascending, so a simple filter+concat partition preserves

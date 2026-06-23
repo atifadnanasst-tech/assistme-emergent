@@ -19,7 +19,8 @@ import SharedActivityCard from '../components/activity/SharedActivityCard';
 export default function ActivityFilteredScreen() {
   const router = useRouter();
   const { view: viewParam } = useLocalSearchParams<{ view?: string }>();
-  const view = viewParam === 'snoozed' ? 'snoozed' : 'archived';
+  const view = viewParam === 'snoozed' ? 'snoozed'
+    : viewParam === 'completed' ? 'completed' : 'archived';
   const { setIsAuthenticated } = useAuth();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -55,15 +56,17 @@ export default function ActivityFilteredScreen() {
         <TouchableOpacity onPress={() => router.back()} style={s.backBtn}>
           <Ionicons name="arrow-back" size={24} color="#FFF" />
         </TouchableOpacity>
-        <Text style={s.headerTitle}>{view === 'archived' ? 'Archived Reminders' : 'Snoozed Reminders'}</Text>
+        <Text style={s.headerTitle}>
+          {view === 'archived' ? 'Archived Reminders' : view === 'snoozed' ? 'Snoozed Reminders' : 'Completed Tasks'}
+        </Text>
       </View>
 
       {loading ? (
         <View style={s.center}><ActivityIndicator size="large" color="#075E54" /></View>
       ) : items.length === 0 ? (
         <View style={s.center}>
-          <Ionicons name={view === 'archived' ? 'archive-outline' : 'time-outline'} size={48} color="#CCC" />
-          <Text style={s.emptyText}>{view === 'archived' ? 'No archived reminders' : 'No snoozed reminders'}</Text>
+          <Ionicons name={view === 'archived' ? 'archive-outline' : view === 'snoozed' ? 'time-outline' : 'checkmark-done-outline'} size={48} color="#CCC" />
+          <Text style={s.emptyText}>{view === 'archived' ? 'No archived reminders' : view === 'snoozed' ? 'No snoozed reminders' : 'No completed tasks yet'}</Text>
         </View>
       ) : (
         <FlatList

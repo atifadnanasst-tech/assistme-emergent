@@ -132,6 +132,11 @@ export default function ActivityScreen() {
               <Ionicons name="time-outline" size={20} color="#075E54" />
               <Text style={s.menuItemText}>Snoozed Reminders</Text>
             </TouchableOpacity>
+            <TouchableOpacity style={s.menuItem}
+              onPress={() => { setHeaderMenuVisible(false); router.push({ pathname: '/activity-filtered', params: { view: 'completed' } }); }}>
+              <Ionicons name="checkmark-done-outline" size={20} color="#075E54" />
+              <Text style={s.menuItemText}>Completed Tasks</Text>
+            </TouchableOpacity>
           </View>
         </Pressable>
       </Modal>
