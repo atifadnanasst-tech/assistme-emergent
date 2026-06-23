@@ -67,6 +67,10 @@ export default function TaskDetailScreen() {
   const [description, setDescription] = useState('');
   const [dueDate, setDueDate] = useState(new Date());
   const [showDatePicker, setShowDatePicker] = useState(false);
+  // dueTime: null means no specific time set (due_at stays null).
+  // When set, combined with dueDate to produce a full due_at timestamp.
+  const [dueTime, setDueTime] = useState<Date | null>(null);
+  const [showTimePicker, setShowTimePicker] = useState(false);
   const [priority, setPriority] = useState('medium');
   const [status, setStatus] = useState('pending');
   const [repeatPattern, setRepeatPattern] = useState<string | null>(null);
@@ -111,6 +115,7 @@ export default function TaskDetailScreen() {
       setTitle(t.title || '');
       setDescription(t.description || '');
       if (t.due_date) setDueDate(new Date(t.due_date + 'T00:00:00'));
+      if (t.due_at) setDueTime(new Date(t.due_at));
       setPriority(t.priority || 'medium');
       setStatus(t.status || 'pending');
       setRepeatPattern(t.repeat_pattern || null);
@@ -220,6 +225,11 @@ export default function TaskDetailScreen() {
         title: title.trim(),
         description: description.trim() || null,
         due_date: dueDate.toISOString().split('T')[0],
+        due_at: dueTime ? (() => {
+          const combined = new Date(dueDate);
+          combined.setHours(dueTime.getHours(), dueTime.getMinutes(), 0, 0);
+          return combined.toISOString();
+        })() : null,
         priority,
         repeat_pattern: repeatPattern,
         customer_id: customer?.id || null,
@@ -300,6 +310,34 @@ export default function TaskDetailScreen() {
             onChange={(event: any, date?: Date) => {
               if (Platform.OS === 'android') setShowDatePicker(false);
               if (date) setDueDate(date);
+            }}
+          />
+        )}
+
+        {/* Optional reminder time -- when set, owner gets a push at this
+            exact time via jobTaskReminders cron. When cleared, due_at=null
+            and the task behaves as a date-only reminder. */}
+        <TouchableOpacity style={s.row} onPress={() => setShowTimePicker(true)}>
+          <Ionicons name="alarm-outline" size={20} color="#667781" style={s.rowIcon} />
+          <Text style={[s.rowValue, !dueTime && { color: '#CCC' }]}>
+            {dueTime
+              ? dueTime.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true })
+              : 'Set reminder time (optional)'}
+          </Text>
+          {dueTime && (
+            <TouchableOpacity onPress={() => setDueTime(null)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <Ionicons name="close-circle" size={18} color="#CCC" />
+            </TouchableOpacity>
+          )}
+        </TouchableOpacity>
+        {showTimePicker && (
+          <DateTimePicker
+            value={dueTime || new Date()}
+            mode="time"
+            display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+            onChange={(event: any, date?: Date) => {
+              if (Platform.OS === 'android') setShowTimePicker(false);
+              if (date) setDueTime(date);
             }}
           />
         )}
