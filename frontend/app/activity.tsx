@@ -16,7 +16,12 @@ export default function ActivityScreen() {
   const { setIsAuthenticated } = useAuth();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [tab, setTab] = useState<'watchlist' | 'mytasks'>('watchlist');
+  // Read tab param from navigation -- insight strip chips pass tab=mytasks
+  // or tab=watchlist to pre-select the right tab on open. Validated
+  // against the two accepted values; defaults to watchlist if absent/invalid.
+  const { tab: tabParam } = useLocalSearchParams<{ tab?: string }>();
+  const initialTab = tabParam === 'mytasks' ? 'mytasks' : 'watchlist';
+  const [tab, setTab] = useState<'watchlist' | 'mytasks'>(initialTab);
   const [items, setItems] = useState<any[]>([]);
   const [headerMenuVisible, setHeaderMenuVisible] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');

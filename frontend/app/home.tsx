@@ -33,6 +33,12 @@ interface InsightStrip {
   content: string;
   items: Array<{ id: string; text: string; completed: boolean }>;
 }
+interface InsightCard {
+  type: 'collections' | 'deliveries' | 'my_tasks';
+  label: string;
+  count: number;
+  tab: 'watchlist' | 'mytasks';
+}
 
 interface Conversation {
   customer_id: string;
@@ -53,6 +59,7 @@ interface Conversation {
 
 interface HomeData {
   insight_strip: InsightStrip | null;
+  insight_cards: InsightCard[];
   filter_tabs: FilterTab[];
   conversations: Conversation[];
   subscription_plan?: string;
@@ -411,6 +418,7 @@ export default function HomeScreen() {
   const conversations = homeData?.conversations || [];
   const filterTabs = homeData?.filter_tabs || [];
   const insightStrip = homeData?.insight_strip;
+  const insightCards = homeData?.insight_cards || [];
 
   return (
     <>
@@ -487,8 +495,37 @@ export default function HomeScreen() {
           </TouchableOpacity>
         </ScrollView>
 
-        {/* Insight Strip */}
-        {insightStrip && insightStrip.content && (
+        {/* Insight Strip -- horizontal chips when live cards exist,
+            falls back to morning-brief text banner otherwise.
+            Chip tap passes tab param to activity.tsx which reads it on
+            mount to pre-select the right tab. */}
+        {insightCards.length > 0 ? (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={styles.chipStrip}
+            contentContainerStyle={styles.chipStripContent}
+          >
+            {insightCards.map(card => (
+              <TouchableOpacity
+                key={card.type}
+                style={[
+                  styles.chip,
+                  card.type === 'collections' && styles.chipCollections,
+                  card.type === 'deliveries' && styles.chipDeliveries,
+                  card.type === 'my_tasks' && styles.chipMyTasks,
+                ]}
+                onPress={() => router.push({ pathname: '/activity', params: { tab: card.tab } })}
+                activeOpacity={0.75}
+              >
+                <Text style={styles.chipIcon}>
+                  {card.type === 'collections' ? '⚠️' : card.type === 'deliveries' ? '🚚' : '✅'}
+                </Text>
+                <Text style={styles.chipLabel}>{card.label}</Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        ) : insightStrip && insightStrip.content ? (
           <TouchableOpacity
             style={styles.insightStrip}
             activeOpacity={0.7}
@@ -500,7 +537,7 @@ export default function HomeScreen() {
             </Text>
             <Text style={styles.insightDetails}>Details ›</Text>
           </TouchableOpacity>
-        )}
+        ) : null}
       </SafeAreaView>
 
       {/* Conversation List */}
@@ -567,7 +604,7 @@ export default function HomeScreen() {
         <Ionicons name={fabExpanded ? 'close' : 'add'} size={28} color="#FFFFFF" />
       </TouchableOpacity>
 
-      <Text style={{ textAlign: "center", fontSize: 10, color: "#CCC", paddingVertical: 2 }}>v1.3.337</Text>
+      <Text style={{ textAlign: "center", fontSize: 10, color: "#CCC", paddingVertical: 2 }}>v1.3.340</Text>
       {/* Bottom Navigation SafeAreaView */}
       <SafeAreaView style={styles.bottomNavSafeArea} edges={['bottom']}>
         <View style={styles.bottomNav}>
@@ -883,6 +920,17 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  chipStrip: { flexGrow: 0 },
+  chipStripContent: { paddingHorizontal: 16, paddingVertical: 10, gap: 8, flexDirection: 'row' },
+  chip: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20, borderWidth: 1,
+  },
+  chipCollections: { backgroundColor: '#FFF3E0', borderColor: '#E65100' },
+  chipDeliveries: { backgroundColor: '#E3F2FD', borderColor: '#1565C0' },
+  chipMyTasks: { backgroundColor: '#E8F5E9', borderColor: '#2E7D32' },
+  chipIcon: { fontSize: 14 },
+  chipLabel: { fontSize: 13, fontWeight: '600', color: '#1A1A1A' },
   insightStrip: {
     flexDirection: 'row',
     alignItems: 'center',
