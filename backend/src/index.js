@@ -690,8 +690,69 @@ app.get('/api/home', async (c) => {
     // Limit results
     const limitedConversations = conversationList.slice(0, limit);
 
+    // ── Patch B: Live Insight Cards ──────────────────────────────
+    // Three chips: Collections (overdue invoice count only -- no amount,
+    // since outstanding_balance covers all balances, not just overdue),
+    // Deliveries (due today), My Tasks (user-created, due today or overdue).
+    // Watchlist chip deliberately excluded from v1 -- it would duplicate
+    // Collections and Deliveries which are already Watchlist-sourced items.
+    // Live counts on every home load -- no LLM, no cron, no ai_context.
+    // insight_strip preserved for the morning-brief narrative.
+    // Entity types verified in production code before writing: 'delivery',
+    // 'reminder', 'task'. Collections uses only invoice count, not
+    // customers.outstanding_balance which includes non-overdue balances.
+    let insightCards = [];
+    try {
+      const today = new Date().toISOString().split('T')[0];
+
+      // 1. Collections: overdue invoice count only
+      const { count: overdueInvCount } = await supabase
+        .from('invoices').select('id', { count: 'exact', head: true })
+        .eq('organisation_id', organisationId).not('status', 'in', '("paid","cancelled")')
+        .lt('due_date', today).is('deleted_at', null);
+      if ((overdueInvCount || 0) > 0) {
+        insightCards.push({
+          type: 'collections',
+          label: `${overdueInvCount} overdue ${overdueInvCount === 1 ? 'invoice' : 'invoices'}`,
+          count: overdueInvCount,
+          tab: 'watchlist',
+        });
+      }
+
+      // 2. Deliveries due today
+      const { count: deliveryCount } = await supabase
+        .from('tasks').select('id', { count: 'exact', head: true })
+        .eq('organisation_id', organisationId).eq('entity_type', 'delivery')
+        .eq('status', 'pending').eq('due_date', today).is('deleted_at', null);
+      if ((deliveryCount || 0) > 0) {
+        insightCards.push({
+          type: 'deliveries',
+          label: `${deliveryCount} ${deliveryCount === 1 ? 'delivery' : 'deliveries'} today`,
+          count: deliveryCount,
+          tab: 'watchlist',
+        });
+      }
+
+      // 3. My Tasks due today or overdue (user-created tasks and reminders)
+      const { count: myTaskCount } = await supabase
+        .from('tasks').select('id', { count: 'exact', head: true })
+        .eq('organisation_id', organisationId).in('entity_type', ['task', 'reminder'])
+        .eq('status', 'pending').lte('due_date', today).is('deleted_at', null);
+      if ((myTaskCount || 0) > 0) {
+        insightCards.push({
+          type: 'my_tasks',
+          label: `${myTaskCount} ${myTaskCount === 1 ? 'task' : 'tasks'} due`,
+          count: myTaskCount,
+          tab: 'mytasks',
+        });
+      }
+    } catch (err) {
+      console.warn('[HOME] Insight cards query failed (non-fatal):', err.message);
+    }
+
     return c.json({
       insight_strip: insightStrip,
+      insight_cards: insightCards,
       filter_tabs: filterTabs,
       conversations: limitedConversations,
       subscription_plan: subscriptionPlan,
