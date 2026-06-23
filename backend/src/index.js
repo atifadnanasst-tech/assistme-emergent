@@ -6062,12 +6062,81 @@ async function alertAlreadyFired(orgId, convId, idKey, idValue, today) {
 }
 
 // ── Alert message insert helper ──────────────────────────────
+// ─── Push Notification Layer (Patch A) ───────────────────────
+// Single path for all owner device push notifications. Called from
+// insertAlert() for actionable alert types only (delivery_due,
+// reminder_due, overdue_invoice). Bank reconciliation and morning
+// briefing stay in-app only -- informational, not requiring immediate
+// action when phone is locked.
+//
+// Owner lookup: role='owner' + is_active=true. Both columns confirmed
+// in schema before writing this query. role='owner' used rather than
+// maybeSingle() on the whole org, since schema already supports
+// multi-user orgs (owner/admin/member/viewer). is_active confirmed
+// on users table (boolean NOT NULL DEFAULT true, line 123 of schema).
+//
+// No daily cap -- deferred to Patch C (Notification Preferences).
+// Real volume observed first before speculating on the right limit.
+// ai_context intentionally NOT used -- it is AI memory, not delivery
+// state. Cross-org chat push is inline code, not a reusable helper;
+// this is the first actual push helper in the codebase. Expo API call
+// structure mirrors the proven inline version exactly.
+const PUSH_ACTIONABLE_TYPES = new Set(['delivery_due', 'reminder_due', 'overdue_invoice']);
+
+async function sendOwnerNotification(orgId, pushTitle, pushBody) {
+  try {
+    const { data: owner } = await supabase.from('users').select('push_token')
+      .eq('organisation_id', orgId).eq('role', 'owner').eq('is_active', true)
+      .maybeSingle();
+    if (!owner?.push_token) return;
+
+    const res = await fetch('https://exp.host/--/api/v2/push/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify({
+        to: owner.push_token,
+        title: pushTitle,
+        body: pushBody,
+        sound: 'default',
+        channelId: 'messages_v2',
+      }),
+    });
+    if (!res.ok) console.warn('[PUSH] Expo API non-ok:', res.status);
+    else console.log(`[PUSH] Sent to org ${orgId.slice(-4)}: "${pushTitle}"`);
+  } catch (err) {
+    console.error('[PUSH] sendOwnerNotification failed (non-fatal):', err.message);
+  }
+}
+
 async function insertAlert(orgId, convId, content, meta) {
-  return supabase.from('messages').insert({
+  const result = await supabase.from('messages').insert({
     organisation_id: orgId, conversation_id: convId, role: 'system', content,
     tokens_input: 0, tokens_output: 0,
     metadata: { sender_type: 'system', visibility: 'owner_only', message_type: 'system_alert', read_by_owner: false, preview_text: content.slice(0, 50), ...meta },
   });
+
+  // Push only after successful DB write -- if insert failed, the alert
+  // doesn't exist in-app, so pushing would send the owner to a missing
+  // card. Actionable types only; dedicated push copy per type rather
+  // than slicing the in-app content string (emoji-heavy, verbose).
+  if (!result.error && meta?.alert_type && PUSH_ACTIONABLE_TYPES.has(meta.alert_type)) {
+    let pushTitle = 'AssistMe';
+    let pushBody = '';
+    if (meta.alert_type === 'delivery_due') {
+      pushTitle = 'Delivery Due Today';
+      pushBody = content.replace(/^🚚\s*/, '').slice(0, 120);
+    } else if (meta.alert_type === 'reminder_due') {
+      pushTitle = 'Reminder Due';
+      pushBody = content.replace(/^⏰\s*/, '').slice(0, 120);
+    } else if (meta.alert_type === 'overdue_invoice') {
+      pushTitle = 'Overdue Invoice';
+      pushBody = content.replace(/^⚠️\s*/, '').slice(0, 120);
+    }
+    sendOwnerNotification(orgId, pushTitle, pushBody)
+      .catch(err => console.error('[PUSH] fire-and-forget failed:', err.message));
+  }
+
+  return result;
 }
 
 // ── Get or create customer conversation ──────────────────────
