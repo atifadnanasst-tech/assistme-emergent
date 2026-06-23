@@ -6539,7 +6539,7 @@ app.get('/api/activity', async (c) => {
       const view = c.req.query('view') === 'archived' ? 'archived'
         : c.req.query('view') === 'snoozed' ? 'snoozed'
         : c.req.query('view') === 'completed' ? 'completed' : 'active';
-      let taskQuery = supabase.from('tasks').select('id, title, description, status, priority, due_date, entity_type, entity_id, custom_fields, snoozed_until, archived_at, created_at, updated_at, completed_at')
+      let taskQuery = supabase.from('tasks').select('id, title, description, status, priority, due_date, due_at, entity_type, entity_id, custom_fields, snoozed_until, archived_at, created_at, updated_at, completed_at')
         .eq('organisation_id', organisationId).is('deleted_at', null)
         .or(`created_by.eq.${userId},assigned_to.eq.${userId}`);
       // Archive/snooze filtering stays in SQL using only .is()/.gte() --
@@ -6664,7 +6664,7 @@ app.get('/api/tasks/:task_id', async (c) => {
     if (!auth) return c.json({ error: 'unauthorized' }, 401);
     const taskId = c.req.param('task_id');
     const { data: task, error } = await supabase.from('tasks')
-      .select('id, title, description, status, priority, due_date, entity_type, entity_id, repeat_pattern, snoozed_until, archived_at')
+      .select('id, title, description, status, priority, due_date, due_at, entity_type, entity_id, repeat_pattern, snoozed_until, archived_at')
       .eq('id', taskId).eq('organisation_id', auth.organisationId).is('deleted_at', null).maybeSingle();
     if (error) {
       console.error('[GET /api/tasks/:task_id] error:', error);
@@ -7013,10 +7013,11 @@ app.post('/api/tasks', async (c) => {
       created_by: userId,
       assigned_to: assignedTo,
       due_date: due,
+      due_at: body.due_at || null,
       entity_type: entityType,
       entity_id: entityId,
       repeat_pattern: repeatPattern,
-    }).select('id, title, description, due_date, status, priority, entity_id, entity_type, assigned_to, repeat_pattern, created_at').single();
+    }).select('id, title, description, due_date, due_at, status, priority, entity_id, entity_type, assigned_to, repeat_pattern, created_at').single();
 
     if (error) {
       console.error('[POST /api/tasks] insert error:', error);
@@ -7083,6 +7084,11 @@ app.patch('/api/tasks/:task_id', async (c) => {
         && new Date(due + 'T00:00:00Z').toISOString().slice(0, 10) === due;
       if (!dueValid) return c.json({ error: 'invalid_due_date' }, 400);
       updateFields.due_date = due;
+    }
+    if ('due_at' in body) {
+      const isValidTimestampOrNull = (v) => v === null || (typeof v === 'string' && !isNaN(Date.parse(v)));
+      if (!isValidTimestampOrNull(body.due_at)) return c.json({ error: 'invalid_due_at' }, 400);
+      updateFields.due_at = body.due_at;
     }
     if ('repeat_pattern' in body) {
       const allowedRepeatPatterns = ['daily', 'weekly', 'monthly'];
