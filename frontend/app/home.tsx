@@ -513,11 +513,11 @@ export default function HomeScreen() {
             <Ionicons name="bulb" size={20} color="#8B6914" />
             <Text style={styles.insightText}>
               {insightCards[0]?.type === 'collections'
-                ? `⚠️ Collections require attention`
+                ? `⚠️ ${insightCards[0].count} collections overdue as of today`
                 : insightCards[0]?.type === 'deliveries'
-                ? `🚚 Deliveries need dispatch today`
-                : `✅ Follow-ups pending today`}
-              {insightCards.length > 1 ? ` +${insightCards.length - 1} more` : ''}
+                ? `🚚 ${insightCards[0].count} deliveries pending dispatch today`
+                : `✅ ${insightCards[0]?.count} follow-ups pending as of today`}
+              {insightCards.length > 1 ? ` · +${insightCards.length - 1} more` : ''}
             </Text>
             <Ionicons name={insightExpanded ? 'chevron-up' : 'chevron-down'} size={18} color="#8B6914" />
           </TouchableOpacity>
@@ -619,7 +619,7 @@ export default function HomeScreen() {
         <Ionicons name={fabExpanded ? 'close' : 'add'} size={28} color="#FFFFFF" />
       </TouchableOpacity>
 
-      <Text style={{ textAlign: "center", fontSize: 10, color: "#CCC", paddingVertical: 2 }}>v1.3.345</Text>
+      <Text style={{ textAlign: "center", fontSize: 10, color: "#CCC", paddingVertical: 2 }}>v1.3.346</Text>
       {/* Bottom Navigation SafeAreaView */}
       <SafeAreaView style={styles.bottomNavSafeArea} edges={['bottom']}>
         <View style={styles.bottomNav}>
