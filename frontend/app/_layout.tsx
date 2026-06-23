@@ -97,7 +97,21 @@ function RootLayoutNav() {
   // Dedup by notification identifier (not a boolean) so future real taps
   // in the same process are still handled correctly.
   useEffect(() => {
-    const captureNotificationRoute = (response: Notifications.NotificationResponse | null) => {
+    // Single routing helper — all notification navigation goes through here.
+    // Identifier dedup is applied before this is called, so double-navigation
+    // is impossible regardless of whether the listener also fires on terminated launch.
+    const navigateToNotificationRoute = (tab: string) => {
+      console.log('[PUSH] Navigating to activity tab:', tab);
+      router.push({ pathname: '/activity', params: { tab } });
+    };
+
+    const resolveTab = (data: any): string =>
+      data?.route_hint === 'mytasks' ? 'mytasks' : 'watchlist';
+
+    const handleResponse = (
+      response: Notifications.NotificationResponse | null,
+      immediate: boolean
+    ) => {
       if (!response) return;
       const id = response.notification.request.identifier;
       if (_lastHandledNotificationId === id) {
@@ -107,17 +121,23 @@ function RootLayoutNav() {
       _lastHandledNotificationId = id;
       const data = response.notification.request.content.data as any;
       if (!data) return;
-      const tab = data.route_hint === 'mytasks' ? 'mytasks' : 'watchlist';
-      console.log('[PUSH] Notification captured, pending route to activity tab:', tab);
-      pendingNotificationRouteRef.current = tab;
+      const tab = resolveTab(data);
+      if (immediate) {
+        // Backgrounded app: router is ready, navigate now.
+        console.log('[PUSH] Backgrounded tap — routing immediately to:', tab);
+        navigateToNotificationRoute(tab);
+      } else {
+        // Terminated app: router not yet ready, defer to isReady effect.
+        console.log('[PUSH] Terminated launch — capturing pending route to:', tab);
+        pendingNotificationRouteRef.current = tab;
+      }
     };
 
-    // Terminated app: check if launched via notification tap.
-    // Identifier dedup prevents stale response re-processing on remount.
-    Notifications.getLastNotificationResponseAsync().then(captureNotificationRoute);
+    // Terminated app: router not ready yet — defer navigation via ref.
+    Notifications.getLastNotificationResponseAsync().then(r => handleResponse(r, false));
 
-    // Backgrounded app: listen for future taps.
-    const sub = Notifications.addNotificationResponseReceivedListener(captureNotificationRoute);
+    // Backgrounded app: router is ready — navigate immediately.
+    const sub = Notifications.addNotificationResponseReceivedListener(r => handleResponse(r, true));
 
     return () => sub.remove();
   }, []);
