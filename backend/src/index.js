@@ -7065,6 +7065,10 @@ app.post('/api/tasks', async (c) => {
 //   - No memory persistence — report generation only
 //   - Session 4B adds: POST /api/memory/import-whatsapp/confirm
 //
+// UPLOAD TRANSPORT: multipart/form-data (not base64 JSON)
+//   Reason: matches ProductImportSheet primitive, avoids base64 expansion,
+//   aligns with all other AssistMe file ingestion paths.
+//
 // OWNER NAME RESOLUTION:
 //   1. owner_display_names[] from request body (required if not in users.full_name)
 //   2. users.full_name for logged-in user (automatic)
@@ -7084,23 +7088,36 @@ app.post('/api/memory/import-whatsapp', async (c) => {
     if (!auth) return c.json({ error: 'unauthorized' }, 401);
     const { userId, organisationId } = auth;
 
-    const body = await c.req.json().catch(() => null);
-    if (!body || !body.customer_id || !body.file_base64) {
-      return c.json({ error: 'customer_id and file_base64 are required' }, 400);
+    const formData = await c.req.formData().catch(() => null);
+    if (!formData) return c.json({ error: 'invalid_form_data' }, 400);
+    const customerId = formData.get('customer_id');
+    const file = formData.get('file');
+    const ownerNamesRaw = formData.get('owner_display_names');
+    if (!customerId || typeof customerId !== 'string') {
+      return c.json({ error: 'customer_id is required' }, 400);
+    }
+    if (!file || typeof file === 'string' || typeof file.arrayBuffer !== 'function') {
+      return c.json({ error: 'invalid_file_upload', message: 'A valid file must be provided' }, 400);
     }
 
     // Validate customer belongs to this org
     const { data: customer } = await supabase
       .from('customers').select('id, name')
-      .eq('id', body.customer_id).eq('organisation_id', organisationId)
+      .eq('id', customerId).eq('organisation_id', organisationId)
       .maybeSingle();
     if (!customer) return c.json({ error: 'customer_not_found' }, 404);
 
     // Resolve owner display names
     // Order: request body > users.full_name > error (no inference from export)
     let ownerDisplayNames = [];
-    if (Array.isArray(body.owner_display_names) && body.owner_display_names.length > 0) {
-      ownerDisplayNames = body.owner_display_names;
+    let parsedOwnerNames = [];
+    try {
+      parsedOwnerNames = ownerNamesRaw ? JSON.parse(ownerNamesRaw) : [];
+    } catch {
+      return c.json({ error: 'invalid_owner_display_names', message: 'owner_display_names must be a JSON array string' }, 400);
+    }
+    if (Array.isArray(parsedOwnerNames) && parsedOwnerNames.length > 0) {
+      ownerDisplayNames = parsedOwnerNames;
     } else {
       const { data: user } = await supabase
         .from('users').select('full_name')
@@ -7115,8 +7132,8 @@ app.post('/api/memory/import-whatsapp', async (c) => {
       }, 400);
     }
 
-    // Decode base64 file
-    const fileBuffer = Buffer.from(body.file_base64, 'base64');
+    // Read file bytes from multipart upload (matches ProductImportSheet pattern)
+    const fileBuffer = Buffer.from(await file.arrayBuffer());
 
     // Detect ZIP via full 4-byte local file header signature PK
     const isZip = fileBuffer.length >= 4
