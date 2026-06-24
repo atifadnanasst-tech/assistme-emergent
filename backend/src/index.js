@@ -7057,6 +7057,189 @@ app.post('/api/tasks', async (c) => {
   }
 });
 
+// ─── POST /api/memory/import-whatsapp ────────────────────────
+// Memory Engine — Session 4A (report only, no DB writes)
+//
+// SESSION 4A LIMITATIONS (documented):
+//   - Direct 1:1 WhatsApp conversations only (>2 speakers rejected)
+//   - No memory persistence — report generation only
+//   - Session 4B adds: POST /api/memory/import-whatsapp/confirm
+//
+// OWNER NAME RESOLUTION:
+//   1. owner_display_names[] from request body (required if not in users.full_name)
+//   2. users.full_name for logged-in user (automatic)
+//   3. No automatic inference from export — too unreliable (names rarely match exactly)
+//      Frontend must always send owner_display_names if users.full_name is not set.
+//
+// ZIP DETECTION:
+//   Checks 4-byte local file header signature PK (not just PK).
+//   AdmZip wrapped in try/catch — malformed ZIPs return clear error.
+//   Falls back to TXT if not a valid ZIP.
+//
+// CHUNKING: eligibleTurns split into MAX_TURNS batches, processed sequentially.
+// PAYLOAD:  returns report + raw_candidates (no DB writes — Session 4B handles writes)
+app.post('/api/memory/import-whatsapp', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { userId, organisationId } = auth;
+
+    const body = await c.req.json().catch(() => null);
+    if (!body || !body.customer_id || !body.file_base64) {
+      return c.json({ error: 'customer_id and file_base64 are required' }, 400);
+    }
+
+    // Validate customer belongs to this org
+    const { data: customer } = await supabase
+      .from('customers').select('id, name')
+      .eq('id', body.customer_id).eq('organisation_id', organisationId)
+      .maybeSingle();
+    if (!customer) return c.json({ error: 'customer_not_found' }, 404);
+
+    // Resolve owner display names
+    // Order: request body > users.full_name > error (no inference from export)
+    let ownerDisplayNames = [];
+    if (Array.isArray(body.owner_display_names) && body.owner_display_names.length > 0) {
+      ownerDisplayNames = body.owner_display_names;
+    } else {
+      const { data: user } = await supabase
+        .from('users').select('full_name')
+        .eq('id', userId).maybeSingle();
+      if (user?.full_name) ownerDisplayNames = [user.full_name];
+    }
+
+    if (ownerDisplayNames.length === 0) {
+      return c.json({
+        error: 'owner_name_required',
+        message: 'Could not determine your WhatsApp display name. Please provide owner_display_names in the request.',
+      }, 400);
+    }
+
+    // Decode base64 file
+    const fileBuffer = Buffer.from(body.file_base64, 'base64');
+
+    // Detect ZIP via full 4-byte local file header signature PK
+    const isZip = fileBuffer.length >= 4
+      && fileBuffer[0] === 0x50 && fileBuffer[1] === 0x4B
+      && fileBuffer[2] === 0x03 && fileBuffer[3] === 0x04;
+
+    let chatText = '';
+    if (isZip) {
+      try {
+        const AdmZip = (await import('adm-zip')).default;
+        const zip = new AdmZip(fileBuffer);
+        const entries = zip.getEntries();
+        const txtEntry = entries.find(e => e.entryName.endsWith('.txt') && !e.isDirectory);
+        if (!txtEntry) {
+          return c.json({
+            error: 'no_txt_in_zip',
+            message: 'No chat text file found in the ZIP. Please export the chat without media and try again.',
+          }, 400);
+        }
+        chatText = zip.readAsText(txtEntry);
+      } catch (zipErr) {
+        return c.json({
+          error: 'invalid_zip',
+          message: 'The uploaded file could not be read as a ZIP. Please try exporting the chat again.',
+        }, 400);
+      }
+    } else {
+      chatText = fileBuffer.toString('utf8');
+    }
+
+    if (!chatText || chatText.trim().length < 10) {
+      return c.json({ error: 'empty_chat', message: 'The chat file appears to be empty.' }, 400);
+    }
+
+    if (chatText.length > 500000) {
+      console.warn(`[import-whatsapp] Large export: ${chatText.length} chars for org ${organisationId}`);
+    }
+
+    // P1 — parse conversation text
+    const { parseConversationText } = await import('./services/ai/memory/parseConversationText.js');
+    const { turns, stats } = parseConversationText(chatText, 'whatsapp_export', { ownerDisplayNames });
+
+    // Group chat guard — reject if more than 2 unique speakers
+    const uniqueSpeakers = [...new Set(
+      turns.filter(t => t.speaker && t.role !== 'system').map(t => t.speaker)
+    )];
+    if (uniqueSpeakers.length > 2) {
+      return c.json({
+        error: 'group_chat_not_supported',
+        message: 'Group chats are not supported yet. Please export a direct conversation with this customer.',
+      }, 400);
+    }
+
+    // Guard: no eligible turns after filtering
+    const eligibleTurns = turns.filter(t => t.role !== 'system' && !t.deleted);
+    if (eligibleTurns.length === 0) {
+      return c.json({
+        error: 'no_conversation_content',
+        message: 'No conversation messages found in this export.',
+      }, 400);
+    }
+
+    // P2 — extract memory candidates, chunk into MAX_TURNS batches
+    const { extractMemoryCandidates, MAX_TURNS } = await import('./services/ai/memory/extractMemoryCandidates.js');
+    const openai = getOpenAI();
+    const importJobId = crypto.randomUUID();
+
+    const chunks = [];
+    for (let i = 0; i < eligibleTurns.length; i += MAX_TURNS) {
+      chunks.push(eligibleTurns.slice(i, i + MAX_TURNS));
+    }
+
+    const chunkResults = [];
+    for (const chunk of chunks) {
+      const result = await extractMemoryCandidates(chunk, {
+        customerName:        customer.name,
+        ownerName:           ownerDisplayNames[0] || '',
+        existingMemoryFacts: [],
+        source:              'whatsapp_import',
+        importJobId,
+      }, openai);
+      chunkResults.push(result);
+    }
+
+    // Merge chunked results
+    const merged = {
+      customerFacts: {
+        toStore:     chunkResults.flatMap(r => r.customerFacts.toStore),
+        needsReview: chunkResults.flatMap(r => r.customerFacts.needsReview),
+      },
+      ownerPersonaSignals: {
+        toStore:     chunkResults.flatMap(r => r.ownerPersonaSignals.toStore),
+        needsReview: chunkResults.flatMap(r => r.ownerPersonaSignals.needsReview),
+      },
+      interactionProfile: Object.assign({}, ...chunkResults.map(r => r.interactionProfile || {})),
+      ignored:     chunkResults.flatMap(r => r.ignored),
+      counts: {
+        customerToStore:     chunkResults.reduce((a, r) => a + r.counts.customerToStore, 0),
+        customerNeedsReview: chunkResults.reduce((a, r) => a + r.counts.customerNeedsReview, 0),
+        ownerToStore:        chunkResults.reduce((a, r) => a + r.counts.ownerToStore, 0),
+        ownerNeedsReview:    chunkResults.reduce((a, r) => a + r.counts.ownerNeedsReview, 0),
+        ignored:             chunkResults.reduce((a, r) => a + r.counts.ignored, 0),
+        total:               chunkResults.reduce((a, r) => a + r.counts.total, 0),
+      },
+    };
+
+    // P4 — generate Intelligence Report
+    const { generateIntelligenceReport } = await import('./services/ai/memory/generateIntelligenceReport.js');
+    const report = generateIntelligenceReport(merged, stats, customer.name);
+
+    return c.json({
+      success:        true,
+      import_job_id:  importJobId,
+      report,
+      raw_candidates: merged,
+    });
+
+  } catch (error) {
+    console.error('[POST /api/memory/import-whatsapp] Error:', error);
+    return c.json({ error: 'internal_error' }, 500);
+  }
+});
+
 // ─── PATCH /api/tasks/:task_id ───────────────────────────────
 app.patch('/api/tasks/:task_id', async (c) => {
   try {
