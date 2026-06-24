@@ -37,7 +37,7 @@
  *   temporary_signal   → 30 days
  */
 
-import { getOpenAI } from '../../ai-routes.js';
+import { getOpenAI } from '../../../ai-routes.js';
 
 export const CLASS_EXPIRY_DAYS = {
   historical_fact:    null,
