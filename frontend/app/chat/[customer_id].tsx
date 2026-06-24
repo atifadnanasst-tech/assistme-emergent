@@ -1870,6 +1870,65 @@ export default function CustomerChatScreen() {
     );
   };
 
+  // ── WhatsApp Import handler ───────────────────────────────
+  // Owner display name is resolved server-side from users.full_name via JWT.
+  // Frontend does not send owner_display_names — backend handles resolution.
+  // Report stored in AsyncStorage as transient cache (delete-on-read in intelligence.tsx).
+  const handleWhatsAppImport = async () => {
+    setMenuVisible(false);
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: ['application/zip', 'text/plain', '*/*'],
+        copyToCacheDirectory: true,
+      });
+      if (result.canceled || !result.assets?.[0]) return;
+
+      const asset = result.assets[0];
+      const token = await authService.getAccessToken();
+      if (!token) { Alert.alert('Session expired', 'Please log in again.'); return; }
+
+      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+
+      const formData = new FormData();
+      formData.append('customer_id', customer_id as string);
+      formData.append('file', {
+        uri: asset.uri,
+        name: asset.name || 'chat.txt',
+        type: asset.mimeType || 'text/plain',
+      } as any);
+
+      Alert.alert('Importing', 'Analysing your WhatsApp history. This may take up to 30 seconds.');
+
+      const res = await fetch(`${backendUrl}/api/memory/import-whatsapp`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` },
+        body: formData,
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        Alert.alert('Import Failed', data.message || 'Please try again.');
+        return;
+      }
+
+      // Store report as transient cache — intelligence.tsx deletes after read
+      await AsyncStorage.setItem(
+        `import_report_${customer_id}`,
+        JSON.stringify({
+          report: data.report,
+          importJobId: data.import_job_id,
+          rawCandidates: data.raw_candidates,
+          cachedAt: Date.now(),
+        })
+      );
+
+      router.push(`/customer/${customer_id}/intelligence`);
+    } catch (err: any) {
+      console.error('[WhatsApp Import]', err);
+      Alert.alert('Error', 'Something went wrong. Please try again.');
+    }
+  };
+
   // ── 3-dot menu ─────────────────────────────────────────────
   const menuItems = [
     { icon: 'person-outline', label: 'View contact', action: () => { setMenuVisible(false); router.push(`/customer/${customer_id}/report`); } },
@@ -1881,6 +1940,9 @@ export default function CustomerChatScreen() {
     { icon: 'receipt-outline', label: 'Create invoice', action: () => { setMenuVisible(false); router.push(`/customer/${customer_id}/invoice`); } },
     { icon: 'alarm-outline', label: 'Set payment reminder', action: () => { setMenuVisible(false); } },
     { icon: 'cash-outline', label: 'Record payment', action: () => { setMenuVisible(false); } },
+    { divider: true },
+    { icon: 'sparkles-outline', label: 'Customer Intelligence', action: () => { setMenuVisible(false); router.push(`/customer/${customer_id}/intelligence`); } },
+    { icon: 'logo-whatsapp', label: 'Import WhatsApp History', action: handleWhatsAppImport },
     { divider: true },
     { icon: 'settings-outline', label: 'Set reminder rules', action: () => { setMenuVisible(false); } },
     { icon: 'language-outline', label: 'Set language', action: () => { setMenuVisible(false); } },
