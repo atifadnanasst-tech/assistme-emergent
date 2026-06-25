@@ -214,6 +214,8 @@ export default function CustomerIntelligenceScreen() {
   const [importJobId, setImportJobId] = useState<string | null>(null);
   const [facts, setFacts]           = useState<ScreenFact[]>([]);
   const [totalOriginal, setTotalOriginal] = useState(0);
+  const [dbFacts, setDbFacts]           = useState<RawFact[]>([]);
+  const [dbProfile, setDbProfile]       = useState<Record<string, any> | null>(null);
 
   useEffect(() => { loadIntelligence(); }, [id]);
 
@@ -242,6 +244,25 @@ export default function CustomerIntelligenceScreen() {
         ];
         setFacts(allFacts);
         setTotalOriginal(allFacts.length);
+      }
+      // Fetch persisted memory from backend (always, regardless of import)
+      try {
+        const token = await authService.getAccessToken();
+        if (token) {
+          const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+          const res = await fetch(`${backendUrl}/api/customer/${id}/intelligence`, {
+            headers: { 'Authorization': `Bearer ${token}` },
+          });
+          if (res.ok) {
+            const data = await res.json();
+            if (data.success) {
+              setDbFacts(data.intelligence?.memoryFacts || []);
+              setDbProfile(data.intelligence?.interactionProfile || null);
+            }
+          }
+        }
+      } catch (dbErr) {
+        console.error('[CustomerIntelligence] db fetch error:', dbErr);
       }
     } catch (err) {
       console.error('[CustomerIntelligence] load error:', err);
@@ -335,6 +356,7 @@ export default function CustomerIntelligenceScreen() {
   const hasFacts    = facts.some(f => !f._deleted);
   const totalVisible = facts.filter(f => !f._deleted).length;
   const hasReport   = !!summary;
+  const hasDbFacts  = dbFacts.length > 0 || !!dbProfile;
 
   if (loading) {
     return (
@@ -413,8 +435,40 @@ export default function CustomerIntelligenceScreen() {
             />
           ))}
 
+          {/* Persisted memory facts from DB — read only */}
+          {hasDbFacts && (
+            <View style={s.section}>
+              <View style={s.sectionHeader}>
+                <Ionicons name="sparkles-outline" size={15} color="#075E54" />
+                <Text style={s.sectionTitle}>Saved Memory</Text>
+                <Text style={s.sectionCount}>{dbFacts.length}</Text>
+              </View>
+              {dbFacts.map((fact, i) => (
+                <View key={i} style={s.factCard}>
+                  <View style={s.factRow}>
+                    <View style={[s.dot, { backgroundColor: fact.confidence >= 0.85 ? '#25D366' : fact.confidence >= 0.70 ? '#FFA500' : '#999' }]} />
+                    <Text style={s.factKey} numberOfLines={1}>{fact.key.replace(/_/g, ' ')}</Text>
+                    <Text style={s.factClass}>{CLASS_LABELS[fact.class] || fact.class}</Text>
+                  </View>
+                  <Text style={s.factValue}>{fact.value}</Text>
+                </View>
+              ))}
+              {dbProfile && Object.keys(dbProfile).filter(k => dbProfile[k]).length > 0 && (
+                <View style={{ marginTop: 10 }}>
+                  <Text style={[s.factKey, { marginBottom: 6, textTransform: 'none' }]}>Interaction Style</Text>
+                  {Object.entries(dbProfile).filter(([, v]) => v).map(([k, v]) => (
+                    <View key={k} style={[s.factCard, { marginBottom: 6 }]}>
+                      <Text style={s.factKey}>{k.replace(/_/g, ' ')}</Text>
+                      <Text style={s.factValue}>{String(v)}</Text>
+                    </View>
+                  ))}
+                </View>
+              )}
+            </View>
+          )}
+
           {/* Empty state */}
-          {!hasReport && (
+          {!hasReport && !hasDbFacts && (
             <View style={s.emptyState}>
               <Ionicons name="sparkles-outline" size={48} color="#CCC" />
               <Text style={s.emptyTitle}>No intelligence yet</Text>

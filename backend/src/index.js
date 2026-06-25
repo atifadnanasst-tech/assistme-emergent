@@ -4924,6 +4924,85 @@ app.get('/api/customer/:customer_id/history', async (c) => {
 });
 
 
+// ─── GET /api/customer/:customer_id/intelligence ─────────────
+// Memory Engine — Session 5 read path
+//
+// Permanent Customer Intelligence API — not a thin entity_memory wrapper.
+// Response shape is domain-oriented and stable. Add new intelligence
+// categories under intelligence{} without changing top-level contract.
+//
+// FILTERS:
+//   deleted_at IS NULL                        — excludes tombstoned facts
+//   expires_at IS NULL OR expires_at > now()  — excludes expired facts
+//   entity_type = 'customer'                  — customer facts only
+//
+// ORDERING: updated_at DESC — recently refined facts surface first
+//
+// FUTURE additions under intelligence{}:
+//   relationshipInsights  — when distillation summaries land (Session 6)
+//   conversationSignals   — live distillation output
+//   ownerDeclared         — owner-typed facts from chat (Session 5)
+app.get('/api/customer/:customer_id/intelligence', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+
+    const customerId = c.req.param('customer_id');
+
+    // Validate customer belongs to org
+    const { data: customer } = await supabase
+      .from('customers').select('id, name, custom_fields')
+      .eq('id', customerId).eq('organisation_id', organisationId)
+      .maybeSingle();
+    if (!customer) return c.json({ error: 'customer_not_found' }, 404);
+
+    // Read active, non-expired customer memory facts
+    const now = new Date().toISOString();
+    const { data: memoryRows, error: memoryError } = await supabase
+      .from('entity_memory')
+      .select('memory_key, memory_value, source, confidence, memory_class')
+      .eq('organisation_id', organisationId)
+      .eq('entity_type', 'customer')
+      .eq('entity_id', customerId)
+      .is('deleted_at', null)
+      .or(`expires_at.is.null,expires_at.gt.${now}`)
+      .order('updated_at', { ascending: false });
+
+    if (memoryError) {
+      console.error('[intelligence] entity_memory read error:', memoryError.message);
+    }
+
+    const memoryFacts = (memoryRows || []).map(row => ({
+      key:        row.memory_key,
+      value:      row.memory_value,
+      source:     row.source,
+      confidence: Number(row.confidence),
+      class:      row.memory_class,
+    }));
+
+    const interactionProfile = customer.custom_fields?.interaction_profile || null;
+
+    return c.json({
+      success: true,
+      customer: {
+        id:   customer.id,
+        name: customer.name,
+      },
+      intelligence: {
+        memoryFacts,
+        interactionProfile,
+      },
+      hasData: memoryFacts.length > 0 || !!interactionProfile,
+    });
+
+  } catch (error) {
+    console.error('GET /api/customer/intelligence error:', error);
+    return c.json({ error: 'server_error' }, 500);
+  }
+});
+
+
 // ══════════════════════════════════════════════════════════════
 // FLOW 4 — INVOICE CREATION ROUTES
 // ══════════════════════════════════════════════════════════════
