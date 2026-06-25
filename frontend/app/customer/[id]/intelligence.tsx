@@ -453,17 +453,37 @@ export default function CustomerIntelligenceScreen() {
                   <Text style={s.factValue}>{fact.value}</Text>
                 </View>
               ))}
-              {dbProfile && Object.keys(dbProfile).filter(k => dbProfile[k]).length > 0 && (
-                <View style={{ marginTop: 10 }}>
-                  <Text style={[s.factKey, { marginBottom: 6, textTransform: 'none' }]}>Interaction Style</Text>
-                  {Object.entries(dbProfile).filter(([, v]) => v).map(([k, v]) => (
-                    <View key={k} style={[s.factCard, { marginBottom: 6 }]}>
-                      <Text style={s.factKey}>{k.replace(/_/g, ' ')}</Text>
-                      <Text style={s.factValue}>{String(v)}</Text>
-                    </View>
-                  ))}
-                </View>
-              )}
+              {dbProfile && (() => {
+                // Technical fields never shown to owner
+                const HIDDEN = new Set(['source','importJobId','lastDistilledAt','import_job_id','last_distilled_at']);
+                // Human-readable labels and insight sentences
+                const PROFILE_META: Record<string, { label: string; insight: (v: string) => string }> = {
+                  greeting_used:            { label: 'Greeting',         insight: v => `You typically open with "${v}"` },
+                  language_mix:             { label: 'Language',         insight: v => v === 'mixed' ? 'You mix languages naturally in this relationship' : `You communicate in ${v}` },
+                  followup_style:           { label: 'Follow-up Style',  insight: v => `Your follow-up approach is ${v}` },
+                  message_length_style:     { label: 'Message Style',    insight: v => `You tend to keep messages ${v}` },
+                  voice_note_preference:    { label: 'Voice Notes',      insight: v => v === 'none' ? "You don't use voice notes with this customer" : `Voice notes: ${v}` },
+                  owner_tone_with_customer: { label: 'Tone',             insight: v => `Your tone with this customer is ${v}` },
+                  emoji_usage:              { label: 'Emoji Usage',      insight: v => v === 'none' ? "You don't use emojis in this relationship" : `Emoji usage: ${v}` },
+                };
+                const entries = Object.entries(dbProfile)
+                  .filter(([k, v]) => !HIDDEN.has(k) && v && v !== 'none' && v !== 'unknown');
+                if (entries.length === 0) return null;
+                return (
+                  <View style={{ marginTop: 12 }}>
+                    <Text style={s.profileSectionLabel}>Your Communication Style</Text>
+                    {entries.map(([k, v]) => {
+                      const meta = PROFILE_META[k];
+                      return (
+                        <View key={k} style={s.insightRow}>
+                          <Text style={s.insightLabel}>{meta?.label || k.replace(/_/g, ' ')}</Text>
+                          <Text style={s.insightValue}>{meta?.insight(String(v)) || String(v)}</Text>
+                        </View>
+                      );
+                    })}
+                  </View>
+                );
+              })()}
             </View>
           )}
 
@@ -551,6 +571,10 @@ const s = StyleSheet.create({
   emptyTitle:  { fontSize: 18, fontWeight: '700', color: '#999', marginTop: 16, marginBottom: 8 },
   emptyBody:   { fontSize: 14, color: '#BBB', textAlign: 'center', lineHeight: 20 },
 
+  profileSectionLabel: { fontSize: 12, fontWeight: '700', color: '#888', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 10 },
+  insightRow:          { marginBottom: 10, paddingLeft: 4 },
+  insightLabel:        { fontSize: 11, fontWeight: '600', color: '#AAA', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 2 },
+  insightValue:        { fontSize: 14, color: '#1A1A1A', lineHeight: 20 },
   bottomBarSafe:  { backgroundColor: '#FFF' },
   bottomBar:      { flexDirection: 'row', backgroundColor: '#FFF', paddingVertical: 10, paddingHorizontal: 16, gap: 10, borderTopWidth: 1, borderTopColor: '#F0F0F0' },
   closeBtn:       { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 12, borderRadius: 10, backgroundColor: '#F0F0F0' },
