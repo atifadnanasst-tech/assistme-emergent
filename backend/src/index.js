@@ -7257,6 +7257,98 @@ app.post('/api/memory/import-whatsapp', async (c) => {
   }
 });
 
+// ─── POST /api/memory/import-whatsapp/confirm ─────────────────
+// Memory Engine — Session 4B (owner-approved persistence)
+//
+// CONTRACT:
+//   { customer_id, import_job_id, candidates }
+//   candidates = raw extractMemoryCandidates() output shape:
+//     { customerFacts, ownerPersonaSignals, interactionProfile, ... }
+//   Frontend sends rawCandidates from AsyncStorage directly — no reshaping.
+//   Screen-edited fact values are merged into candidates before POST.
+//
+// TRUST MODEL:
+//   review_status = 'owner_approved' — owner explicitly reviewed and confirmed.
+//   source = 'whatsapp_import' — provenance unchanged by review.
+//
+// FAILURE SEMANTICS (non-transactional by design):
+//   P3A (writeEntityMemory) and P3B (writeInteractionProfile) are independent.
+//   P3B failure does not roll back P3A. Response reports each separately.
+//   Rationale: entity_memory and interaction_profile are independent concerns.
+//   A failed interaction_profile write does not corrupt memory facts.
+//
+// BACKLOG (non-blocking):
+//   1. Future: derive customer_id from import_job_id once import jobs are persisted.
+//   2. Future: flag edited_by_owner:true in metadata when owner rewrites a fact value.
+app.post('/api/memory/import-whatsapp/confirm', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+
+    const body = await c.req.json().catch(() => null);
+    if (!body) return c.json({ error: 'invalid_json' }, 400);
+
+    const { customer_id, import_job_id, candidates } = body;
+
+    if (!customer_id || typeof customer_id !== 'string') {
+      return c.json({ error: 'customer_id is required' }, 400);
+    }
+    if (!candidates || typeof candidates !== 'object') {
+      return c.json({ error: 'candidates is required' }, 400);
+    }
+
+    // Validate customer belongs to org
+    const { data: customer } = await supabase
+      .from('customers').select('id, name')
+      .eq('id', customer_id).eq('organisation_id', organisationId)
+      .maybeSingle();
+    if (!customer) return c.json({ error: 'customer_not_found' }, 404);
+
+    // P3A — write entity_memory facts
+    const { writeEntityMemory } = await import('./services/ai/memory/writeEntityMemory.js');
+    const memoryResult = await writeEntityMemory(
+      organisationId, customer_id, candidates, supabase,
+      {
+        importJobId:        import_job_id || null,
+        reviewStatus:       'owner_approved',
+        includeNeedsReview: true,
+        explicitRestore:    false,
+      }
+    );
+
+    // P3B — write interaction_profile (independent, non-blocking)
+    let profileWritten = 0;
+    let profileError = null;
+    if (candidates.interactionProfile && Object.keys(candidates.interactionProfile).length > 0) {
+      try {
+        const { writeInteractionProfile } = await import('./services/ai/memory/writeInteractionProfile.js');
+        const profileResult = await writeInteractionProfile(
+          organisationId, customer_id, candidates.interactionProfile, supabase
+        );
+        profileWritten = profileResult.written || 0;
+      } catch (profileErr) {
+        profileError = profileErr.message;
+        console.error('[confirm] P3B writeInteractionProfile failed (non-fatal):', profileErr.message);
+      }
+    }
+
+    console.log(`[confirm] customer=${customer_id} memory_written=${memoryResult.written} skipped=${memoryResult.skipped} profile_written=${profileWritten}`);
+
+    return c.json({
+      success: true,
+      memory_written:  memoryResult.written,
+      memory_skipped:  memoryResult.skipped,
+      profile_written: profileWritten,
+      profile_error:   profileError,
+    });
+
+  } catch (error) {
+    console.error('[POST /api/memory/import-whatsapp/confirm] Error:', error);
+    return c.json({ error: 'internal_error' }, 500);
+  }
+});
+
 // ─── PATCH /api/tasks/:task_id ───────────────────────────────
 app.patch('/api/tasks/:task_id', async (c) => {
   try {
