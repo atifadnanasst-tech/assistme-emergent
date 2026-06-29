@@ -216,6 +216,7 @@ export default function CustomerIntelligenceScreen() {
   const [totalOriginal, setTotalOriginal] = useState(0);
   const [dbFacts, setDbFacts]           = useState<RawFact[]>([]);
   const [dbProfile, setDbProfile]       = useState<Record<string, any> | null>(null);
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null);
 
   useEffect(() => { loadIntelligence(); }, [id]);
 
@@ -258,6 +259,7 @@ export default function CustomerIntelligenceScreen() {
             if (data.success) {
               setDbFacts(data.intelligence?.memoryFacts || []);
               setDbProfile(data.intelligence?.interactionProfile || null);
+              setLastUpdatedAt(data.intelligence?.lastUpdatedAt || null);
             }
           }
         }
@@ -435,67 +437,137 @@ export default function CustomerIntelligenceScreen() {
             />
           ))}
 
-          {/* Persisted memory facts from DB — read only */}
-          {hasDbFacts && (
-            <View style={s.section}>
-              <View style={s.sectionHeader}>
-                <Ionicons name="sparkles-outline" size={15} color="#075E54" />
-                <Text style={s.sectionTitle}>Saved Memory</Text>
-                <Text style={s.sectionCount}>{dbFacts.length}</Text>
-              </View>
-              {dbFacts.map((fact, i) => (
-                <View key={i} style={s.factCard}>
-                  <View style={s.factRow}>
-                    <View style={[s.dot, { backgroundColor: fact.confidence >= 0.85 ? '#25D366' : fact.confidence >= 0.70 ? '#FFA500' : '#999' }]} />
-                    <Text style={s.factKey} numberOfLines={1}>{fact.key.replace(/_/g, ' ')}</Text>
-                    <Text style={s.factClass}>{CLASS_LABELS[fact.class] || fact.class}</Text>
-                  </View>
-                  <Text style={s.factValue}>{fact.value}</Text>
+          {/* ── Before you message — briefing card ─────────────── */}
+          {dbProfile && (() => {
+            const HIDDEN = new Set(['source','importJobId','lastDistilledAt','import_job_id','last_distilled_at']);
+            const firstName = summary?.customerName?.split(' ')[0] || 'this customer';
+            // Each rule: if the profile has a useful value, return an action bullet
+            const BRIEFING_RULES: Array<{ key: string; getText: (v: string) => string | null }> = [
+              { key: 'greeting_used',            getText: v => v && v !== 'none' && v !== 'unknown' ? `Open with "${v}"` : null },
+              { key: 'language_mix',             getText: v => v === 'mixed' ? 'Mix languages naturally — it feels right' : null },
+              { key: 'message_length_style',     getText: v => v === 'brief' ? 'Keep it short — brief messages work well' : (v && v !== 'unknown' ? `${v.charAt(0).toUpperCase() + v.slice(1)} messages work well` : null) },
+              { key: 'owner_tone_with_customer', getText: v => v && v !== 'unknown' ? `A ${v} tone works well with this customer` : null },
+              { key: 'voice_note_preference',    getText: v => v === 'none' ? 'Prefer text over voice notes' : null },
+            ];
+            const bullets = BRIEFING_RULES
+              .map(r => r.getText(String(dbProfile[r.key] || '')))
+              .filter(Boolean) as string[];
+            if (bullets.length === 0) return null;
+            // Freshness label
+            const freshnessLabel = (() => {
+              if (!lastUpdatedAt) return null;
+              const diff = Date.now() - new Date(lastUpdatedAt).getTime();
+              const days = Math.floor(diff / 86400000);
+              if (days === 0) return 'Updated today';
+              if (days === 1) return 'Updated yesterday';
+              if (days < 7)  return `Updated ${days} days ago`;
+              if (days < 30) return `Updated ${Math.floor(days / 7)} weeks ago`;
+              return `Updated ${Math.floor(days / 30)} months ago`;
+            })();
+            return (
+              <View style={s.briefingCard}>
+                <View style={s.briefingTopRow}>
+                  <Text style={s.briefingLabel}>Before you message</Text>
+                  {freshnessLabel && <Text style={s.freshnessLabel}>{freshnessLabel}</Text>}
                 </View>
-              ))}
-              {dbProfile && (() => {
-                // Technical fields never shown to owner
-                const HIDDEN = new Set(['source','importJobId','lastDistilledAt','import_job_id','last_distilled_at']);
-                // Human-readable labels and insight sentences
-                const PROFILE_META: Record<string, { label: string; insight: (v: string) => string }> = {
-                  greeting_used:            { label: 'Greeting',         insight: v => `You typically open with "${v}"` },
-                  language_mix:             { label: 'Language',         insight: v => v === 'mixed' ? 'You mix languages naturally in this relationship' : `You communicate in ${v}` },
-                  followup_style:           { label: 'Follow-up Style',  insight: v => `Your follow-up approach is ${v}` },
-                  message_length_style:     { label: 'Message Style',    insight: v => `You tend to keep messages ${v}` },
-                  voice_note_preference:    { label: 'Voice Notes',      insight: v => v === 'none' ? "You don't use voice notes with this customer" : `Voice notes: ${v}` },
-                  owner_tone_with_customer: { label: 'Tone',             insight: v => `Your tone with this customer is ${v}` },
-                  emoji_usage:              { label: 'Emoji Usage',      insight: v => v === 'none' ? "You don't use emojis in this relationship" : `Emoji usage: ${v}` },
-                };
-                const entries = Object.entries(dbProfile)
-                  .filter(([k, v]) => !HIDDEN.has(k) && v && v !== 'none' && v !== 'unknown');
-                if (entries.length === 0) return null;
-                return (
-                  <View style={{ marginTop: 12 }}>
-                    <Text style={s.profileSectionLabel}>Your Communication Style</Text>
-                    {entries.map(([k, v]) => {
-                      const meta = PROFILE_META[k];
-                      return (
-                        <View key={k} style={s.insightRow}>
-                          <Text style={s.insightLabel}>{meta?.label || k.replace(/_/g, ' ')}</Text>
-                          <Text style={s.insightValue}>{meta?.insight(String(v)) || String(v)}</Text>
-                        </View>
-                      );
-                    })}
+                <Text style={s.briefingName}>{firstName}</Text>
+                {bullets.map((b, i) => (
+                  <View key={i} style={s.briefingRow}>
+                    <Text style={s.briefingCheck}>✓</Text>
+                    <Text style={s.briefingText}>{b}</Text>
                   </View>
-                );
-              })()}
-            </View>
-          )}
+                ))}
+              </View>
+            );
+          })()}
 
-          {/* Empty state */}
+          {/* ── How you naturally communicate ────────────────────── */}
+          {dbProfile && (() => {
+            const HIDDEN = new Set(['source','importJobId','lastDistilledAt','import_job_id','last_distilled_at']);
+            // Insight sentences — richer than briefing bullets, explains the why
+            const PROFILE_META: Record<string, { label: string; insight: (v: string) => string }> = {
+              greeting_used:            { label: 'Greeting',       insight: v => `You almost always open with "${v}"` },
+              language_mix:             { label: 'Language',       insight: v => v === 'mixed' ? 'You naturally mix languages in this relationship' : `You communicate in ${v}` },
+              followup_style:           { label: 'Follow-up',      insight: v => `Your follow-up style is ${v}` },
+              message_length_style:     { label: 'Message length', insight: v => `You tend to keep messages ${v}` },
+              voice_note_preference:    { label: 'Voice notes',    insight: v => v === 'none' ? "You rarely use voice notes with this customer" : `Voice note preference: ${v}` },
+              owner_tone_with_customer: { label: 'Tone',           insight: v => `Your tone with this customer is ${v}` },
+              emoji_usage:              { label: 'Emoji',          insight: v => v === 'none' ? "You keep it text-only — no emojis" : `Emoji usage: ${v}` },
+            };
+            const entries = Object.entries(dbProfile)
+              .filter(([k, v]) => !HIDDEN.has(k) && v && v !== 'none' && v !== 'unknown' && PROFILE_META[k]);
+            if (entries.length === 0) return null;
+            const firstName = summary?.customerName?.split(' ')[0] || 'this customer';
+            return (
+              <View style={s.insightSection}>
+                <Text style={s.insightSectionLabel}>{`How you naturally communicate with ${firstName}`}</Text>
+                {entries.map(([k, v], i) => {
+                  const meta = PROFILE_META[k];
+                  return (
+                    <View key={k}>
+                      {i > 0 && <View style={s.insightDivider} />}
+                      <View style={s.insightBlock}>
+                        <Text style={s.insightLabel}>{meta.label}</Text>
+                        <Text style={s.insightValue}>{meta.insight(String(v))}</Text>
+                      </View>
+                    </View>
+                  );
+                })}
+              </View>
+            );
+          })()}
+
+          {/* ── What AssistMe knows about this customer ───────────── */}
+          {dbFacts.length > 0 && (() => {
+            // Observation templates — turn raw key/value into human insight
+            const firstName = summary?.customerName?.split(' ')[0] || 'this customer';
+            const FACT_TEMPLATES: Record<string, (v: string, name: string) => string> = {
+              payment_delay:        (v, n) => `${n} has mentioned payment delays — follow up if overdue`,
+              preferred_product:    (v, n) => `${n} frequently asks about ${v}`,
+              buying_pattern:       (v, n) => `${n} typically buys ${v}`,
+              payment_terms:        (v, n) => `${n} usually pays ${v}`,
+              communication_style:  (v, n) => `${n} prefers ${v} communication`,
+              language_preference:  (v, n) => `${n} prefers communicating in ${v}`,
+              relationship_length:  (v, n) => `You have known ${n} for ${v}`,
+              seasonal_pattern:     (v, n) => `${n} tends to order more during ${v}`,
+              last_payment_amount:  (v, n) => `Last payment from ${n} was ${v}`,
+              last_payment_date:    (v, n) => `${n} last paid on ${v}`,
+            };
+            const confLabel = (c: number) =>
+              c >= 0.85 ? 'Observed consistently' : c >= 0.70 ? 'Seen in several conversations' : 'Noticed occasionally';
+            return (
+              <View style={s.insightSection}>
+                <Text style={s.insightSectionLabel}>{`What AssistMe knows about ${firstName}`}</Text>
+                {dbFacts.map((fact, i) => {
+                  const dotColor = fact.confidence >= 0.85 ? '#25D366' : fact.confidence >= 0.70 ? '#FFA500' : '#BBBBBB';
+                  const template = FACT_TEMPLATES[fact.key];
+                  const observation = template ? template(fact.value, firstName) : `${fact.key.replace(/_/g, ' ')}: ${fact.value}`;
+                  return (
+                    <View key={i}>
+                      {i > 0 && <View style={s.insightDivider} />}
+                      <View style={s.insightBlock}>
+                        <View style={s.insightTitleRow}>
+                          <View style={[s.dot, { backgroundColor: dotColor, marginTop: 4 }]} />
+                          <Text style={s.insightValue}>{observation}</Text>
+                        </View>
+                        <Text style={s.confLabel}>{confLabel(fact.confidence)}</Text>
+                      </View>
+                    </View>
+                  );
+                })}
+              </View>
+            );
+          })()}
+
+          {/* ── Empty state ───────────────────────────────────────── */}
           {!hasReport && !hasDbFacts && (
             <View style={s.emptyState}>
               <Ionicons name="sparkles-outline" size={48} color="#CCC" />
-              <Text style={s.emptyTitle}>No intelligence yet</Text>
+              <Text style={s.emptyTitle}>Nothing here yet</Text>
               <Text style={s.emptyBody}>
-                AssistMe builds customer intelligence over time through conversations
-                and WhatsApp history. Import a chat or keep chatting to get started.
+                AssistMe learns about your customers as you chat and transact.
               </Text>
+              <Text style={s.emptyHint}>💬 Keep chatting  ·  📥 Import WhatsApp history</Text>
             </View>
           )}
 
@@ -571,10 +643,23 @@ const s = StyleSheet.create({
   emptyTitle:  { fontSize: 18, fontWeight: '700', color: '#999', marginTop: 16, marginBottom: 8 },
   emptyBody:   { fontSize: 14, color: '#BBB', textAlign: 'center', lineHeight: 20 },
 
-  profileSectionLabel: { fontSize: 12, fontWeight: '700', color: '#888', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 10 },
-  insightRow:          { marginBottom: 10, paddingLeft: 4 },
-  insightLabel:        { fontSize: 11, fontWeight: '600', color: '#AAA', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 2 },
-  insightValue:        { fontSize: 14, color: '#1A1A1A', lineHeight: 20 },
+  briefingCard:        { backgroundColor: '#075E54', borderRadius: 12, padding: 16, marginBottom: 12 },
+  briefingTopRow:      { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
+  briefingLabel:       { fontSize: 11, color: 'rgba(255,255,255,0.6)', textTransform: 'uppercase', letterSpacing: 0.8 },
+  freshnessLabel:      { fontSize: 11, color: 'rgba(255,255,255,0.5)', fontStyle: 'italic' },
+  briefingName:        { fontSize: 17, fontWeight: '700', color: '#FFF', marginBottom: 10 },
+  briefingRow:         { flexDirection: 'row', alignItems: 'flex-start', gap: 8, marginBottom: 6 },
+  briefingCheck:       { fontSize: 14, color: '#25D366', marginTop: 1 },
+  briefingText:        { fontSize: 14, color: 'rgba(255,255,255,0.9)', lineHeight: 20, flex: 1 },
+  insightSection:      { backgroundColor: '#FFF', borderRadius: 12, padding: 16, marginBottom: 12, elevation: 1 },
+  insightSectionLabel: { fontSize: 13, fontWeight: '700', color: '#075E54', marginBottom: 14 },
+  insightBlock:        { paddingVertical: 2 },
+  insightTitleRow:     { flexDirection: 'row', alignItems: 'flex-start', gap: 8, marginBottom: 3 },
+  insightDivider:      { height: 0.5, backgroundColor: '#F0F0F0', marginVertical: 10 },
+  insightLabel:        { fontSize: 11, fontWeight: '600', color: '#AAA', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 3 },
+  insightValue:        { fontSize: 14, color: '#1A1A1A', lineHeight: 20, flex: 1 },
+  confLabel:           { fontSize: 11, color: '#BBB', fontStyle: 'italic', marginTop: 3 },
+  emptyHint:           { fontSize: 13, color: '#CCC', marginTop: 10, textAlign: 'center' },
   bottomBarSafe:  { backgroundColor: '#FFF' },
   bottomBar:      { flexDirection: 'row', backgroundColor: '#FFF', paddingVertical: 10, paddingHorizontal: 16, gap: 10, borderTopWidth: 1, borderTopColor: '#F0F0F0' },
   closeBtn:       { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 12, borderRadius: 10, backgroundColor: '#F0F0F0' },

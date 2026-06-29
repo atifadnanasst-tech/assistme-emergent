@@ -4961,7 +4961,7 @@ app.get('/api/customer/:customer_id/intelligence', async (c) => {
     const now = new Date().toISOString();
     const { data: memoryRows, error: memoryError } = await supabase
       .from('entity_memory')
-      .select('memory_key, memory_value, source, confidence, memory_class')
+      .select('memory_key, memory_value, source, confidence, memory_class, updated_at')
       .eq('organisation_id', organisationId)
       .eq('entity_type', 'customer')
       .eq('entity_id', customerId)
@@ -4980,6 +4980,9 @@ app.get('/api/customer/:customer_id/intelligence', async (c) => {
       confidence: Number(row.confidence),
       class:      row.memory_class,
     }));
+    // Freshness — most recently updated fact, computed server-side
+    // Per-fact timestamps NOT exposed; domain concept not a storage detail
+    const lastUpdatedAt = memoryRows && memoryRows.length > 0 ? memoryRows[0].updated_at : null;
 
     const interactionProfile = customer.custom_fields?.interaction_profile || null;
 
@@ -4992,6 +4995,7 @@ app.get('/api/customer/:customer_id/intelligence', async (c) => {
       intelligence: {
         memoryFacts,
         interactionProfile,
+        lastUpdatedAt,
       },
       hasData: memoryFacts.length > 0 || !!interactionProfile,
     });
