@@ -1946,7 +1946,9 @@ export default function CustomerChatScreen() {
     { divider: true },
     { icon: 'sparkles-outline', label: 'Customer Intelligence', action: () => { setMenuVisible(false); router.push(`/customer/${customer_id}/intelligence`); } },
     { icon: 'logo-whatsapp', label: 'Import WhatsApp History', action: handleWhatsAppImport },
-    // ===== TEMP SESSION 6C START — remove after distillation testing complete =====
+    // ===== TEMP SESSION 6C START — hidden in production, re-enable for post-deployment testing =====
+    // To re-enable: uncomment the object below and remove this comment wrapper.
+    /*
     { icon: 'flask-outline', label: '🧪 DEV: Test Distillation', action: async () => {
         setMenuVisible(false);
         if (testingDistillationRef.current) return;
@@ -1974,6 +1976,7 @@ export default function CustomerChatScreen() {
           testingDistillationRef.current = false;
         }
       } },
+    */
     // ===== TEMP SESSION 6C END =====
     { divider: true },
     { icon: 'settings-outline', label: 'Set reminder rules', action: () => { setMenuVisible(false); } },
