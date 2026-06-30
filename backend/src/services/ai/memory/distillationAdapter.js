@@ -46,6 +46,7 @@
  */
 
 import { evaluateBatch }                              from './distillationGate.js';
+import { enrichWithEffectiveText, getSpeakerRole }     from './messageInterpretation.js';
 import { getKeyMeta, isValidKey, getKeysForRetrieval,
          REGISTRY_VERSION, ENTITY_KEYS }              from './memoryKeyRegistry.js';
 import { writeEntityMemory }                          from './writeEntityMemory.js';
@@ -105,8 +106,11 @@ function buildUserPrompt(existingMemories, newMessages, messageIds) {
     : '(no existing memory retrieved for context)';
 
   const messagesBlock = newMessages
-    .filter(m => m.canonical_text)
-    .map(m => `[id:${m.id}] [${m.role}]: ${m.canonical_text}`)
+    .map(m => {
+      const role = getSpeakerRole(m);
+      const label = role.charAt(0).toUpperCase() + role.slice(1);
+      return `[id:${m.id}] [${label}]: ${m.effectiveText}`;
+    })
     .join('\n');
 
   return `EXISTING MEMORY (for context — update only if new messages change understanding):
