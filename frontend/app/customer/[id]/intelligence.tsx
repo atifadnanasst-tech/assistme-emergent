@@ -77,6 +77,20 @@ interface RawCandidates {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+// Returns a usable display name — skips single-letter initials (e.g. "A Ghani Salar"
+// would otherwise truncate to just "A"). Falls back to first two words if the
+// first word is a single character.
+function getDisplayName(fullName?: string | null): string | null {
+  if (!fullName) return null;
+  const words = fullName.trim().split(/\s+/);
+  if (words.length === 0) return null;
+  if (words[0].length <= 1 && words.length > 1) {
+    return `${words[0]} ${words[1]}`;
+  }
+  return words[0];
+}
+
+
 const CLASS_LABELS: Record<string, string> = {
   historical_fact:    'Historical',
   relationship_fact:  'Relationship',
@@ -442,7 +456,7 @@ export default function CustomerIntelligenceScreen() {
           {/* ── Before you message — briefing card ─────────────── */}
           {dbProfile && (() => {
             const HIDDEN = new Set(['source','importJobId','lastDistilledAt','import_job_id','last_distilled_at']);
-            const firstName = summary?.customerName?.split(' ')[0] || dbCustomerName?.split(' ')[0] || 'this customer';
+            const firstName = getDisplayName(summary?.customerName || dbCustomerName) || 'this customer';
             // Each rule: if the profile has a useful value, return an action bullet
             const BRIEFING_RULES: Array<{ key: string; getText: (v: string) => string | null }> = [
               { key: 'greeting_used',            getText: v => v && v !== 'none' && v !== 'unknown' ? `Open with "${v}"` : null },
@@ -499,7 +513,7 @@ export default function CustomerIntelligenceScreen() {
             const entries = Object.entries(dbProfile)
               .filter(([k, v]) => !HIDDEN.has(k) && v && v !== 'none' && v !== 'unknown' && PROFILE_META[k]);
             if (entries.length === 0) return null;
-            const firstName = summary?.customerName?.split(' ')[0] || dbCustomerName?.split(' ')[0] || 'this customer';
+            const firstName = getDisplayName(summary?.customerName || dbCustomerName) || 'this customer';
             return (
               <View style={s.insightSection}>
                 <Text style={s.insightSectionLabel}>{`How you naturally communicate with ${firstName}`}</Text>
@@ -522,7 +536,7 @@ export default function CustomerIntelligenceScreen() {
           {/* ── What AssistMe knows about this customer ───────────── */}
           {dbFacts.length > 0 && (() => {
             // Observation templates — turn raw key/value into human insight
-            const firstName = summary?.customerName?.split(' ')[0] || dbCustomerName?.split(' ')[0] || 'this customer';
+            const firstName = getDisplayName(summary?.customerName || dbCustomerName) || 'this customer';
             const FACT_TEMPLATES: Record<string, (v: string, name: string) => string> = {
               payment_delay:        (v, n) => `${n} has mentioned payment delays — follow up if overdue`,
               preferred_product:    (v, n) => `${n} frequently asks about ${v}`,
