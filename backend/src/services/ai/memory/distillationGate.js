@@ -31,6 +31,8 @@
  *   evaluateBatch(messages) → { shouldDistill, allHints, evaluated }
  */
 
+import { getEffectiveText } from './messageInterpretation.js';
+
 const GATE_VERSION = 1;
 
 const WHOLE_MESSAGE_IGNORE = [
@@ -117,7 +119,7 @@ export function evaluateBatch(messages) {
   }
   const evaluated = messages.map(msg => ({
     id: msg.id,
-    ...evaluateMessage(msg.canonical_text),
+    ...evaluateMessage(getEffectiveText(msg)),
   }));
   const shouldDistill = evaluated.some(e => e.decision !== 'ignore');
   const allHints = [...new Set(evaluated.flatMap(e => e.hints))];

@@ -225,14 +225,14 @@ export async function distillConversation({ organisationId, customerId, conversa
 
     let q = supabase
       .from('messages')
-      .select('id, canonical_text, role, created_at, input_modality')
+      .select('id, content, canonical_text, role, created_at, input_modality')
       .eq('conversation_id', conversationId)
-      .not('canonical_text', 'is', null)
       .order('created_at', { ascending: true });
 
     if (conv.last_distilled_at) q = q.gt('created_at', conv.last_distilled_at);
 
-    const { data: newMessages } = await q;
+    const { data: rawMessages } = await q;
+    const newMessages = enrichWithEffectiveText(rawMessages || []);
     if (!newMessages || newMessages.length === 0) return { skipped: true, reason: 'no_new_messages' };
 
     const maxCreatedAt = newMessages[newMessages.length - 1].created_at;
