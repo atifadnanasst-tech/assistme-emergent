@@ -217,6 +217,7 @@ export default function CustomerIntelligenceScreen() {
   const [dbFacts, setDbFacts]           = useState<RawFact[]>([]);
   const [dbProfile, setDbProfile]       = useState<Record<string, any> | null>(null);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null);
+  const [dbCustomerName, setDbCustomerName] = useState<string | null>(null);
 
   useEffect(() => { loadIntelligence(); }, [id]);
 
@@ -260,6 +261,7 @@ export default function CustomerIntelligenceScreen() {
               setDbFacts(data.intelligence?.memoryFacts || []);
               setDbProfile(data.intelligence?.interactionProfile || null);
               setLastUpdatedAt(data.intelligence?.lastUpdatedAt || null);
+              if (data.customer?.name) setDbCustomerName(data.customer.name);
             }
           }
         }
