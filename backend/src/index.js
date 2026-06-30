@@ -7431,6 +7431,49 @@ app.post('/api/memory/import-whatsapp/confirm', async (c) => {
   }
 });
 
+// ─── POST /api/memory/distill/:conversation_id ───────────────
+// Session 6C — manual distillation trigger for testing.
+// Thin HTTP wrapper around distillConversation() domain service.
+// In production, this same function is called by the WatchEngine cron (6D).
+// Auth: JWT required. Customer must belong to the authenticated org.
+app.post('/api/memory/distill/:conversation_id', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId, userId } = auth;
+
+    const conversationId = c.req.param('conversation_id');
+
+    const { data: conv } = await supabase
+      .from('conversations')
+      .select('id, entity_id, entity_type')
+      .eq('id', conversationId)
+      .eq('organisation_id', organisationId)
+      .eq('entity_type', 'customer')
+      .maybeSingle();
+
+    if (!conv) return c.json({ error: 'conversation_not_found' }, 404);
+
+    console.log(`[distill] Manual test requested conversation=${conversationId} customer=${conv.entity_id} user=${userId}`);
+
+    const { distillConversation } = await import('./services/ai/memory/distillationAdapter.js');
+
+    const result = await distillConversation({
+      organisationId,
+      customerId:     conv.entity_id,
+      conversationId: conv.id,
+      supabase,
+      trigger:        'manual',
+    });
+
+    return c.json({ success: true, ...result });
+
+  } catch (error) {
+    console.error('[POST /api/memory/distill] Error:', error);
+    return c.json({ error: 'internal_error' }, 500);
+  }
+});
+
 // ─── PATCH /api/tasks/:task_id ───────────────────────────────
 app.patch('/api/tasks/:task_id', async (c) => {
   try {

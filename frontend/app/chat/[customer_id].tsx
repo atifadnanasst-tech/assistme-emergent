@@ -62,6 +62,9 @@ export default function CustomerChatScreen() {
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [conversationId, setConversationId] = useState<string | null>(null);
+  // ===== TEMP SESSION 6C START =====
+  const testingDistillationRef = useRef(false); // manual testing only, remove with menu item below
+  // ===== TEMP SESSION 6C END =====
   const [customer, setCustomer] = useState<CustomerData | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [aiMessages, setAiMessages] = useState<ChatMessage[]>([]);
@@ -1943,6 +1946,35 @@ export default function CustomerChatScreen() {
     { divider: true },
     { icon: 'sparkles-outline', label: 'Customer Intelligence', action: () => { setMenuVisible(false); router.push(`/customer/${customer_id}/intelligence`); } },
     { icon: 'logo-whatsapp', label: 'Import WhatsApp History', action: handleWhatsAppImport },
+    // ===== TEMP SESSION 6C START — remove after distillation testing complete =====
+    { icon: 'flask-outline', label: '🧪 DEV: Test Distillation', action: async () => {
+        setMenuVisible(false);
+        if (testingDistillationRef.current) return;
+        testingDistillationRef.current = true;
+        try {
+          const token = await authService.getAccessToken();
+          if (!token) { Alert.alert('Session expired', 'Please log in again.'); return; }
+          if (!conversationId) { Alert.alert('No conversation', 'Open the chat first.'); return; }
+          const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+          const res = await fetch(`${backendUrl}/api/memory/distill/${conversationId}`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${token}` },
+          });
+          const data = await res.json();
+          console.log('[Distillation Test]', res.status, JSON.stringify(data, null, 2));
+          const summary = data.skipped
+            ? `Skipped: ${data.reason}`
+            : data.error
+            ? `Error (${res.status}): ${data.reason || data.error}`
+            : `Written: ${data.written ?? 0}\nSkipped facts: ${data.skippedFacts ?? 0}\nProfile: ${data.profileWritten ?? 0}`;
+          Alert.alert('Distillation Result', summary);
+        } catch (err: any) {
+          Alert.alert('Error', err.message || 'Test failed');
+        } finally {
+          testingDistillationRef.current = false;
+        }
+      } },
+    // ===== TEMP SESSION 6C END =====
     { divider: true },
     { icon: 'settings-outline', label: 'Set reminder rules', action: () => { setMenuVisible(false); } },
     { icon: 'language-outline', label: 'Set language', action: () => { setMenuVisible(false); } },
