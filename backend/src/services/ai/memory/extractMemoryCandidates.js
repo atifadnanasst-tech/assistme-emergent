@@ -118,7 +118,7 @@ OUTPUT FORMAT (JSON only):
     { "key": "snake_case", "value": "string", "class": "preference_or_behavioral_pattern", "confidence": 0.00, "evidenceCount": 0, "evidenceSummary": "one sentence" }
   ],
   "interactionProfile": {
-    "greeting_used": "phrase or null",
+    "greeting_used": "the most frequent or characteristic greeting phrase used by the owner (religious or cultural greetings like Asalaam alaikum take precedence over generic Hi or Hello if both appear), or null",
     "typical_close": "phrase or null",
     "language_mix": "english|hindi|urdu|english_hindi|english_urdu|mixed|null",
     "owner_tone_with_customer": "formal|consultative|warm|casual|null",
