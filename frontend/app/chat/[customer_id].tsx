@@ -691,6 +691,11 @@ export default function CustomerChatScreen() {
         .subscribe();
     };
 
+    // setupRealtime was defined above but never invoked — subscription was never
+    // established. Incoming messages only appeared after loadChat() on remount.
+    // Fix: establish the realtime subscription. void = intentional floating promise.
+    void setupRealtime();
+
   return () => {
       if (channelRef.current) {
         supabase.removeChannel(channelRef.current);
