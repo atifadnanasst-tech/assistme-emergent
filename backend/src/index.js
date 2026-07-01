@@ -42,6 +42,80 @@ if (!supabaseUrl || !supabaseServiceKey || supabaseUrl.includes('your_supabase')
 
 
 // ─── Realtime Broadcast Helper ────────────────────────────
+// ── resolveActiveEntityConversation ─────────────────────────────────────────
+// Domain primitive: org + entity → their one active conversation.
+// Used by: Chat GET route, POST /mark-read, WatchEngine, Distillation, Reminders.
+// Future home: backend/domain/conversationService.js
+//
+// Current invariant:
+// entity_type='customer' for all entity conversations.
+// Every business entity currently resolves through the customers table.
+// When conversation types diversify, introduce an entityType parameter
+// rather than branching inside this helper. BUILD-BESIDE-THEN-MIGRATE.
+//
+// 'active' is the canonical invariant — every conversation query in the codebase
+// filters status='active'. If archived/closed conversations are introduced,
+// add a separate primitive rather than adding a status parameter here.
+//
+async function resolveActiveEntityConversation(organisationId, entityId) {
+  const { data: conversation } = await supabase
+    .from('conversations')
+    .select('id')
+    .eq('organisation_id', organisationId)
+    .eq('entity_type', 'customer')
+    .eq('entity_id', entityId)
+    .eq('status', 'active')
+    .maybeSingle();
+  return conversation || null;
+}
+
+// ── markConversationViewed ───────────────────────────────────────────────────
+// Conversation Visibility Doctrine:
+// Conversation visibility is the ONLY event that transitions a message from
+// unseen to seen by this organisation. Polling, push, sync, and background
+// refresh are NOT visibility events and must never call this function.
+//
+// Owner: this function. Nowhere else updates read_by_owner to true.
+// Idempotent: only touches rows where read_by_owner=false. Repeated calls free.
+//
+// onConversationViewed() orchestrates two consequences of conversation visibility:
+//   markConversationViewed() — internal: metadata.read_by_owner=true     (built, D1)
+//   sendReadReceipt()        — cross-org: delivery_status='read' blue tick (future, D2)
+// These answer different questions and must never be conflated:
+//   read_by_owner   → "Has this org's owner seen this message?" (internal)
+//   delivery_status → "Has the recipient read the sender's message?" (cross-org)
+//
+// BACKLOG: Replace per-row loop with single bulk jsonb_set UPDATE when
+// message metadata helpers are introduced. No behavioral change — owner stays here.
+//
+async function markConversationViewed(conversationId) {
+  try {
+    const { data: unreadMsgs } = await supabase
+      .from('messages')
+      .select('id')
+      .eq('conversation_id', conversationId)
+      .eq('metadata->>read_by_owner', 'false');
+
+    if (unreadMsgs && unreadMsgs.length > 0) {
+      for (const { id } of unreadMsgs) {
+        const { data: row } = await supabase
+          .from('messages')
+          .select('metadata')
+          .eq('id', id)
+          .single();
+        if (row) {
+          await supabase
+            .from('messages')
+            .update({ metadata: { ...(row.metadata || {}), read_by_owner: true } })
+            .eq('id', id);
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[markConversationViewed] Failed (non-fatal):', err.message);
+  }
+}
+
 async function broadcastNewMessage(orgId, payload) {
   try {
     await supabase.channel('org-' + orgId).send({
@@ -1165,14 +1239,7 @@ app.get('/api/chat/:customer_id', async (c) => {
     const netDirection = netPosition > 0.01 ? 'receivable' : payableBalance - (customer.outstanding_balance || 0) > 0.01 ? 'payable' : 'settled';
 
     // 2. Fetch or create conversation
-    let { data: conversation } = await supabase
-      .from('conversations')
-      .select('id')
-      .eq('organisation_id', organisationId)
-      .eq('entity_type', 'customer')
-      .eq('entity_id', customerId)
-      .eq('status', 'active')
-      .maybeSingle();
+    let conversation = await resolveActiveEntityConversation(organisationId, customerId);
 
     if (!conversation) {
       const { data: newConv, error: createErr } = await supabase
@@ -1236,30 +1303,9 @@ app.get('/api/chat/:customer_id', async (c) => {
         })).reverse();
       }
 
-      // 4. Mark unread messages as read using jsonb_set
+      // 4. Mark conversation viewed (Conversation Visibility Doctrine)
       const markRead = c.req.query('mark_read') !== 'false';
-      if (markRead) try {
-        const { data: unreadMsgs } = await supabase
-          .from('messages')
-          .select('id')
-          .eq('conversation_id', conversation.id)
-          .eq('metadata->>read_by_owner', 'false');
-
-        if (unreadMsgs && unreadMsgs.length > 0) {
-          const unreadIds = unreadMsgs.map(m => m.id);
-          // Update read_by_owner per row using Supabase client
-          for (const uid of unreadIds) {
-            const { data: row } = await supabase.from('messages').select('metadata').eq('id', uid).single();
-            if (row) {
-              await supabase.from('messages').update({
-                metadata: { ...(row.metadata || {}), read_by_owner: true }
-              }).eq('id', uid);
-            }
-          }
-        }
-      } catch (err) {
-        console.warn('Mark messages read failed:', err.message);
-      }
+      if (markRead) await markConversationViewed(conversation.id);
     }
 
     return c.json({
@@ -1576,6 +1622,33 @@ app.post('/api/chat/:customer_id/message', async (c) => {
 
   } catch (error) {
     console.error('POST /api/chat/message error:', error);
+    return c.json({ error: 'server_error' }, 500);
+  }
+});
+
+// ─── POST /api/chat/:customer_id/mark-read ─────────────────
+// Called by onConversationViewed() when incoming messages are rendered
+// while the chat is already open. Idempotent — safe on every realtime event.
+// GET route handles the conversation-open case via mark_read=true (default).
+// Future D2: after markConversationViewed(), call sendReadReceipt() here
+// for cross-org messages (blue tick pipeline). Add in onConversationViewed(),
+// not inside markConversationViewed().
+app.post('/api/chat/:customer_id/mark-read', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+    const customerId = c.req.param('customer_id');
+
+    const customer = await validateCustomer(customerId, organisationId);
+    if (!customer) return c.json({ error: 'customer_not_found' }, 404);
+
+    const conversation = await resolveActiveEntityConversation(organisationId, customerId);
+    if (conversation?.id) await markConversationViewed(conversation.id);
+
+    return c.json({ ok: true });
+  } catch (error) {
+    console.error('[POST /mark-read] error:', error);
     return c.json({ error: 'server_error' }, 500);
   }
 });
