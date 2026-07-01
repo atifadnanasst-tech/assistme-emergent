@@ -42,14 +42,33 @@ interface CustomerData {
   net_position: number;
   net_direction: 'receivable' | 'payable' | 'settled';
 }
+// Canonical delivery status type — single source of truth for all tick rendering
+type DeliveryStatus = 'pending' | 'sent' | 'delivered' | 'read';
+
 interface ChatMessage {
   id: string; role: string; content: string; created_at: string;
   sender_type: string | null; visibility: string; message_type: string;
   card_type: string | null; card_data: Record<string, any>;
   preview_text: string | null;
-  delivery_status?: 'sent' | 'delivered' | 'read';
+  delivery_status?: DeliveryStatus;
   input_modality?: string;
   metadata?: Record<string, any>;
+}
+
+// ── Delivery status normalizer (module-level, not per-render) ──────────────
+// State machine: pending → sent → delivered → read
+// pending   = client sent, no server ACK yet                    → clock icon
+// sent      = server accepted responsibility for the message    → single grey tick
+// delivered = recipient device acknowledged receipt             → double grey tick
+// read      = recipient opened the conversation                 → double blue tick
+// NEVER infer delivery from DB persistence alone.
+// NEVER transition to delivered/read without a real device ACK.
+const VALID_DELIVERY_STATUSES = new Set<string>(['pending', 'sent', 'delivered', 'read']);
+
+function normalizeDeliveryStatus(msg: ChatMessage): DeliveryStatus {
+  return VALID_DELIVERY_STATUSES.has(msg.delivery_status ?? '')
+    ? msg.delivery_status as DeliveryStatus
+    : 'pending';
 }
 
 export default function CustomerChatScreen() {
@@ -844,7 +863,7 @@ export default function CustomerChatScreen() {
       created_at: new Date().toISOString(), sender_type: 'owner',
       visibility: 'both', message_type: 'text', card_type: null,
       card_data: {}, preview_text: text.substring(0, 50),
-      delivery_status: 'sent',
+      delivery_status: 'pending',
       metadata: {
         ...(attachment ? {
           message_type: attachment.mime_type?.startsWith?.('image') ? 'image' :
@@ -886,7 +905,7 @@ export default function CustomerChatScreen() {
       if (res.ok) {
         const data = await res.json();
         setMessages(prev => prev.map(m =>
-          m.id === tempId ? { ...m, id: data.message_id, created_at: data.created_at, delivery_status: 'delivered', content: data.content || m.content, metadata: data.metadata || m.metadata || {} } : m
+          m.id === tempId ? { ...m, id: data.message_id, created_at: data.created_at, delivery_status: 'sent', content: data.content || m.content, metadata: data.metadata || m.metadata || {} } : m
         ));
         setAttachmentPreview(null);
       } else {
@@ -1573,15 +1592,14 @@ export default function CustomerChatScreen() {
         <Text style={styles.outgoingText}>{msg.content}</Text>
         <View style={styles.outgoingTimeRow}>
           <Text style={styles.outgoingTime}>{formatTime(msg.created_at)}</Text>
-          {msg.delivery_status === 'sent' && (
-            <Ionicons name="checkmark" size={20} color="#8696A0" style={{ marginLeft: 4 }} />
-          )}
-          {msg.delivery_status === 'delivered' && (
-            <Ionicons name="checkmark-done" size={20} color="#8696A0" style={{ marginLeft: 4 }} />
-          )}
-          {(msg.delivery_status === 'read' || !msg.delivery_status) && (
-            <Ionicons name="checkmark-done" size={20} color="#53BDEB" style={{ marginLeft: 4 }} />
-          )}
+          {(() => {
+            const status = normalizeDeliveryStatus(msg);
+            if (status === 'pending')   return <Ionicons name="time-outline"   size={16} color="#8696A0" style={{ marginLeft: 4 }} />;
+            if (status === 'sent')      return <Ionicons name="checkmark"      size={16} color="#8696A0" style={{ marginLeft: 4 }} />;
+            if (status === 'delivered') return <Ionicons name="checkmark-done" size={16} color="#8696A0" style={{ marginLeft: 4 }} />;
+            if (status === 'read')      return <Ionicons name="checkmark-done" size={16} color="#53BDEB" style={{ marginLeft: 4 }} />;
+            return null;
+          })()}
         </View>
       </View>
     </View>
