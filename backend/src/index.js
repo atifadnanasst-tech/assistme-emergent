@@ -1201,7 +1201,7 @@ app.get('/api/chat/:customer_id', async (c) => {
       const before = c.req.query('before');
       let query = supabase
         .from('messages')
-        .select('id, role, content, metadata, created_at')
+        .select('id, role, content, metadata, created_at, delivery_status')
         .eq('conversation_id', conversation.id)
         .or('metadata->>message_type.is.null,metadata->>message_type.not.in.(ai_query,ai_response,action_card)')
         .is('deleted_at', null)
@@ -1228,6 +1228,10 @@ app.get('/api/chat/:customer_id', async (c) => {
           card_type: m.metadata?.card_type || null,
           card_data: m.metadata?.card_data || {},
           preview_text: m.metadata?.preview_text || null,
+          // Delivery status: backend owns this field. Never default to a higher-confidence
+          // state than what the DB contains. 'sent' is the correct floor — server accepted
+          // responsibility for the message. 'delivered' and 'read' require real device ACKs.
+          delivery_status: m.delivery_status ?? 'sent',
           metadata: m.metadata || {},
         })).reverse();
       }
@@ -1513,7 +1517,7 @@ app.post('/api/chat/:customer_id/message', async (c) => {
                     cross_org: true,
                     sender_org_id: organisationId,
                   },
-                  delivery_status: 'delivered',
+                  delivery_status: 'sent',
                   tokens_input: 0,
                   tokens_output: 0,
                 });
@@ -1556,7 +1560,7 @@ app.post('/api/chat/:customer_id/message', async (c) => {
 
                 await supabase
                   .from('messages')
-                  .update({ delivery_status: 'delivered' })
+                  .update({ delivery_status: 'sent' })
                   .eq('id', savedMessageId);
               }
             }
@@ -1568,7 +1572,7 @@ app.post('/api/chat/:customer_id/message', async (c) => {
       }
     }
 
-    return c.json({ message_id: savedMsg.id, created_at: savedMsg.created_at });
+    return c.json({ message_id: savedMsg.id, created_at: savedMsg.created_at, delivery_status: 'sent' });
 
   } catch (error) {
     console.error('POST /api/chat/message error:', error);
@@ -7793,6 +7797,81 @@ async function jobTaskReminders(orgId, userId) {
 }
 
 // ── Watch Engine cron schedule (interim, Batch 0.5) — IST (Asia/Kolkata) ──
+// ── Job 8: Live Conversation Distillation (Session 6D) ──────
+// Runs every 5 minutes. Calls distillConversation() for every active
+// customer conversation in the org; the adapter's checkpoint and gate
+// evaluation determine whether any work actually happens.
+//
+// V1 DESIGN
+// We intentionally invoke distillConversation() for all active customer
+// conversations. The adapter performs checkpoint comparison (last_distilled_at)
+// and gate evaluation (no GPT call if nothing changed). This keeps the
+// WatchEngine simple and ensures correctness while the Conversation domain
+// remains the single source of truth — no derived/cached state to drift.
+//
+// V2 SCALING PLAN
+// Introduce conversation.last_message_at, maintained by every message
+// insertion path. Candidate selection becomes a single indexed comparison:
+//   last_message_at > last_distilled_at
+// allowing WatchEngine to skip invoking the adapter for unchanged
+// conversations entirely. Deferred intentionally — this is a Conversation
+// domain change (touches every message insert path: DM, cross-org routing,
+// AI Messages, imports) rather than a Memory Engine change, and deserves
+// its own dedicated session with proper testing across all insert paths.
+// See ASSISTME_V2_ARCHITECTURAL_BACKLOG.md — "Conversation Metadata".
+//
+// STAGE 1 NOTE: conversations table holds both DM and per-customer AI Q&A
+// threads (no schema-level separation today — see schema_sql_v3.txt).
+// This means some signal may come from owner-AI Q&A about a customer
+// rather than owner-customer DM. Accepted as a monitored test case for
+// stage-1 rollout, not a blocker — some intelligence beats none at this
+// stage. Revisit if misattribution proves systematic across customers.
+async function jobLiveDistillation(orgId, userId) {
+  const metrics = { scanned: 0, distilled: 0, skipped: 0, failed: 0 };
+  const startedAt = Date.now();
+
+  try {
+    const { data: conversations } = await supabase
+      .from('conversations')
+      .select('id, entity_id')
+      .eq('organisation_id', orgId)
+      .eq('entity_type', 'customer')
+      .eq('status', 'active')
+      .is('deleted_at', null);
+
+    if (!conversations || conversations.length === 0) {
+      console.log(`[Live Distillation] org=${orgId} scanned=0 distilled=0 elapsed=${Date.now() - startedAt}ms`);
+      return 0;
+    }
+    metrics.scanned = conversations.length;
+
+    const { distillConversation } = await import('./services/ai/memory/distillationAdapter.js');
+
+    for (const conv of conversations) {
+      try {
+        const result = await distillConversation({
+          organisationId: orgId,
+          customerId:     conv.entity_id,
+          conversationId: conv.id,
+          supabase,
+          trigger:        'watchengine',
+        });
+        if (result.error) metrics.failed++;
+        else if (result.written > 0) metrics.distilled++;
+        else metrics.skipped++;
+      } catch (err) {
+        metrics.failed++;
+        console.error(`[jobLiveDistillation] failed for conversation ${conv.id}:`, err.message);
+      }
+    }
+  } catch (err) {
+    console.error(`[jobLiveDistillation] failed for org ${orgId}:`, err.message);
+  }
+
+  console.log(`[Live Distillation] org=${orgId} scanned=${metrics.scanned} distilled=${metrics.distilled} skipped=${metrics.skipped} failed=${metrics.failed} elapsed=${Date.now() - startedAt}ms`);
+  return metrics.distilled;
+}
+
 const CRON_TZ = { timezone: 'Asia/Kolkata' };
 cron.schedule('0 8 * * *', () => runWatchJobForAllOrgs('jobMorningBriefing', jobMorningBriefing), CRON_TZ);
 cron.schedule('0 8 * * *', () => runWatchJobForAllOrgs('jobPaymentReminders', jobPaymentReminders), CRON_TZ);
@@ -7803,7 +7882,8 @@ cron.schedule('0 8 * * *', () => runWatchJobForAllOrgs('jobDailyInsight', jobDai
 cron.schedule('0 20 * * *', () => runWatchJobForAllOrgs('jobBankReconciliation', jobBankReconciliation), CRON_TZ);
 cron.schedule('0 */4 * * *', () => runWatchJobForAllOrgs('jobDraftCleanup', jobDraftCleanup), CRON_TZ);
 cron.schedule('*/5 * * * *', () => runWatchJobForAllOrgs('jobTaskReminders', jobTaskReminders), CRON_TZ);
-console.log('[WatchEngine] Scheduler initialized -- 7 jobs scheduled (interim fixed schedule, IST)');
+cron.schedule('*/5 * * * *', () => runWatchJobForAllOrgs('jobLiveDistillation', jobLiveDistillation), CRON_TZ);
+console.log('[WatchEngine] Scheduler initialized -- 8 jobs scheduled (interim fixed schedule, IST)');
 
 // Start server
 const port = process.env.PORT ? parseInt(process.env.PORT) : 3000;
