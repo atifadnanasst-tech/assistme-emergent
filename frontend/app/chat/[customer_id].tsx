@@ -86,6 +86,14 @@ export default function CustomerChatScreen() {
   // ===== TEMP SESSION 6C END =====
   const [customer, setCustomer] = useState<CustomerData | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  // messagesRef is a read-only mirror of messages state.
+  // Owner: messages state. Mirror: this ref (never written directly).
+  // Never use messages inside realtime callbacks; it is a stale closure.
+  // Purpose: lets realtime callbacks (stale closure — [conversationId] deps)
+  // read current message IDs for dedup without the functional updater side-effect pattern.
+  // Kept in sync via useEffect below. Never assign messagesRef.current manually.
+  const messagesRef = useRef<ChatMessage[]>([]);
+  useEffect(() => { messagesRef.current = messages; }, [messages]);
   const [aiMessages, setAiMessages] = useState<ChatMessage[]>([]);
   const [inputText, setInputText] = useState('');
   const [menuVisible, setMenuVisible] = useState(false);
@@ -649,15 +657,17 @@ export default function CustomerChatScreen() {
               if (!res.ok) return;
               const data = await res.json();
               const incoming = data.messages || [];
-              setMessages(prev => {
-                const existingIds = new Set(prev.map(m => m.id));
-                const newOnly = incoming.filter((m: any) => !existingIds.has(m.id));
-                const deduped = newOnly.filter((m: any) => !existingIds.has(m.id));
-                // Backend currently returns ASC (oldest→newest).
-                // Reverse so newest is at index 0 for inverted list.
-                // If backend order changes in future, this line must be revisited.
-                return deduped.length > 0 ? [...deduped.reverse(), ...prev] : prev;
-              });
+              // messagesRef mirrors current state (via useEffect) — safe to read here
+              // even though this callback has a stale closure on messages state.
+              const existingIds = new Set(messagesRef.current.map((m: any) => m.id));
+              const deduped = incoming.filter((m: any) => !existingIds.has(m.id));
+              if (deduped.length > 0) {
+                const toAdd = [...deduped].reverse();
+                // setMessages updater stays pure — no side effects inside.
+                setMessages(prev => [...toAdd, ...prev]);
+                // New messages accepted into visible state → conversation viewed.
+                void onConversationViewed();
+              }
             }, 500);
           }
         })
@@ -676,15 +686,17 @@ export default function CustomerChatScreen() {
               if (!res.ok) return;
               const data = await res.json();
               const incoming = data.messages || [];
-              setMessages(prev => {
-                const existingIds = new Set(prev.map(m => m.id));
-                const newOnly = incoming.filter((m: any) => !existingIds.has(m.id));
-                const deduped = newOnly.filter((m: any) => !existingIds.has(m.id));
-                // Backend currently returns ASC (oldest→newest).
-                // Reverse so newest is at index 0 for inverted list.
-                // If backend order changes in future, this line must be revisited.
-                return deduped.length > 0 ? [...deduped.reverse(), ...prev] : prev;
-              });
+              // messagesRef mirrors current state (via useEffect) — safe to read here
+              // even though this callback has a stale closure on messages state.
+              const existingIds = new Set(messagesRef.current.map((m: any) => m.id));
+              const deduped = incoming.filter((m: any) => !existingIds.has(m.id));
+              if (deduped.length > 0) {
+                const toAdd = [...deduped].reverse();
+                // setMessages updater stays pure — no side effects inside.
+                setMessages(prev => [...toAdd, ...prev]);
+                // New messages accepted into visible state → conversation viewed.
+                void onConversationViewed();
+              }
             }, 500);
           }
         )
@@ -729,6 +741,25 @@ export default function CustomerChatScreen() {
     return () => clearInterval(interval);
   }, [sparkMode]);
 
+
+  // onConversationViewed — orchestrator for conversation visibility consequences.
+  // Fires only when new messages were accepted into local conversation state.
+  // D1: POST /mark-read → markConversationViewed() → read_by_owner=true → badge clears.
+  // D2 (future): add sendReadReceipt() call here for cross-org blue tick pipeline.
+  // Idempotent: backend markConversationViewed() is a no-op if nothing is unread.
+  const onConversationViewed = async () => {
+    try {
+      const token = await getToken();
+      if (!token || !customer_id) return;
+      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+      await fetch(`${backendUrl}/api/chat/${customer_id}/mark-read`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+    } catch (err) {
+      console.warn('[onConversationViewed] Failed (non-fatal):', err);
+    }
+  };
 
   const loadChat = async (markRead: boolean = true) => {
     setLoading(true);
