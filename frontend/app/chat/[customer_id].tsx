@@ -1919,10 +1919,25 @@ export default function CustomerChatScreen() {
       </Pressable>
     ) : content;
 
+    // ── DIAGNOSTIC ONLY — remove after screenshot test ──────────
+    // Red wrapper = divider. Blue wrapper = bubble.
+    // Screenshot proves which renders above which.
+    const debugDivider = divider ? (
+      <View style={{ backgroundColor: 'rgba(255,0,0,0.3)', padding: 2 }}>
+        <Text style={{ color: 'red', fontSize: 9, fontWeight: 'bold' }}>===DIVIDER===</Text>
+        {divider}
+      </View>
+    ) : null;
+    const debugBubble = (
+      <View style={{ backgroundColor: 'rgba(0,0,255,0.1)', padding: 2 }}>
+        <Text style={{ color: 'blue', fontSize: 9, fontWeight: 'bold' }}>===BUBBLE===</Text>
+        {wrappedContent}
+      </View>
+    );
     return (
       <>
-        {divider}
-        {wrappedContent}
+        {debugDivider}
+        {debugBubble}
       </>
     );
   };
