@@ -51,6 +51,7 @@ interface ChatMessage {
   card_type: string | null; card_data: Record<string, any>;
   preview_text: string | null;
   delivery_status?: DeliveryStatus;
+  transport_id?: string | null;  // Protocol identity — used for delivery ACK and read receipts
   input_modality?: string;
   metadata?: Record<string, any>;
 }

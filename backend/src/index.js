@@ -1429,6 +1429,10 @@ app.get('/api/chat/:customer_id', async (c) => {
           // state than what the DB contains. 'sent' is the correct floor — server accepted
           // responsibility for the message. 'delivered' and 'read' require real device ACKs.
           delivery_status: m.delivery_status ?? 'sent',
+          // transport_id: protocol identity. Present on cross-org messages (A1a).
+          // Required by the frontend delivery ACK pipeline (B1) to identify which
+          // messages to acknowledge. null for messages created before A1a.
+          transport_id: m.transport_id || null,
           metadata: m.metadata || {},
         })).reverse();
       }
