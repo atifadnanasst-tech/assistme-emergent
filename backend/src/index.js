@@ -116,6 +116,136 @@ async function markConversationViewed(conversationId) {
   }
 }
 
+// ── Message Protocol v1.0 — Delivery State Machine ──────────────────────────
+// Legal delivery_status transitions after message creation.
+// pending→sent is owned by message creation, not by this state machine.
+// advanceMessageStatus() enforces this table — callers cannot request illegal transitions.
+// Terminal state: 'read' (no outbound transitions).
+// See: AssistMe_Message_Protocol.md
+const DELIVERY_STATUS_TRANSITIONS = {
+  sent:      ['delivered', 'read'],
+  delivered: ['read'],
+  read:      [],
+};
+
+// ── broadcastMessageStatus ───────────────────────────────────────────────────
+// Fires 'message_status_changed' on the sender's org channel.
+// Called by the endpoint AFTER advanceMessageStatus() confirms rows were updated.
+// Broadcasts represent committed state — never fire before the UPDATE succeeds.
+async function broadcastMessageStatus(orgId, payload) {
+  try {
+    await supabase.channel('org-' + orgId).send({
+      type: 'broadcast',
+      event: 'message_status_changed',
+      payload,
+    });
+  } catch (err) {
+    console.warn('[broadcastMessageStatus] Failed (non-fatal):', err.message);
+  }
+}
+
+// ── advanceMessageStatus ─────────────────────────────────────────────────────
+// Message Protocol v1.0 — SOLE OWNER of delivery_status transitions after creation.
+// No other function, endpoint, or code path may write delivery_status.
+//
+// Responsibilities: ownership verification, transition validation, state update.
+// Broadcasting is NOT this function's responsibility — the caller does that.
+//
+// Cross-org ownership rule (all three must pass before any update):
+//   1. Mirror row exists with organisation_id = receiverOrgId (JWT-derived, never client)
+//   2. Mirror row has metadata.mirror = 'true'
+//   3. Mirror row transport_id matches the supplied transport_id
+//
+// TODO: metadata.mirror should become a first-class protocol column (messages.mirror boolean)
+// in a future schema revision. JSON metadata is for descriptive data; protocol identity
+// fields belong in canonical columns. Until then, metadata->>mirror is the source of truth.
+//
+// A1 invariant relied upon: for every verified mirror row there should be exactly one
+// origin row sharing the same transport_id within the sender organisation.
+// This is guaranteed by the composite unique index (organisation_id, transport_id).
+//
+// Concurrency: WHERE delivery_status IN (allValidPredecessors) is the optimistic concurrency
+// guard. Concurrent ACKs race safely — only the first valid transition succeeds.
+//
+// Timestamps: when delivered_at / read_at columns are added to messages, set them here
+// inside the update object alongside delivery_status.
+//
+// TODO: sender_org_id is currently read from metadata.sender_org_id (set at mirror creation).
+// Long-term this should become a first-class column (messages.sender_organisation_id)
+// so it is not buried in JSONB. Migrate when message schema is next revised.
+//
+// Returns: { updated: N, transportIdsBySenderOrg: { [senderOrgId]: [transport_ids] } }
+// Throws on infrastructure failure — endpoints return 500.
+// Idempotent no-op (already at target state) returns { updated: 0 }.
+//
+// NOT YET CALLED — defined here as A2 infrastructure. Activated in Part B.
+//
+async function advanceMessageStatus({ receiverOrgId, transportIds, toState }) {
+  if (!transportIds || transportIds.length === 0) return { updated: 0, transportIdsBySenderOrg: {} };
+
+  // Validate requested transition against protocol state machine
+  const allValidPredecessors = Object.entries(DELIVERY_STATUS_TRANSITIONS)
+    .filter(([, successors]) => successors.includes(toState))
+    .map(([state]) => state);
+
+  if (allValidPredecessors.length === 0) {
+    throw new Error(`[advanceMessageStatus] Invalid toState: '${toState}'. No legal predecessors in state machine.`);
+  }
+
+  // Step 1: Verify receiver org owns mirror rows for these transport_ids
+  const { data: mirrorRows, error: mirrorErr } = await supabase
+    .from('messages')
+    .select('transport_id, metadata')
+    .in('transport_id', transportIds)
+    .eq('organisation_id', receiverOrgId)
+    .filter('metadata->>mirror', 'eq', 'true');
+
+  if (mirrorErr) throw new Error(`[advanceMessageStatus] Mirror lookup failed: ${mirrorErr.message}`);
+
+  if (!mirrorRows || mirrorRows.length === 0) {
+    console.warn('[advanceMessageStatus] No verified mirror rows for receiverOrg:', receiverOrgId);
+    return { updated: 0, transportIdsBySenderOrg: {} };
+  }
+
+  // Step 2: Extract sender_org_id from verified mirrors, group transport_ids by sender org
+  const grouped = {};
+  for (const row of mirrorRows) {
+    const senderOrgId = row.metadata?.sender_org_id;
+    if (!senderOrgId) {
+      console.warn('[advanceMessageStatus] Mirror row missing sender_org_id:', row.transport_id);
+      continue;
+    }
+    if (!grouped[senderOrgId]) grouped[senderOrgId] = [];
+    grouped[senderOrgId].push(row.transport_id);
+  }
+
+  const transportIdsBySenderOrg = {};
+  let updated = 0;
+
+  for (const [senderOrgId, tids] of Object.entries(grouped)) {
+    // Step 3: UPDATE origin rows scoped to verified sender org + valid predecessor states
+    // WHERE delivery_status IN (allValidPredecessors) is the optimistic concurrency guard.
+    // Concurrent ACKs race safely — only the first succeeds, subsequent are silent no-ops.
+    const { data: updatedRows, error: updateErr } = await supabase
+      .from('messages')
+      .update({ delivery_status: toState })
+      .in('transport_id', tids)
+      .eq('organisation_id', senderOrgId)
+      .filter('metadata->>mirror', 'eq', 'false')
+      .in('delivery_status', allValidPredecessors)
+      .select('id, transport_id');
+
+    if (updateErr) throw new Error(`[advanceMessageStatus] UPDATE failed: ${updateErr.message}`);
+
+    if ((updatedRows || []).length > 0) {
+      transportIdsBySenderOrg[senderOrgId] = (updatedRows || []).map(r => r.transport_id);
+      updated += (updatedRows || []).length;
+    }
+  }
+
+  return { updated, transportIdsBySenderOrg };
+}
+
 async function broadcastNewMessage(orgId, payload) {
   try {
     await supabase.channel('org-' + orgId).send({
