@@ -1468,8 +1468,7 @@ app.post('/api/chat/:customer_id/message', async (c) => {
     // After saving message to sender's org, check if receiver is also an AssistMe user
     const customerPhone = customer?.phone;
     const savedMessageId = savedMsg.id;
-    // DIAGNOSTIC — remove after cross-org regression diagnosed
-    console.log('[DIAG-1]', { transportIdLocal: transportId, transportIdReturned: savedMsg?.transport_id, customerPhone });
+
     const normalizePhone = (p) => p ? p.replace(/\D/g, '').padStart(12, '').slice(-12).replace(/^0+/, '') : null;
 
     if (!savedMsg.transport_id) {
@@ -1486,8 +1485,7 @@ app.post('/api/chat/:customer_id/message', async (c) => {
           .neq('organisation_id', organisationId);
         const receiverUser = (allUsers || []).find(u => normalizePhone(u.phone) === normalizedCustomerPhone) || null;
 
-        // DIAGNOSTIC — remove after diagnosis
-        console.log('[DIAG-2]', { receiverFound: !!receiverUser, receiverOrg: receiverUser?.organisation_id });
+
         if (receiverUser && receiverUser.organisation_id !== organisationId) {
           // Receiver is an AssistMe user in a different org
           // Find or create a conversation in their org for the sender's phone
@@ -1561,10 +1559,8 @@ app.post('/api/chat/:customer_id/message', async (c) => {
                 console.log('[CROSS-ORG] Auto-created conversation in receiver org:', newConv?.id);
               }
 
-              // DIAGNOSTIC — remove after diagnosis
-              console.log('[DIAG-3]', { conversationFound: !!receiverConversation, conversationId: receiverConversation?.id, senderConvId: conversationId });
               if (receiverConversation) {
-                const { data: mirrorData, error: mirrorError } = await supabase.from('messages').insert({
+                const { error: mirrorInsertError } = await supabase.from('messages').insert({
                   organisation_id: receiverUser.organisation_id,
                   conversation_id: receiverConversation.id,
                   role: 'user',
@@ -1584,50 +1580,55 @@ app.post('/api/chat/:customer_id/message', async (c) => {
                   transport_id: transportId,
                   tokens_input: 0,
                   tokens_output: 0,
-                }).select('id, transport_id');
-                // DIAGNOSTIC — remove after diagnosis
-                console.log('[DIAG-4]', { receiverOrg: receiverUser.organisation_id, receiverConversation: receiverConversation.id, mirrorError, mirrorId: mirrorData?.[0]?.id, mirrorTransportId: mirrorData?.[0]?.transport_id });
+                });
 
-                console.log('[CROSS-ORG] Message routed to org:', receiverUser.organisation_id);
-                await broadcastNewMessage(receiverUser.organisation_id, { conversation_id: receiverConversation.id });
-                // Push notification to receiver
-                if (receiverUser.push_token) {
-                  try {
-                    const senderDisplayName = senderAsCustomer?.name || senderUser?.phone || 'Someone';
-                    // Count total unread messages for receiver org
-                    const { count: unreadCount } = await supabase
-                      .from('messages')
-                      .select('*', { count: 'exact', head: true })
-                      .eq('organisation_id', receiverUser.organisation_id)
-                      .eq('role', 'user')
-                      .eq('metadata->>read_by_owner', 'false');
-                    const badgeCount = (unreadCount || 0) + 1;
-                    await fetch('https://exp.host/--/api/v2/push/send', {
-                      method: 'POST',
-                      headers: {
-                        'Content-Type': 'application/json',
-                        'Accept': 'application/json',
-                      },
-                      body: JSON.stringify({
-                        to: receiverUser.push_token,
-                        title: senderDisplayName,
-                        body: content.length > 100 ? content.substring(0, 100) + '...' : content,
-                        data: { conversation_id: receiverConversation.id },
-                        sound: 'default',
-                        channelId: 'messages_v2',
-                        badge: badgeCount,
-                      }),
-                    });
-                    console.log('[PUSH] Notification sent to:', receiverUser.push_token);
-                  } catch (pushError) {
-                    console.error('[PUSH] Failed (non-fatal):', pushError.message);
+                if (mirrorInsertError) {
+                  // Mirror INSERT failed — abort. Receiver must not be notified of a message
+                  // that doesn't exist in their DB. (Protocol v1.0)
+                  console.error('[CROSS-ORG] Mirror insert failed', {
+                    transportId,
+                    receiverOrg: receiverUser.organisation_id,
+                    conversationId: receiverConversation.id,
+                    error: mirrorInsertError,
+                  });
+                } else {
+                  console.log('[CROSS-ORG] Message routed to org:', receiverUser.organisation_id);
+                  await broadcastNewMessage(receiverUser.organisation_id, { conversation_id: receiverConversation.id });
+                  // Push notification to receiver — only after confirmed mirror INSERT
+                  if (receiverUser.push_token) {
+                    try {
+                      const senderDisplayName = senderAsCustomer?.name || senderUser?.phone || 'Someone';
+                      const { count: unreadCount } = await supabase
+                        .from('messages')
+                        .select('*', { count: 'exact', head: true })
+                        .eq('organisation_id', receiverUser.organisation_id)
+                        .eq('role', 'user')
+                        .eq('metadata->>read_by_owner', 'false');
+                      const badgeCount = (unreadCount || 0) + 1;
+                      await fetch('https://exp.host/--/api/v2/push/send', {
+                        method: 'POST',
+                        headers: {
+                          'Content-Type': 'application/json',
+                          'Accept': 'application/json',
+                        },
+                        body: JSON.stringify({
+                          to: receiverUser.push_token,
+                          title: senderDisplayName,
+                          body: content.length > 100 ? content.substring(0, 100) + '...' : content,
+                          data: { conversation_id: receiverConversation.id },
+                          sound: 'default',
+                          channelId: 'messages_v2',
+                          badge: badgeCount,
+                        }),
+                      });
+                      console.log('[PUSH] Notification sent to:', receiverUser.push_token);
+                    } catch (pushError) {
+                      console.error('[PUSH] Failed (non-fatal):', pushError.message);
+                    }
                   }
+                  // Note: sender delivery_status stays 'sent' (DB default) until a real
+                  // receiver ACK arrives via POST /delivery-ack. (Protocol v1.0 — D2)
                 }
-
-                await supabase
-                  .from('messages')
-                  .update({ delivery_status: 'sent' })
-                  .eq('id', savedMessageId);
               }
             }
           }
