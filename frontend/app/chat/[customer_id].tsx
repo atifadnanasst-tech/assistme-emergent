@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View, Text, Image, StyleSheet, TouchableOpacity, FlatList, TextInput,
   ActivityIndicator, Alert, Linking, KeyboardAvoidingView, Platform,
-  Keyboard, Modal, Pressable, ScrollView, InteractionManager, LayoutAnimation, Animated,
+  Keyboard, Modal, Pressable, ScrollView, InteractionManager, LayoutAnimation, Animated, AppState,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
@@ -65,6 +65,8 @@ interface ChatMessage {
 // NEVER infer delivery from DB persistence alone.
 // NEVER transition to delivered/read without a real device ACK.
 const VALID_DELIVERY_STATUSES = new Set<string>(['pending', 'sent', 'delivered', 'read']);
+// Protocol constants at module scope — not recreated per render or handler call.
+const VALID_DELIVERY_STATUS = new Set<string>(['delivered', 'read']);
 
 function normalizeDeliveryStatus(msg: ChatMessage): DeliveryStatus {
   return VALID_DELIVERY_STATUSES.has(msg.delivery_status ?? '')
@@ -95,6 +97,50 @@ export default function CustomerChatScreen() {
   // Kept in sync via useEffect below. Never assign messagesRef.current manually.
   const messagesRef = useRef<ChatMessage[]>([]);
   useEffect(() => { messagesRef.current = messages; }, [messages]);
+
+  // ackedTransportIdsRef: transport_ids successfully ACK'd this screen session.
+  // Populated ONLY after confirmed POST success. Retry triggers re-scan for any not in this Set.
+  // Note: local delivery_status is NOT mutated after ACK — protocol state is owned by the backend.
+  // ackedTransportIdsRef alone is sufficient to prevent duplicate ACK requests.
+  const ackedTransportIdsRef = useRef<Set<string>>(new Set());
+
+  // collectDeliveryAckCandidates: single source of truth for ACK eligibility criteria.
+  // One edit point if criteria change (e.g. adding card messages in future).
+  const collectDeliveryAckCandidates = (source: ChatMessage[]) =>
+    source.filter(
+      (m: ChatMessage) =>
+        m.metadata?.cross_org === true &&
+        m.transport_id &&
+        (m.delivery_status === 'sent' || !m.delivery_status) &&
+        !ackedTransportIdsRef.current.has(m.transport_id as string)
+    );
+
+  // Delivery ACK effect (Protocol v1.0 — B1).
+  // Fires after React commits message state. Covers all admission paths without per-path calls.
+  useEffect(() => {
+    const candidates = collectDeliveryAckCandidates(messages);
+    if (candidates.length > 0) {
+      void sendDeliveryAck(candidates.map((m: ChatMessage) => m.transport_id as string));
+    }
+  }, [messages]);
+
+  // Retry triggers — guarantee eventual delivery ACK if initial POST fails.
+  useEffect(() => {
+    const retryAck = () => {
+      const candidates = collectDeliveryAckCandidates(messagesRef.current);
+      if (candidates.length > 0) {
+        void sendDeliveryAck(candidates.map((m: ChatMessage) => m.transport_id as string));
+      }
+    };
+    // Trigger 1: app comes to foreground (covers offline→online recovery)
+    const sub = AppState.addEventListener('change', state => {
+      if (state === 'active') retryAck();
+    });
+    // Trigger 2: 30-second interval while screen is mounted.
+    // Intentionally coarse — backend is idempotent and delivery ACKs are not latency-sensitive.
+    const interval = setInterval(retryAck, 30000);
+    return () => { sub.remove(); clearInterval(interval); };
+  }, []);
   const [aiMessages, setAiMessages] = useState<ChatMessage[]>([]);
   const [inputText, setInputText] = useState('');
   const [menuVisible, setMenuVisible] = useState(false);
@@ -672,6 +718,14 @@ export default function CustomerChatScreen() {
             }, 500);
           }
         })
+        .on('broadcast', { event: 'message_status_changed' }, (payload: any) => {
+          // Sender side: receives this when receiver ACKs delivery or read.
+          // Updates delivery_status in local state → tick re-renders without re-fetch.
+          const { transport_ids, status } = payload?.payload || {};
+          if (Array.isArray(transport_ids) && typeof status === 'string') {
+            handleMessageStatusChanged(transport_ids, status);
+          }
+        })
         .on(
           'postgres_changes',
           { event: 'INSERT', schema: 'public', table: 'messages', filter: `organisation_id=eq.${orgId}` },
@@ -748,6 +802,46 @@ export default function CustomerChatScreen() {
   // D1: POST /mark-read → markConversationViewed() → read_by_owner=true → badge clears.
   // D2 (future): add sendReadReceipt() call here for cross-org blue tick pipeline.
   // Idempotent: backend markConversationViewed() is a no-op if nothing is unread.
+  // sendDeliveryAck: POSTs transport_ids to /api/protocol/delivery-ack.
+  // On success: marks IDs in ackedTransportIdsRef — prevents duplicate ACKs on retry.
+  // Does NOT mutate local delivery_status — protocol state is owned by the backend,
+  // not inferred from HTTP success. The sender UI receives the authoritative update
+  // via message_status_changed broadcast.
+  const sendDeliveryAck = async (transportIds: string[]) => {
+    try {
+      const token = await getToken();
+      if (!token) return;
+      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+      const res = await fetch(`${backendUrl}/api/protocol/delivery-ack`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ transport_ids: transportIds }),
+      });
+      if (res.ok) {
+        transportIds.forEach(id => ackedTransportIdsRef.current.add(id));
+      }
+    } catch (err) {
+      console.warn('[sendDeliveryAck] Failed — will retry on next trigger:', err);
+    }
+  };
+
+  // handleMessageStatusChanged: in-place delivery_status update when sender receives
+  // message_status_changed broadcast. No re-fetch needed. Drives tick re-render.
+  const handleMessageStatusChanged = (transportIds: string[], status: string) => {
+    if (!VALID_DELIVERY_STATUS.has(status)) {
+      console.warn('[handleMessageStatusChanged] Unknown status:', status);
+      return;
+    }
+    setMessages(prev =>
+      prev.map((m: ChatMessage) => {
+        if (m.transport_id && transportIds.includes(m.transport_id)) {
+          return { ...m, delivery_status: status as DeliveryStatus };
+        }
+        return m;
+      })
+    );
+  };
+
   const onConversationViewed = async () => {
     try {
       const token = await getToken();
