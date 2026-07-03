@@ -1777,6 +1777,79 @@ app.post('/api/chat/:customer_id/message', async (c) => {
   }
 });
 
+// ── Protocol payload validator ──────────────────────────────────────────────
+// Validates and sanitizes an array of transport_ids from a protocol request body.
+// Returns a clean deduplicated array of valid UUID strings, capped at 500.
+function parseTransportIds(rawIds) {
+  if (!Array.isArray(rawIds) || rawIds.length === 0) return [];
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  return [...new Set(rawIds.filter(id => typeof id === 'string' && UUID_RE.test(id)))].slice(0, 500);
+}
+
+// ─── POST /api/protocol/delivery-ack ────────────────────────
+// Message Protocol v1.0 — Part B: Application Commits Message event.
+// Receiver app calls this after new cross-org messages are accepted into local state.
+// Dedup runs before this call — ACK fires only when genuinely new messages arrived.
+//
+// No :customer_id in route — delivery ACK is protocol-scoped, not chat-scoped.
+// receiverOrgId comes from JWT. One batch may cover messages from multiple customers.
+//
+// Payload: { transport_ids: [uuid, ...] }
+// Idempotent, batched, ownership-verified. All state logic in advanceMessageStatus().
+app.post('/api/protocol/delivery-ack', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId: receiverOrgId } = auth;
+
+    const body = await c.req.json().catch(() => ({}));
+    const transportIds = parseTransportIds(body?.transport_ids);
+    if (transportIds.length === 0) return c.json({ ok: true, updated: 0 });
+
+    const result = await advanceMessageStatus({ receiverOrgId, transportIds, toState: 'delivered' });
+
+    for (const [senderOrgId, tids] of Object.entries(result.transportIdsBySenderOrg || {})) {
+      await broadcastMessageStatus(senderOrgId, { transport_ids: tids, status: 'delivered' });
+    }
+
+    return c.json({ ok: true, updated: result.updated });
+  } catch (error) {
+    console.error('[POST /protocol/delivery-ack] error:', error.message);
+    return c.json({ error: 'server_error' }, 500);
+  }
+});
+
+// ─── POST /api/protocol/read-receipt ────────────────────────
+// Message Protocol v1.0 — Part B: Conversation Viewed event.
+// Called from onConversationViewed() when conversation is visible to owner.
+// Rule: marks every cross-org message in local state as read (by transport_id).
+// Handles both sent→read and delivered→read paths via state machine.
+//
+// Payload: { transport_ids: [uuid, ...] }
+// Idempotent, batched, ownership-verified. All state logic in advanceMessageStatus().
+app.post('/api/protocol/read-receipt', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId: receiverOrgId } = auth;
+
+    const body = await c.req.json().catch(() => ({}));
+    const transportIds = parseTransportIds(body?.transport_ids);
+    if (transportIds.length === 0) return c.json({ ok: true, updated: 0 });
+
+    const result = await advanceMessageStatus({ receiverOrgId, transportIds, toState: 'read' });
+
+    for (const [senderOrgId, tids] of Object.entries(result.transportIdsBySenderOrg || {})) {
+      await broadcastMessageStatus(senderOrgId, { transport_ids: tids, status: 'read' });
+    }
+
+    return c.json({ ok: true, updated: result.updated });
+  } catch (error) {
+    console.error('[POST /protocol/read-receipt] error:', error.message);
+    return c.json({ error: 'server_error' }, 500);
+  }
+});
+
 // ─── POST /api/chat/:customer_id/mark-read ─────────────────
 // Called by onConversationViewed() when incoming messages are rendered
 // while the chat is already open. Idempotent — safe on every realtime event.
