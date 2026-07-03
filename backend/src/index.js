@@ -1430,6 +1430,10 @@ app.post('/api/chat/:customer_id/message', async (c) => {
       frontendMetadata.message_type === 'file' ? '📄 Document' :
       content.length > 50 ? content.substring(0, 50) + '...' : content;
 
+    // Message Identity Doctrine (Protocol v1.0): generate transport_id once, reuse in mirror.
+    // A1a rollout: cross-org DM paths covered here. Remaining paths covered in A1b.
+    const transportId = crypto.randomUUID();
+
     const { data: savedMsg, error: saveErr } = await supabase
       .from('messages')
       .insert({
@@ -1443,11 +1447,13 @@ app.post('/api/chat/:customer_id/message', async (c) => {
           visibility: 'both',
           read_by_owner: true,
           preview_text: previewText,
+          mirror: false,
         },
+        transport_id: transportId,
         tokens_input: 0,
         tokens_output: 0,
       })
-      .select('id, created_at, metadata')
+      .select('id, created_at, metadata, transport_id')
       .single();
 
     if (saveErr) {
@@ -1464,7 +1470,11 @@ app.post('/api/chat/:customer_id/message', async (c) => {
     const savedMessageId = savedMsg.id;
     const normalizePhone = (p) => p ? p.replace(/\D/g, '').padStart(12, '').slice(-12).replace(/^0+/, '') : null;
 
-    if (customerPhone) {
+    if (!savedMsg.transport_id) {
+      // Protocol invariant: cross-org routing requires transport_id.
+      // A message without identity cannot be mirrored — mirrors inherit, never generate.
+      console.error('[PROTOCOL VIOLATION] transport_id absent on sender message. Cross-org routing skipped. ID:', savedMessageId);
+    } else if (customerPhone) {
       try {
         const normalizedCustomerPhone = normalizePhone(customerPhone);
         // Look up if any AssistMe user has this phone number
@@ -1562,8 +1572,10 @@ app.post('/api/chat/:customer_id/message', async (c) => {
                     read_by_owner: false,
                     cross_org: true,
                     sender_org_id: organisationId,
+                    mirror: true,
                   },
                   delivery_status: 'sent',
+                  transport_id: transportId,
                   tokens_input: 0,
                   tokens_output: 0,
                 });
@@ -6354,6 +6366,7 @@ async function insertAlert(orgId, convId, content, meta) {
   const result = await supabase.from('messages').insert({
     organisation_id: orgId, conversation_id: convId, role: 'system', content,
     tokens_input: 0, tokens_output: 0,
+    transport_id: crypto.randomUUID(),
     metadata: { sender_type: 'system', visibility: 'owner_only', message_type: 'system_alert', read_by_owner: false, preview_text: content.slice(0, 50), ...meta },
   });
 
