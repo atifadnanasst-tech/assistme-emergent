@@ -1468,6 +1468,8 @@ app.post('/api/chat/:customer_id/message', async (c) => {
     // After saving message to sender's org, check if receiver is also an AssistMe user
     const customerPhone = customer?.phone;
     const savedMessageId = savedMsg.id;
+    // DIAGNOSTIC — remove after cross-org regression diagnosed
+    console.log('[DIAG-1]', { transportIdLocal: transportId, transportIdReturned: savedMsg?.transport_id, customerPhone });
     const normalizePhone = (p) => p ? p.replace(/\D/g, '').padStart(12, '').slice(-12).replace(/^0+/, '') : null;
 
     if (!savedMsg.transport_id) {
@@ -1484,6 +1486,8 @@ app.post('/api/chat/:customer_id/message', async (c) => {
           .neq('organisation_id', organisationId);
         const receiverUser = (allUsers || []).find(u => normalizePhone(u.phone) === normalizedCustomerPhone) || null;
 
+        // DIAGNOSTIC — remove after diagnosis
+        console.log('[DIAG-2]', { receiverFound: !!receiverUser, receiverOrg: receiverUser?.organisation_id });
         if (receiverUser && receiverUser.organisation_id !== organisationId) {
           // Receiver is an AssistMe user in a different org
           // Find or create a conversation in their org for the sender's phone
@@ -1557,8 +1561,10 @@ app.post('/api/chat/:customer_id/message', async (c) => {
                 console.log('[CROSS-ORG] Auto-created conversation in receiver org:', newConv?.id);
               }
 
+              // DIAGNOSTIC — remove after diagnosis
+              console.log('[DIAG-3]', { conversationFound: !!receiverConversation, conversationId: receiverConversation?.id, senderConvId: conversationId });
               if (receiverConversation) {
-                await supabase.from('messages').insert({
+                const { data: mirrorData, error: mirrorError } = await supabase.from('messages').insert({
                   organisation_id: receiverUser.organisation_id,
                   conversation_id: receiverConversation.id,
                   role: 'user',
@@ -1578,7 +1584,9 @@ app.post('/api/chat/:customer_id/message', async (c) => {
                   transport_id: transportId,
                   tokens_input: 0,
                   tokens_output: 0,
-                });
+                }).select('id, transport_id');
+                // DIAGNOSTIC — remove after diagnosis
+                console.log('[DIAG-4]', { receiverOrg: receiverUser.organisation_id, receiverConversation: receiverConversation.id, mirrorError, mirrorId: mirrorData?.[0]?.id, mirrorTransportId: mirrorData?.[0]?.transport_id });
 
                 console.log('[CROSS-ORG] Message routed to org:', receiverUser.organisation_id);
                 await broadcastNewMessage(receiverUser.organisation_id, { conversation_id: receiverConversation.id });
