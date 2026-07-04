@@ -109,6 +109,19 @@ export default function CustomerChatScreen() {
   const collectDeliveryAckCandidates = (source: ChatMessage[]) => {
     // DIAGNOSTIC — remove after ACK debugging
     source.forEach((m: ChatMessage) => {
+      const eligible =
+        m.metadata?.cross_org === true &&
+        !!m.transport_id &&
+        (m.delivery_status === 'sent' || !m.delivery_status) &&
+        !ackedTransportIdsRef.current.has(m.transport_id ?? '');
+      console.log(
+        `[DIAG-ACK] id=${m.id?.slice(-6)}` +
+        ` transport=${m.transport_id ?? 'null'}` +
+        ` crossOrg=${String(m.metadata?.cross_org)} crossOrgType=${typeof m.metadata?.cross_org}` +
+        ` status=${m.delivery_status} statusType=${typeof m.delivery_status}` +
+        ` acked=${ackedTransportIdsRef.current.has(m.transport_id ?? '')}` +
+        ` eligible=${eligible}`
+      );
       console.log('[DIAG-ACK]', {
         id: m.id?.slice(-6),
         role: m.role,
@@ -136,6 +149,7 @@ export default function CustomerChatScreen() {
   // Fires after React commits message state. Covers all admission paths without per-path calls.
   useEffect(() => {
     const candidates = collectDeliveryAckCandidates(messages);
+    console.log(`[DIAG-ACK] candidates=${candidates.length}`);
     if (candidates.length > 0) {
       void sendDeliveryAck(candidates.map((m: ChatMessage) => m.transport_id as string));
     }
@@ -829,8 +843,7 @@ export default function CustomerChatScreen() {
       const token = await getToken();
       if (!token) return;
       const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
-      // DIAGNOSTIC — remove after ACK debugging
-      console.log('[DIAG-ACK] POST firing with transport_ids:', transportIds);
+      console.log(`[DIAG-ACK-POST] ids=${transportIds.join(',')}`);
       const res = await fetch(`${backendUrl}/api/protocol/delivery-ack`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
