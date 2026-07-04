@@ -204,6 +204,10 @@ async function advanceMessageStatus({ receiverOrgId, transportIds, toState }) {
 
   // DIAGNOSTIC — remove after debugging
   console.log('[ACK-MIRRORS]', { receiverOrg: receiverOrgId, found: mirrorRows?.length ?? 0, transportIdsQueried: transportIds.length });
+  if (mirrorRows?.length > 0) {
+    const r = mirrorRows[0];
+    console.log('[ACK-ROW]', { transport_id: r.transport_id, metadata: r.metadata, senderOrgId: r.metadata?.sender_org_id });
+  }
   if (!mirrorRows || mirrorRows.length === 0) {
     console.warn('[advanceMessageStatus] No verified mirror rows for receiverOrg:', receiverOrgId);
     return { updated: 0, transportIdsBySenderOrg: {} };
@@ -1822,13 +1826,15 @@ app.post('/api/protocol/delivery-ack', async (c) => {
     if (transportIds.length === 0) return c.json({ ok: true, updated: 0 });
 
     const result = await advanceMessageStatus({ receiverOrgId, transportIds, toState: 'delivered' });
-
+    // DIAGNOSTIC — remove after debugging
+    console.log('[ACK-ADVANCE]', { received: transportIds.length, updated: result.updated, senderOrgCount: Object.keys(result.transportIdsBySenderOrg || {}).length, senderTransportCount: Object.values(result.transportIdsBySenderOrg || {}).flat().length });
     for (const [senderOrgId, tids] of Object.entries(result.transportIdsBySenderOrg || {})) {
       await broadcastMessageStatus(senderOrgId, { transport_ids: tids, status: 'delivered' });
     }
 
     return c.json({ ok: true, updated: result.updated });
   } catch (error) {
+    console.error('[ACK-ERROR]', error.message, error.stack?.split('\n')[1]);
     console.error('[POST /protocol/delivery-ack] error:', error.message);
     return c.json({ error: 'server_error' }, 500);
   }
