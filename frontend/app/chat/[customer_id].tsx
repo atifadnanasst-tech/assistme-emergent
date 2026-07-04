@@ -765,6 +765,8 @@ export default function CustomerChatScreen() {
           // Sender side: receives this when receiver ACKs delivery or read.
           // Updates delivery_status in local state → tick re-renders without re-fetch.
           const { transport_ids, status } = payload?.payload || {};
+          // DIAGNOSTIC — remove after debugging
+          console.log('[DIAG-STATUS]', { status, count: transport_ids?.length, first: transport_ids?.[0] });
           if (Array.isArray(transport_ids) && typeof status === 'string') {
             handleMessageStatusChanged(transport_ids, status);
           }
@@ -878,6 +880,9 @@ export default function CustomerChatScreen() {
       console.warn('[handleMessageStatusChanged] Unknown status:', status);
       return;
     }
+    // DIAGNOSTIC — remove after debugging
+    const beforeMsg = messagesRef.current.find((m: ChatMessage) => m.transport_id === transportIds[0]);
+    console.log('[DIAG-STATUS-APPLY]', { first: transportIds[0], before: beforeMsg?.delivery_status, found: !!beforeMsg });
     setMessages(prev =>
       prev.map((m: ChatMessage) => {
         if (m.transport_id && transportIds.includes(m.transport_id)) {
