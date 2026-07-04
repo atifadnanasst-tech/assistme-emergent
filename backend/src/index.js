@@ -1442,6 +1442,11 @@ app.get('/api/chat/:customer_id', async (c) => {
       if (markRead) await markConversationViewed(conversation.id);
     }
 
+    // DIAGNOSTIC — remove after debugging
+    const crossOrgSample = messages.find(m => m.metadata?.cross_org === true);
+    console.log('[GET-SAMPLE]', crossOrgSample
+      ? { id: crossOrgSample.id, cross_org: crossOrgSample.metadata?.cross_org, transport_id: crossOrgSample.transport_id, meta_keys: Object.keys(crossOrgSample.metadata || {}).join(',') }
+      : 'NO_CROSS_ORG_MESSAGE_IN_RESPONSE');
     return c.json({
       conversation_id: conversation.id,
       customer: {
