@@ -202,6 +202,8 @@ async function advanceMessageStatus({ receiverOrgId, transportIds, toState }) {
 
   if (mirrorErr) throw new Error(`[advanceMessageStatus] Mirror lookup failed: ${mirrorErr.message}`);
 
+  // DIAGNOSTIC — remove after debugging
+  console.log('[ACK-MIRRORS]', { receiverOrg: receiverOrgId, found: mirrorRows?.length ?? 0, transportIdsQueried: transportIds.length });
   if (!mirrorRows || mirrorRows.length === 0) {
     console.warn('[advanceMessageStatus] No verified mirror rows for receiverOrg:', receiverOrgId);
     return { updated: 0, transportIdsBySenderOrg: {} };
