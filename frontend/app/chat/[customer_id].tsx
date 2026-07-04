@@ -844,6 +844,8 @@ export default function CustomerChatScreen() {
       if (!token) return;
       const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
       console.log(`[DIAG-ACK-POST] ids=${transportIds.join(',')}`);
+      // DIAGNOSTIC — remove after debugging
+      console.log(`[DIAG-ACK-URL] url=${backendUrl}/api/protocol/delivery-ack tokenPresent=${!!token}`);
       const res = await fetch(`${backendUrl}/api/protocol/delivery-ack`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },

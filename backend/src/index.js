@@ -1801,8 +1801,12 @@ function parseTransportIds(rawIds) {
 // Payload: { transport_ids: [uuid, ...] }
 // Idempotent, batched, ownership-verified. All state logic in advanceMessageStatus().
 app.post('/api/protocol/delivery-ack', async (c) => {
+  // DIAGNOSTIC — remove after debugging
+  console.log('[ACK-ROUTE]', { method: c.req.method, url: c.req.url, auth: c.req.header('authorization') ? 'present' : 'missing' });
   try {
     const auth = await authenticateChat(c);
+    // DIAGNOSTIC — remove after debugging
+    console.log('[ACK-AUTH]', auth ? 'SUCCESS org=' + auth.organisationId : 'FAILED');
     if (!auth) return c.json({ error: 'unauthorized' }, 401);
     const { organisationId: receiverOrgId } = auth;
 
