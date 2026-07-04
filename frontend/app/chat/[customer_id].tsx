@@ -108,6 +108,18 @@ export default function CustomerChatScreen() {
   // One edit point if criteria change (e.g. adding card messages in future).
   const collectDeliveryAckCandidates = (source: ChatMessage[]) => {
     // DIAGNOSTIC — remove after ACK debugging
+    const crossOrgMessages = source.filter((m: any) => m.metadata?.cross_org === true);
+    console.log('[DIAG-ACK-SRC]', {
+      total: source.length,
+      crossOrg: crossOrgMessages.length,
+      withTransport: source.filter((m: any) => !!m.transport_id).length,
+      sampleIds: source.slice(0, 5).map((m: any) => ({
+        id: m.id?.slice(-6),
+        role: m.role,
+        transport: !!m.transport_id,
+        cross_org: m.metadata?.cross_org,
+      })),
+    });
     source.forEach((m: ChatMessage) => {
       const eligible =
         m.metadata?.cross_org === true &&
