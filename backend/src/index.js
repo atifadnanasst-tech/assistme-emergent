@@ -1398,7 +1398,7 @@ app.get('/api/chat/:customer_id', async (c) => {
       const before = c.req.query('before');
       let query = supabase
         .from('messages')
-        .select('id, role, content, metadata, created_at, delivery_status')
+        .select('id, role, content, metadata, created_at, delivery_status, transport_id')
         .eq('conversation_id', conversation.id)
         .or('metadata->>message_type.is.null,metadata->>message_type.not.in.(ai_query,ai_response,action_card)')
         .is('deleted_at', null)
