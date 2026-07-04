@@ -106,14 +106,31 @@ export default function CustomerChatScreen() {
 
   // collectDeliveryAckCandidates: single source of truth for ACK eligibility criteria.
   // One edit point if criteria change (e.g. adding card messages in future).
-  const collectDeliveryAckCandidates = (source: ChatMessage[]) =>
-    source.filter(
+  const collectDeliveryAckCandidates = (source: ChatMessage[]) => {
+    // DIAGNOSTIC — remove after ACK debugging
+    source.forEach((m: ChatMessage) => {
+      console.log('[DIAG-ACK]', {
+        id: m.id?.slice(-6),
+        role: m.role,
+        transport_id: m.transport_id,
+        cross_org: m.metadata?.cross_org,
+        delivery_status: m.delivery_status,
+        alreadyAcked: ackedTransportIdsRef.current.has(m.transport_id ?? ''),
+        eligible:
+          m.metadata?.cross_org === true &&
+          !!m.transport_id &&
+          (m.delivery_status === 'sent' || !m.delivery_status) &&
+          !ackedTransportIdsRef.current.has(m.transport_id ?? ''),
+      });
+    });
+    return source.filter(
       (m: ChatMessage) =>
         m.metadata?.cross_org === true &&
         m.transport_id &&
         (m.delivery_status === 'sent' || !m.delivery_status) &&
         !ackedTransportIdsRef.current.has(m.transport_id as string)
     );
+  };
 
   // Delivery ACK effect (Protocol v1.0 — B1).
   // Fires after React commits message state. Covers all admission paths without per-path calls.
@@ -812,6 +829,8 @@ export default function CustomerChatScreen() {
       const token = await getToken();
       if (!token) return;
       const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+      // DIAGNOSTIC — remove after ACK debugging
+      console.log('[DIAG-ACK] POST firing with transport_ids:', transportIds);
       const res = await fetch(`${backendUrl}/api/protocol/delivery-ack`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
