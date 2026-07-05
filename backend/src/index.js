@@ -134,13 +134,14 @@ const DELIVERY_STATUS_TRANSITIONS = {
 // Broadcasts represent committed state — never fire before the UPDATE succeeds.
 async function broadcastMessageStatus(orgId, payload) {
   try {
-    await supabase.channel('org-' + orgId).send({
+    const result = await supabase.channel('org-' + orgId).send({
       type: 'broadcast',
       event: 'message_status_changed',
       payload,
     });
+    console.log(`[ACK-BROADCAST] result=${JSON.stringify(result)} orgId=${orgId} transportCount=${payload?.transport_ids?.length} firstTransport=${payload?.transport_ids?.[0]}`);
   } catch (err) {
-    console.warn('[broadcastMessageStatus] Failed (non-fatal):', err.message);
+    console.warn('[broadcastMessageStatus] Failed:', err.message);
   }
 }
 
@@ -1784,7 +1785,7 @@ app.post('/api/chat/:customer_id/message', async (c) => {
       }
     }
 
-    return c.json({ message_id: savedMsg.id, created_at: savedMsg.created_at, delivery_status: 'sent' });
+    return c.json({ message_id: savedMsg.id, created_at: savedMsg.created_at, delivery_status: 'sent', transport_id: savedMsg.transport_id || null });
 
   } catch (error) {
     console.error('POST /api/chat/message error:', error);

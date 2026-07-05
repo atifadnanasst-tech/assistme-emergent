@@ -1087,7 +1087,7 @@ export default function CustomerChatScreen() {
       if (res.ok) {
         const data = await res.json();
         setMessages(prev => prev.map(m =>
-          m.id === tempId ? { ...m, id: data.message_id, created_at: data.created_at, delivery_status: 'sent', content: data.content || m.content, metadata: data.metadata || m.metadata || {} } : m
+          m.id === tempId ? { ...m, id: data.message_id, created_at: data.created_at, delivery_status: 'sent', content: data.content || m.content, metadata: data.metadata || m.metadata || {}, transport_id: data.transport_id || m.transport_id } : m
         ));
         setAttachmentPreview(null);
       } else {
