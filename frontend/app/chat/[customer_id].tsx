@@ -845,8 +845,45 @@ export default function CustomerChatScreen() {
   // onConversationViewed — orchestrator for conversation visibility consequences.
   // Fires only when new messages were accepted into local conversation state.
   // D1: POST /mark-read → markConversationViewed() → read_by_owner=true → badge clears.
-  // D2 (future): add sendReadReceipt() call here for cross-org blue tick pipeline.
+  // B3: send read receipt for all eligible cross-org messages when conversation is viewed.
   // Idempotent: backend markConversationViewed() is a no-op if nothing is unread.
+  // readReceiptedRef: in-memory Set of transport_ids read-receipted this session.
+  // Populated only after confirmed POST success — same pattern as ackedTransportIdsRef.
+  const readReceiptedRef = useRef<Set<string>>(new Set());
+
+  // sendReadReceipt: POSTs transport_ids to /api/protocol/read-receipt.
+  // Called from onConversationViewed() — never call directly.
+  // Marks sender's messages as read (blue tick). Only fires for cross-org messages.
+  const sendReadReceipt = async (transportIds: string[]) => {
+    try {
+      const token = await getToken();
+      if (!token) return;
+      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+      const res = await fetch(`${backendUrl}/api/protocol/read-receipt`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ transport_ids: transportIds }),
+      });
+      if (res.ok) {
+        transportIds.forEach(id => readReceiptedRef.current.add(id));
+      }
+    } catch (err) {
+      console.warn('[sendReadReceipt] Failed (non-fatal):', err);
+    }
+  };
+
+  // collectReadReceiptCandidates: cross-org messages eligible for read receipt.
+  // Candidates: cross_org=true, transport_id present, sent OR delivered (not yet read),
+  // not already read-receipted this session.
+  const collectReadReceiptCandidates = (source: ChatMessage[]) =>
+    source.filter(
+      (m: ChatMessage) =>
+        m.metadata?.cross_org === true &&
+        m.transport_id &&
+        (m.delivery_status === 'sent' || m.delivery_status === 'delivered') &&
+        !readReceiptedRef.current.has(m.transport_id as string)
+    );
+
   // sendDeliveryAck: POSTs transport_ids to /api/protocol/delivery-ack.
   // On success: marks IDs in ackedTransportIdsRef — prevents duplicate ACKs on retry.
   // Does NOT mutate local delivery_status — protocol state is owned by the backend,
@@ -894,6 +931,11 @@ export default function CustomerChatScreen() {
   };
 
   const onConversationViewed = async () => {
+    // B3 — Read receipt: fire for cross-org messages when conversation is viewed.
+    const readCandidates = collectReadReceiptCandidates(messagesRef.current);
+    if (readCandidates.length > 0) {
+      void sendReadReceipt(readCandidates.map((m: ChatMessage) => m.transport_id as string));
+    }
     try {
       const token = await getToken();
       if (!token || !customer_id) return;
