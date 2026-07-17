@@ -619,7 +619,7 @@ export default function HomeScreen() {
         <Ionicons name={fabExpanded ? 'close' : 'add'} size={28} color="#FFFFFF" />
       </TouchableOpacity>
 
-      <Text style={{ textAlign: "center", fontSize: 10, color: "#CCC", paddingVertical: 2 }}>v1.3.393</Text>
+      <Text style={{ textAlign: "center", fontSize: 10, color: "#CCC", paddingVertical: 2 }}>v1.3.394</Text>
       {/* Bottom Navigation SafeAreaView */}
       <SafeAreaView style={styles.bottomNavSafeArea} edges={['bottom']}>
         <View style={styles.bottomNav}>
@@ -892,25 +892,25 @@ const styles = StyleSheet.create({
   filterTab: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FFFFFF',
+    backgroundColor: '#075E54',
     borderWidth: 1,
-    borderColor: '#075E54',
+    borderColor: '#FFFFFF',
     borderRadius: 20,
     paddingVertical: 8,
     paddingHorizontal: 16,
     marginRight: 8,
   },
   filterTabActive: {
-    backgroundColor: '#075E54',
-    borderColor: '#FFFFFF',
+    backgroundColor: '#FFFFFF',
+    borderColor: '#075E54',
   },
   filterTabText: {
     fontSize: 14,
-    color: '#075E54',
+    color: '#FFFFFF',
     fontWeight: '500',
   },
   filterTabTextActive: {
-    color: '#FFFFFF',
+    color: '#075E54',
   },
   tabBadge: {
     backgroundColor: '#D32F2F',
