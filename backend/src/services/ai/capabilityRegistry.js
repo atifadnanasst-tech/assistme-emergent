@@ -125,6 +125,10 @@ export const CAPABILITY_REGISTRY = {
     version: 1,
     description: 'Adjust stock quantity for one or more products.',
     confirmation: 'always',
+    // MUTED FOR v1 -- no execution wiring exists yet (no capability
+    // function, no execute-plan branch). See ASSISTME_V2_ARCHITECTURAL_BACKLOG.md
+    // -> "Org AI v1-Completion". Full definition kept for post-v1 activation.
+    mvp_muted: true,
     scope: ['org', 'ops', 'procurement', 'products'],
     is_financial: false,
     middleware_fn: 'mutateInventory',
@@ -135,6 +139,8 @@ export const CAPABILITY_REGISTRY = {
     version: 1,
     description: 'Create, update, complete, or cancel a task.',
     confirmation: 'preview',
+    // MUTED FOR v1 -- see mutate_inventory above for rationale.
+    mvp_muted: true,
     scope: ['org', 'ops'],
     is_financial: false,
     middleware_fn: 'mutateTask',
@@ -145,6 +151,8 @@ export const CAPABILITY_REGISTRY = {
     version: 1,
     description: 'Create or update a customer profile: name, phone, address, credit limit.',
     confirmation: 'always',
+    // MUTED FOR v1 -- see mutate_inventory above for rationale.
+    mvp_muted: true,
     scope: ['org', 'customers'],
     is_financial: false,
     middleware_fn: 'mutateCustomer',
@@ -186,6 +194,8 @@ export const CAPABILITY_REGISTRY = {
     version: 1,
     description: 'Create, edit, send, or convert a quotation to invoice.',
     confirmation: 'always',
+    // MUTED FOR v1 -- see mutate_inventory above for rationale.
+    mvp_muted: true,
     scope: ['org', 'finance'],
     is_financial: true,
     middleware_fn: 'mutateQuotation',
@@ -216,6 +226,8 @@ export const CAPABILITY_REGISTRY = {
     version: 1,
     description: 'Log a business expense with category, amount, date.',
     confirmation: 'always',
+    // MUTED FOR v1 -- see mutate_inventory above for rationale.
+    mvp_muted: true,
     scope: ['org', 'finance'],
     is_financial: true,
     middleware_fn: 'mutateExpense',
@@ -226,6 +238,8 @@ export const CAPABILITY_REGISTRY = {
     version: 1,
     description: 'Create or update a supplier profile.',
     confirmation: 'preview',
+    // MUTED FOR v1 -- see mutate_inventory above for rationale.
+    mvp_muted: true,
     scope: ['org', 'procurement'],
     is_financial: false,
     middleware_fn: 'mutateSupplier',
@@ -236,6 +250,8 @@ export const CAPABILITY_REGISTRY = {
     version: 1,
     description: 'Add or remove tags on customers or products. Use for "VIP tag lagao", "ABC ko regular mark karo".',
     confirmation: 'never',
+    // MUTED FOR v1 -- see mutate_inventory above for rationale.
+    mvp_muted: true,
     scope: ['org', 'customers', 'products'],
     is_financial: false,
     middleware_fn: 'mutateTags',
@@ -246,6 +262,8 @@ export const CAPABILITY_REGISTRY = {
     version: 1,
     description: 'Send payment reminder to customers with outstanding invoices. Use for "reminder bhejo", "ABC ko payment ke liye message karo".',
     confirmation: 'always',
+    // MUTED FOR v1 -- see mutate_inventory above for rationale.
+    mvp_muted: true,
     scope: ['org', 'finance', 'customers'],
     is_financial: false,
     middleware_fn: 'sendPaymentReminder',
@@ -256,6 +274,8 @@ export const CAPABILITY_REGISTRY = {
     version: 1,
     description: 'Generate a PDF: invoice, quote, or product catalog. Use for "catalog banao", "invoice PDF nikalo".',
     confirmation: 'never',
+    // MUTED FOR v1 -- see mutate_inventory above for rationale.
+    mvp_muted: true,
     scope: ['org', 'finance', 'products'],
     is_financial: false,
     middleware_fn: 'generateDocument',
@@ -266,6 +286,10 @@ export const CAPABILITY_REGISTRY = {
     version: 1,
     description: 'Set a time-based reminder for a task or follow-up. Use for "kal remind karna", "Monday ko ABC ke liye reminder".',
     confirmation: 'preview',
+    // MUTED FOR v1 -- see mutate_inventory above for rationale. Note:
+    // Spark's set_reminder is a SEPARATE, already-working pipeline --
+    // this mute only affects the Org AI planner surface.
+    mvp_muted: true,
     scope: ['org', 'ops'],
     is_financial: false,
     middleware_fn: 'setReminder',
@@ -275,6 +299,11 @@ export const CAPABILITY_REGISTRY = {
 
 export function getCapabilitiesForScope(scope = 'org') {
   return Object.entries(CAPABILITY_REGISTRY)
+    // mvp_muted capabilities are excluded from what the planner is told
+    // it can do -- see ASSISTME_V2_ARCHITECTURAL_BACKLOG.md -> "Org AI
+    // v1-Completion". Full definitions remain in the registry for a clean
+    // post-v1 activation (just flip mvp_muted off, nothing else to change).
+    .filter(([, def]) => !def.mvp_muted)
     .filter(([, def]) => def.scope.includes('org') || def.scope.includes(scope))
     .map(([name, def]) => ({
       name,

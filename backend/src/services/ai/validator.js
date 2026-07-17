@@ -60,6 +60,19 @@ export async function validatePlan({ plan, userPrompt, orgId, scope, supabase })
       continue;
     }
 
+    // Defense-in-depth: mvp_muted capabilities are already filtered out of
+    // what the planner is told it can use (capabilityRegistry.js), so this
+    // should never trigger in normal operation. Guards against a muted
+    // capability name leaking through via conversation history or a stale
+    // client -- treated the same as an unknown capability, never silently
+    // included in a valid plan.
+    if (cap.mvp_muted) {
+      unknownCapabilities.push(capName);
+      console.warn('[MUTED_CAPABILITY]', capName, '| org:', orgId);
+      await logMissingCapability({ supabase, orgId, userPrompt, detectedIntent: capName });
+      continue;
+    }
+
     if (step.params !== null && typeof step.params !== 'object') {
       warnings.push(`${capName}: params coerced to {}`);
       step.params = {};

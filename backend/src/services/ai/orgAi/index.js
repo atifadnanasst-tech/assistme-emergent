@@ -495,13 +495,21 @@ export async function topCustomers(supabase, orgId, orgCurrency, openai, languag
   }
 
   // Step 6: GPT narration
-  const response_text = await narrate({
+  // Deterministic label prefix -- guarantees the owner always reads the
+  // correct metric name regardless of model wording, even if the LLM
+  // narration below still drifts despite the strengthened prompt. See
+  // ASSISTME_V2_ARCHITECTURAL_BACKLOG.md -> "Org AI Financial Narration
+  // Mislabeling" for the bug this fixes (revenue was being mislabeled as
+  // outstanding balance in the actual chat response).
+  const rawNarration = await narrate({
     ranked: ranked.slice(0, 3),
     grandTotal,
     currency: orgCurrency,
     topName: ranked[0]?.name,
     topAmount: ranked[0]?.total,
   }, 'top_customers', openai, { language });
+  const response_text = `📈 Top customers by revenue this month:
+${rawNarration}`;
 
   console.log('[orgAi] topCustomers ms=' + (Date.now() - start));
   return { response_text, chart_data, next_action };
