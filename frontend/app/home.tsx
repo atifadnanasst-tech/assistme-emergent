@@ -62,6 +62,9 @@ interface HomeData {
   insight_cards: InsightCard[];
   filter_tabs: FilterTab[];
   conversations: Conversation[];
+  has_more?: boolean;
+  next_offset?: number | null;
+  returned?: number;
   subscription_plan?: string;
   language?: string | null;
 }
@@ -81,6 +84,10 @@ export default function HomeScreen() {
   const [fabExpanded, setFabExpanded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  // Home screen pagination (v1.3.397) -- tracked separately from
+  // loading/refreshing so the footer spinner only shows for "load more",
+  // not for the initial load or pull-to-refresh.
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [activeTab, setActiveTab] = useState<string | null>(null);
   const [showThreeDotMenu, setShowThreeDotMenu] = useState(false);
   const [showToolsSheet, setShowToolsSheet] = useState(false);
@@ -290,6 +297,75 @@ export default function HomeScreen() {
     } finally {
       setLoading(false);
       setRefreshing(false);
+    }
+  };
+
+  // Home screen pagination (v1.3.397). See
+  // ASSISTME_V2_ARCHITECTURAL_BACKLOG.md -> "Home Screen Pagination /
+  // Enrichment Cost". Unlike loadHomeData (which replaces homeData
+  // entirely -- used for initial load, refresh, and tab switches), this
+  // APPENDS the next page onto the existing conversations list, since
+  // filter_tabs/insight_strip/insight_cards don't change page to page.
+  const loadMoreConversations = async () => {
+    if (isLoadingMore || !homeData?.has_more || homeData?.next_offset == null) {
+      return;
+    }
+
+    setIsLoadingMore(true);
+    try {
+      let token = await authService.getAccessToken();
+      if (!token) {
+        setIsLoadingMore(false);
+        return;
+      }
+
+      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+      const filterTab = activeTab && activeTab !== 'all' ? activeTab : undefined;
+      const base = filterTab
+        ? `${backendUrl}/api/home?filter=${filterTab}`
+        : `${backendUrl}/api/home`;
+      const url = `${base}${filterTab ? '&' : '?'}offset=${homeData.next_offset}`;
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+      const response = await fetch(url, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        throw new Error('Failed to load more conversations');
+      }
+
+      const data: HomeData = await response.json();
+
+      setHomeData(prev => {
+        if (!prev) return data;
+        return {
+          ...prev,
+          conversations: [...prev.conversations, ...(data.conversations || [])],
+          has_more: data.has_more,
+          next_offset: data.next_offset,
+          returned: (prev.returned ?? prev.conversations.length) + (data.returned ?? (data.conversations || []).length),
+        };
+      });
+
+      if (data.conversations && data.conversations.length > 0) {
+        syncContactNames(data.conversations);
+      }
+    } catch (error) {
+      if (error.name === 'AbortError') {
+        console.warn('Load more timeout');
+      } else {
+        console.error('Load more conversations error:', error);
+      }
+    } finally {
+      setIsLoadingMore(false);
     }
   };
 
@@ -560,6 +636,8 @@ export default function HomeScreen() {
         renderItem={renderConversationItem}
         keyExtractor={(item) => item.customer_id}
         onScrollBeginDrag={() => setInsightExpanded(false)}
+        onEndReached={loadMoreConversations}
+        onEndReachedThreshold={0.5}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -575,6 +653,13 @@ export default function HomeScreen() {
               Add your first customer to get started
             </Text>
           </View>
+        }
+        ListFooterComponent={
+          isLoadingMore ? (
+            <View style={{ paddingVertical: 20 }}>
+              <ActivityIndicator size="small" color="#075E54" />
+            </View>
+          ) : null
         }
         contentContainerStyle={conversations.length === 0 && styles.emptyListContent}
       />
@@ -619,7 +704,7 @@ export default function HomeScreen() {
         <Ionicons name={fabExpanded ? 'close' : 'add'} size={28} color="#FFFFFF" />
       </TouchableOpacity>
 
-      <Text style={{ textAlign: "center", fontSize: 10, color: "#CCC", paddingVertical: 2 }}>v1.3.396</Text>
+      <Text style={{ textAlign: "center", fontSize: 10, color: "#CCC", paddingVertical: 2 }}>v1.3.397</Text>
       {/* Bottom Navigation SafeAreaView */}
       <SafeAreaView style={styles.bottomNavSafeArea} edges={['bottom']}>
         <View style={styles.bottomNav}>
