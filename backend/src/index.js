@@ -654,6 +654,7 @@ app.get('/api/home', async (c) => {
     const organisationId = userRecord.organisation_id;
     const filterTagId = c.req.query('filter');
     const limit = parseInt(c.req.query('limit') || '50', 10);
+    const offset = parseInt(c.req.query('offset') || '0', 10);
 
     // Fetch organisation-level fields (subscription_plan)
     let subscriptionPlan = 'free';
@@ -913,9 +914,23 @@ app.get('/api/home', async (c) => {
       console.warn('Insight strip query failed:', err);
     }
 
-    // Assemble conversation list with UI-ready fields
-    const conversationList = [];
+    // ── Home Screen Pipeline — staged (v1.3.396) ───────────────────────
+    // See ASSISTME_V2_ARCHITECTURAL_BACKLOG.md -> "Home Screen Pagination /
+    // Enrichment Cost". Sort/paginate BEFORE enrichment so the expensive
+    // per-conversation queries (overdue-invoice check, unread count) run on
+    // at most `limit` conversations, not the entire list. This is possible
+    // now because the get_latest_messages_per_conversation RPC gives every
+    // conversation a timestamp to sort by without touching every message.
 
+    // Single place to update when v2 introduces conversations.last_message_at
+    // as a maintained summary field -- only this function needs to change.
+    function getConversationSortTimestamp(latestMsg, customer) {
+      return latestMsg ? latestMsg.created_at : customer.created_at;
+    }
+
+    // Stage 2 — lightweight, unenriched view model (no queries — everything
+    // here is already in memory from conversations/customers/latestMessages).
+    const lightweightList = [];
     for (const conv of conversations || []) {
       const customer = customers.find(c => c.id === conv.entity_id);
       if (!customer) continue;
@@ -925,6 +940,29 @@ app.get('/api/home', async (c) => {
       // Truncation Bug" for why (badge/list count parity).
       const latestMsg = latestMessages.find(m => m.conversation_id === conv.id) || null;
 
+      lightweightList.push({
+        conv,
+        customer,
+        latestMsg,
+        sort_timestamp: getConversationSortTimestamp(latestMsg, customer),
+      });
+    }
+
+    // Stage 3 — sort
+    lightweightList.sort((a, b) => {
+      return new Date(b.sort_timestamp).getTime() - new Date(a.sort_timestamp).getTime();
+    });
+
+    // Stage 4 — paginate
+    const totalCount = lightweightList.length;
+    const pageSlice = lightweightList.slice(offset, offset + limit);
+    const hasMore = offset + limit < totalCount;
+    const nextOffset = hasMore ? offset + limit : null;
+
+    // Stage 5 — enrich ONLY the page slice
+    const conversationList = [];
+
+    for (const { conv, customer, latestMsg } of pageSlice) {
       // Compute avatar initials
       const nameParts = customer.name.trim().split(/\s+/);
       const initials = nameParts
@@ -1013,13 +1051,9 @@ app.get('/api/home', async (c) => {
       });
     }
 
-    // Sort by last_message_at DESC
-    conversationList.sort((a, b) => {
-      return new Date(b.last_message_at).getTime() - new Date(a.last_message_at).getTime();
-    });
-
-    // Limit results
-    const limitedConversations = conversationList.slice(0, limit);
+    // Kept for response compatibility below (Stage 6) — same conversations,
+    // already in sorted-page order from Stage 3/4.
+    const limitedConversations = conversationList;
 
     // ── Patch B: Live Insight Cards ──────────────────────────────
     // Three chips: Collections (overdue invoice count only -- no amount,
@@ -1086,6 +1120,9 @@ app.get('/api/home', async (c) => {
       insight_cards: insightCards,
       filter_tabs: filterTabs,
       conversations: limitedConversations,
+      has_more: hasMore,
+      next_offset: nextOffset,
+      returned: limitedConversations.length,
       subscription_plan: subscriptionPlan,
       language: primaryLanguage,
     });
