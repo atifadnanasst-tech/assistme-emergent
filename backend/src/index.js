@@ -4829,6 +4829,35 @@ app.post('/api/chat/:customer_id/ai-query', async (c) => {
       ? (LANGUAGE_NAMES[customerLanguage] || customerLanguage)
       : null;
 
+    // Distillation engine output — durable per-customer facts (identity,
+    // relationships, preferences, payment/buying patterns, customer_summary).
+    // Mirrors Spark's proven entity_memory read, with two extra staleness
+    // filters using columns the engine already populates: expired temporary
+    // signals are dropped (expires_at), and low-confidence guesses are
+    // dropped (confidence >= 0.6). Read-only; silent catch keeps behaviour
+    // identical to before on any failure. See ASSISTME_V2_ARCHITECTURAL_BACKLOG.md
+    // -> "Customer AI distillation wiring".
+    let customerMemory = '';
+    try {
+      const nowIso = new Date().toISOString();
+      const { data: memRows } = await supabase
+        .from('entity_memory')
+        .select('memory_key, memory_value, expires_at, confidence')
+        .eq('organisation_id', organisationId)
+        .eq('entity_type', 'customer')
+        .eq('entity_id', customerId)
+        .is('deleted_at', null)
+        .gte('confidence', 0.6);
+      if (memRows?.length > 0) {
+        const fresh = memRows.filter(m => !m.expires_at || m.expires_at > nowIso);
+        if (fresh.length > 0) {
+          customerMemory = fresh.map(m => `${m.memory_key}: ${m.memory_value}`).join('\n');
+        }
+      }
+    } catch (memErr) {
+      console.warn('[ai-query] entity_memory read failed (non-blocking):', memErr.message);
+    }
+
     // Build owner signature for customer-facing drafts
     const ownerSignature = ownerName
       ? `${ownerName}${ownerPhone ? '\n' + ownerPhone : ''}`
@@ -4877,6 +4906,7 @@ This customer's data includes:
 - Outstanding balance: current amount owed by this customer
 - Reminders: scheduled and past reminders for this customer
 - Message history: past conversations with this customer
+${customerMemory ? `\n== DISTILLED CUSTOMER MEMORY (durable facts learned over time) ==\n${customerMemory}\nUse these facts as background context. They are learned signals, not live financial data — for exact amounts always call a tool. If a memory conflicts with current tool data, trust the tool.\n` : ''}
 Use this knowledge to infer answers to any owner query about this customer.
 
 == DATA RULES ==
