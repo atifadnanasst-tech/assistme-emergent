@@ -512,12 +512,17 @@ export default function HomeScreen() {
         <View style={styles.header}>
           <Text style={styles.headerTitle}>AssistMe</Text>
           <View style={styles.headerIcons}>
+            {/* Search: build item (near-term) — left visible/inert per audit decision (a) */}
             <TouchableOpacity style={styles.headerIcon}>
               <Ionicons name="search-outline" size={24} color="#FFFFFF" />
             </TouchableOpacity>
+            {/* MUTED-v1: checkmark-done header icon — dead button, no user-expected
+                meaning, no implementation. See ASSISTME_V2_ARCHITECTURAL_BACKLOG.md
+                -> "Home Menu Audit". Restore only if a real mark-all-read/filter is built.
             <TouchableOpacity style={styles.headerIcon}>
               <Ionicons name="checkmark-done-outline" size={24} color="#FFFFFF" />
             </TouchableOpacity>
+            */}
             <TouchableOpacity 
               style={styles.headerIcon}
               onPress={() => setShowThreeDotMenu(true)}
@@ -574,10 +579,14 @@ export default function HomeScreen() {
             </TouchableOpacity>
           ))}
 
-          {/* Add custom list button */}
+          {/* MUTED-v1: pill "+" add-custom-list button — dead button (no onPress);
+              the customer-bucketing feature it implies is unbuilt (same feature as
+              the Lists menu entry). Hidden until bucketing ships. See
+              ASSISTME_V2_ARCHITECTURAL_BACKLOG.md -> "Home Menu Audit".
           <TouchableOpacity style={styles.addTabButton}>
             <Ionicons name="add" size={20} color="#075E54" />
           </TouchableOpacity>
+          */}
         </ScrollView>
 
         {/* Insight Strip -- expandable yellow banner. Shows live counts
@@ -704,7 +713,7 @@ export default function HomeScreen() {
         <Ionicons name={fabExpanded ? 'close' : 'add'} size={28} color="#FFFFFF" />
       </TouchableOpacity>
 
-      <Text style={{ textAlign: "center", fontSize: 10, color: "#CCC", paddingVertical: 2 }}>v1.3.399</Text>
+      <Text style={{ textAlign: "center", fontSize: 10, color: "#CCC", paddingVertical: 2 }}>v1.3.402</Text>
       {/* Bottom Navigation SafeAreaView */}
       <SafeAreaView style={styles.bottomNavSafeArea} edges={['bottom']}>
         <View style={styles.bottomNav}>
@@ -753,84 +762,53 @@ export default function HomeScreen() {
           activeOpacity={1}
           onPress={() => setShowThreeDotMenu(false)}
         >
+          {/* 3-dot menu rebuilt as an Operations hub (Home Menu Audit).
+              Categorized for structure; all items are roadmap-committed and
+              currently frozen "Coming soon" (non-navigating). Dashboard flips
+              to a live entry when its screen is built. Removed vs. old menu:
+              New Group (hidden), See Inventory (redundant with Products nav),
+              Settings (lives on the bottom Tools sheet).
+              MUTED-v1 removed items preserved as comments at end of this block. */}
           <View style={styles.menuCard}>
-            <Text style={styles.menuSection}>COMMUNICATION</Text>
-            <TouchableOpacity 
-              style={styles.menuItem}
-              onPress={() => {
-                setShowThreeDotMenu(false);
-                router.push('/group/new');
-              }}
-            >
-              <Ionicons name="people-outline" size={20} color="#667781" />
-              <Text style={styles.menuItemText}>New Group</Text>
-            </TouchableOpacity>
-            <TouchableOpacity 
-              style={styles.menuItem}
-              onPress={() => {
-                setShowThreeDotMenu(false);
-                router.push('/broadcast/new');
-              }}
-            >
-              <Ionicons name="megaphone-outline" size={20} color="#667781" />
-              <Text style={styles.menuItemText}>Broadcast</Text>
-            </TouchableOpacity>
-            <TouchableOpacity 
-              style={styles.menuItem}
-              onPress={() => {
-                setShowThreeDotMenu(false);
-                router.push('/lists');
-              }}
-            >
-              <Ionicons name="list-outline" size={20} color="#667781" />
-              <Text style={styles.menuItemText}>Lists</Text>
-            </TouchableOpacity>
-
-            <View style={styles.menuDivider} />
             <Text style={styles.menuSection}>BUSINESS OPERATIONS</Text>
-            <TouchableOpacity 
-              style={styles.menuItem}
-              onPress={() => {
-                setShowThreeDotMenu(false);
-                router.push('/settings/devices');
-              }}
-            >
-              <Ionicons name="phone-portrait-outline" size={20} color="#667781" />
-              <Text style={styles.menuItemText}>Linked Devices</Text>
-            </TouchableOpacity>
-            <TouchableOpacity 
-              style={styles.menuItem}
-              onPress={() => {
-                setShowThreeDotMenu(false);
-                router.push('/settings/team');
-              }}
-            >
-              <Ionicons name="person-add-outline" size={20} color="#667781" />
-              <Text style={styles.menuItemText}>Invite Team Members</Text>
-            </TouchableOpacity>
-            <TouchableOpacity 
-              style={styles.menuItem}
-              onPress={() => {
-                setShowThreeDotMenu(false);
-                router.push('/products');
-              }}
-            >
-              <Ionicons name="cube-outline" size={20} color="#667781" />
-              <Text style={styles.menuItemText}>See Inventory</Text>
-            </TouchableOpacity>
+            <View style={[styles.menuItem, styles.comingSoonRow]}>
+              <Ionicons name="stats-chart-outline" size={20} color="#B0B0B0" />
+              <Text style={styles.comingSoonItemText}>Dashboard</Text>
+              <View style={styles.comingSoonBadge}><Text style={styles.comingSoonBadgeText}>Coming soon</Text></View>
+            </View>
+            <View style={[styles.menuItem, styles.comingSoonRow]}>
+              <Ionicons name="megaphone-outline" size={20} color="#B0B0B0" />
+              <Text style={styles.comingSoonItemText}>Broadcast</Text>
+              <View style={styles.comingSoonBadge}><Text style={styles.comingSoonBadgeText}>Coming soon</Text></View>
+            </View>
 
             <View style={styles.menuDivider} />
-            <Text style={styles.menuSection}>SYSTEM</Text>
-            <TouchableOpacity 
-              style={styles.menuItem}
-              onPress={() => {
-                setShowThreeDotMenu(false);
-                setShowToolsSheet(true);
-              }}
-            >
-              <Ionicons name="settings-outline" size={20} color="#667781" />
-              <Text style={styles.menuItemText}>Settings</Text>
-            </TouchableOpacity>
+            <Text style={styles.menuSection}>ORGANISE</Text>
+            <View style={[styles.menuItem, styles.comingSoonRow]}>
+              <Ionicons name="list-outline" size={20} color="#B0B0B0" />
+              <Text style={styles.comingSoonItemText}>Lists</Text>
+              <View style={styles.comingSoonBadge}><Text style={styles.comingSoonBadgeText}>Coming soon</Text></View>
+            </View>
+
+            <View style={styles.menuDivider} />
+            <Text style={styles.menuSection}>ACCESS & GROWTH</Text>
+            <View style={[styles.menuItem, styles.comingSoonRow]}>
+              <Ionicons name="phone-portrait-outline" size={20} color="#B0B0B0" />
+              <Text style={styles.comingSoonItemText}>Linked Devices</Text>
+              <View style={styles.comingSoonBadge}><Text style={styles.comingSoonBadgeText}>Coming soon</Text></View>
+            </View>
+            <View style={[styles.menuItem, styles.comingSoonRow]}>
+              <Ionicons name="gift-outline" size={20} color="#B0B0B0" />
+              <Text style={styles.comingSoonItemText}>Refer & Earn</Text>
+              <View style={styles.comingSoonBadge}><Text style={styles.comingSoonBadgeText}>Coming soon</Text></View>
+            </View>
+
+            {/* MUTED-v1 (Home Menu Audit) — removed from this menu:
+                New Group: WhatsApp-style group chat, not needed for AssistMe (hidden).
+                See Inventory: redundant — Products is the bottom-nav 2nd tab.
+                Settings: lives on the bottom Tools sheet (setShowToolsSheet).
+                Note: "Invite Team Members" was a mislabel — it is a REFERRAL feature,
+                now correctly named "Refer & Earn" above (distinct from staff/roles). */}
           </View>
         </TouchableOpacity>
       </Modal>
@@ -858,11 +836,13 @@ export default function HomeScreen() {
                 <Ionicons name="chevron-forward" size={20} color="#CCCCCC" />
               </TouchableOpacity>
 
-              <TouchableOpacity style={styles.sheetItem} onPress={() => { setShowToolsSheet(false); router.push('/settings/staff'); }}>
-                <Ionicons name="people-outline" size={24} color="#667781" />
-                <Text style={styles.sheetItemText}>Manage staff & roles</Text>
-                <Ionicons name="chevron-forward" size={20} color="#CCCCCC" />
-              </TouchableOpacity>
+              {/* Manage staff & roles — coming-soon (frozen). Real feature
+                  (multi-user, permissions) worth advertising; unbuilt in v1. */}
+              <View style={[styles.sheetItem, styles.comingSoonRow]}>
+                <Ionicons name="people-outline" size={24} color="#B0B0B0" />
+                <Text style={styles.comingSoonSheetText}>Manage staff & roles</Text>
+                <View style={styles.comingSoonBadge}><Text style={styles.comingSoonBadgeText}>Coming soon</Text></View>
+              </View>
 
               <TouchableOpacity style={styles.sheetItem} onPress={() => { setShowToolsSheet(false); router.push('/settings/billing'); }}>
                 <Ionicons name="card-outline" size={24} color="#667781" />
@@ -875,11 +855,17 @@ export default function HomeScreen() {
                 <Ionicons name="chevron-forward" size={20} color="#CCCCCC" />
               </TouchableOpacity>
 
+              {/* MUTED-v1 (Home Menu Audit): "Smart Catalogs" (-> /settings/catalogs)
+                  hidden — redundant with the Products screen (bottom-nav 2nd tab,
+                  the intentionally-built one with import + 3-dot tools). This route
+                  led to a loosely-similar inferior page. Restore only if a distinct
+                  catalog-config surface is ever needed.
               <TouchableOpacity style={styles.sheetItem} onPress={() => { setShowToolsSheet(false); router.push('/settings/catalogs'); }}>
                 <Ionicons name="book-outline" size={24} color="#667781" />
                 <Text style={styles.sheetItemText}>Smart Catalogs</Text>
                 <Ionicons name="chevron-forward" size={20} color="#CCCCCC" />
               </TouchableOpacity>
+              */}
 
               <TouchableOpacity style={styles.sheetItem} onPress={() => { setShowToolsSheet(false); router.push('/settings/business-preferences'); }}>
                 <Ionicons name="notifications-outline" size={24} color="#667781" />
@@ -887,17 +873,20 @@ export default function HomeScreen() {
                 <Ionicons name="chevron-forward" size={20} color="#CCCCCC" />
               </TouchableOpacity>
 
-              <TouchableOpacity style={styles.sheetItem} onPress={() => { setShowToolsSheet(false); router.push('/settings/appearance'); }}>
-                <Ionicons name="color-palette-outline" size={24} color="#667781" />
-                <Text style={styles.sheetItemText}>Appearance</Text>
-                <Ionicons name="chevron-forward" size={20} color="#CCCCCC" />
-              </TouchableOpacity>
+              {/* Appearance — coming-soon (frozen) with descriptive badge.
+                  Current theme (Green–Cream) is intentional; more themes are roadmap. */}
+              <View style={[styles.sheetItem, styles.comingSoonRow]}>
+                <Ionicons name="color-palette-outline" size={24} color="#B0B0B0" />
+                <Text style={styles.comingSoonSheetText}>Appearance</Text>
+                <View style={styles.comingSoonBadge}><Text style={styles.comingSoonBadgeText}>Green–Cream · more coming soon</Text></View>
+              </View>
 
-              <TouchableOpacity style={styles.sheetItem} onPress={() => { setShowToolsSheet(false); router.push('/settings/social'); }}>
-                <Ionicons name="share-social-outline" size={24} color="#667781" />
-                <Text style={styles.sheetItemText}>Add Social Media</Text>
-                <Ionicons name="chevron-forward" size={20} color="#CCCCCC" />
-              </TouchableOpacity>
+              {/* Add Social Media — coming-soon (frozen). Owner wants it; unbuilt in v1. */}
+              <View style={[styles.sheetItem, styles.comingSoonRow]}>
+                <Ionicons name="share-social-outline" size={24} color="#B0B0B0" />
+                <Text style={styles.comingSoonSheetText}>Add Social Media</Text>
+                <View style={styles.comingSoonBadge}><Text style={styles.comingSoonBadgeText}>Coming soon</Text></View>
+              </View>
 
               <TouchableOpacity style={styles.sheetItem} onPress={() => { setShowToolsSheet(false); router.push('/settings/export'); }}>
                 <Ionicons name="download-outline" size={24} color="#667781" />
@@ -1347,6 +1336,35 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#FFFFFF',
     letterSpacing: 0.5,
+  },
+  // Coming-soon (frozen) treatment — Home Menu Audit. Muted row + inline badge,
+  // no navigation. Reused across 3-dot menu and Tools sheet.
+  comingSoonRow: {
+    opacity: 0.55,
+  },
+  comingSoonItemText: {
+    flex: 1,
+    fontSize: 15,
+    color: '#B0B0B0',
+    marginLeft: 12,
+  },
+  comingSoonSheetText: {
+    flex: 1,
+    fontSize: 16,
+    color: '#B0B0B0',
+    marginLeft: 12,
+  },
+  comingSoonBadge: {
+    backgroundColor: '#EEEEEE',
+    borderRadius: 4,
+    paddingVertical: 2,
+    paddingHorizontal: 8,
+  },
+  comingSoonBadgeText: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#999999',
+    letterSpacing: 0.3,
   },
   sheetDivider: {
     height: 1,
