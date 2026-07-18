@@ -84,7 +84,7 @@ export default function HomeScreen() {
   const [fabExpanded, setFabExpanded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  // Home screen pagination (v1.3.397) -- tracked separately from
+  // Home screen pagination (v1.3.399) -- tracked separately from
   // loading/refreshing so the footer spinner only shows for "load more",
   // not for the initial load or pull-to-refresh.
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -300,7 +300,7 @@ export default function HomeScreen() {
     }
   };
 
-  // Home screen pagination (v1.3.397). See
+  // Home screen pagination (v1.3.399). See
   // ASSISTME_V2_ARCHITECTURAL_BACKLOG.md -> "Home Screen Pagination /
   // Enrichment Cost". Unlike loadHomeData (which replaces homeData
   // entirely -- used for initial load, refresh, and tab switches), this
@@ -704,7 +704,7 @@ export default function HomeScreen() {
         <Ionicons name={fabExpanded ? 'close' : 'add'} size={28} color="#FFFFFF" />
       </TouchableOpacity>
 
-      <Text style={{ textAlign: "center", fontSize: 10, color: "#CCC", paddingVertical: 2 }}>v1.3.397</Text>
+      <Text style={{ textAlign: "center", fontSize: 10, color: "#CCC", paddingVertical: 2 }}>v1.3.399</Text>
       {/* Bottom Navigation SafeAreaView */}
       <SafeAreaView style={styles.bottomNavSafeArea} edges={['bottom']}>
         <View style={styles.bottomNav}>

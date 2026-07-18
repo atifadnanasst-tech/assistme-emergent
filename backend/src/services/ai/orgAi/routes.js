@@ -92,7 +92,10 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
           customer_id: null,
           scope: 'org',
           initiated_by: 'owner',
-          title: 'Business Assistant',
+          // Title parity with Customer AI: null at creation, auto-titled
+          // from the first query in the ai-query handler. Dropdown shows
+          // created-at datetime until then.
+          title: null,
         })
         .select('id, title, created_at')
         .single();
@@ -195,7 +198,7 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
       // Verify conversation belongs to this org and is org-scoped
       const { data: convCheck } = await supabase
         .from('ai_conversations')
-        .select('id')
+        .select('id, title')
         .eq('id', ai_conversation_id)
         .eq('organisation_id', organisationId)
         .eq('scope', 'org')
@@ -246,6 +249,29 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
           },
         });
       if (userMsgError) console.error('[orgAi] user message insert failed:', userMsgError.message);
+
+      // Auto-title parity with Customer AI (backend/src/index.js): if the
+      // conversation has no real title yet, name it from the first query
+      // (max 40 chars). 'Business Assistant' and 'New Chat' are treated as
+      // default/empty so legacy conversations also get real names on
+      // their next query. Fire-and-forget: title failure never blocks the
+      // query itself.
+      try {
+        const currentTitle = (convCheck.title || '').trim();
+        if (!currentTitle || currentTitle === 'Business Assistant' || currentTitle === 'New Chat') {
+          const firstQuery = userContent.substring(0, 40).trim();
+          const autoTitle = firstQuery.length < userContent.length ? firstQuery + '...' : firstQuery;
+          if (autoTitle) {
+            await supabase
+              .from('ai_conversations')
+              .update({ title: autoTitle })
+              .eq('id', ai_conversation_id)
+              .eq('organisation_id', organisationId);
+          }
+        }
+      } catch (titleErr) {
+        console.warn('[orgAi] auto-title failed (non-blocking):', titleErr.message);
+      }
 
       // Dispatch
       // openai hoisted above if/else — needed in scope for Brain 2.5 fire-and-forget
