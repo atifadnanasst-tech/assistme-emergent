@@ -1180,6 +1180,48 @@ app.get('/api/organisations', async (c) => {
   }
 });
 
+// ─── GET /api/help-articles ─────────────────────────────────
+// Tutorials & Help screen (Home Menu Audit, Step 2). Search-only UX:
+//   ?q=<query> -> ranked matches via the search_help_articles RPC
+//   (no q)     -> all active articles (full list on screen open)
+// Reuses the help_articles table + RPC shipped in v1.3.400. Read-only;
+// help content is global product documentation, not org-scoped.
+app.get('/api/help-articles', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+
+    const q = (c.req.query('q') || '').trim();
+
+    if (q) {
+      // Ranked search via the existing RPC (same one tryHelpArticle uses).
+      const { data, error } = await supabase
+        .rpc('search_help_articles', { p_query: q });
+      if (error) {
+        console.error('[GET /api/help-articles] search error:', error.message);
+        return c.json({ error: 'search_failed' }, 500);
+      }
+      return c.json({ articles: data || [] });
+    }
+
+    // No query -> full active list, stable ordering by category then title.
+    const { data, error } = await supabase
+      .from('help_articles')
+      .select('slug, title, category, steps, pitfalls')
+      .eq('is_active', true)
+      .order('category', { ascending: true })
+      .order('title', { ascending: true });
+    if (error) {
+      console.error('[GET /api/help-articles] list error:', error.message);
+      return c.json({ error: 'list_failed' }, 500);
+    }
+    return c.json({ articles: data || [] });
+  } catch (err) {
+    console.error('[GET /api/help-articles] Error:', err);
+    return c.json({ error: 'internal_error' }, 500);
+  }
+});
+
 // ─── PATCH /api/organisations ───────────────────────────────
 // Update organisation settings — language preferences and future config
 // Allowed fields: primary_language, customer_language_auto
