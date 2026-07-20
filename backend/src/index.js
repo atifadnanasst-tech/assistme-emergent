@@ -18,6 +18,7 @@ import { extractVisualization } from './services/ai/visualizationParser.js';
 import { getDocumentBrandingProfile } from './services/pdf/documentBrandingProfile.js';
 import { listBankAccounts, createBankAccount, updateBankAccount, deleteBankAccount } from './services/capabilities/bankAccountsService.js';
 import { extractBankAccountFromImage } from './services/ai/extractBankAccountFromImage.js';
+import { getFinancialPosition } from './services/ai/queryEngine/primitives.js';
 import PDFDocument from 'pdfkit';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -1218,6 +1219,93 @@ app.get('/api/help-articles', async (c) => {
     return c.json({ articles: data || [] });
   } catch (err) {
     console.error('[GET /api/help-articles] Error:', err);
+    return c.json({ error: 'internal_error' }, 500);
+  }
+});
+
+// ─── GET /api/dashboard ──────────────────────────────────────
+// Dashboard screen, Tier 1 (Home Menu Audit). Returns:
+//   - position: { totalReceivables, totalPayables, ... } via the existing
+//     getFinancialPosition() primitive -- no duplicated financial logic
+//   - expensesThisMonth: sum of expenses.amount for the current calendar
+//     month, excluding rejected/deleted
+//   - salesTrend: last 3 calendar months of invoiced total_amount, each
+//     with { month, label, total }, plus pctChangeVsPriorMonth. Respects
+//     the schema's mandatory is_historical=false filter for financial
+//     truth (see invoices table comment in schema_sql_v3.txt).
+// Tier 2 (downloadable Sales/Purchases/BalSheet/P&L reports) intentionally
+// NOT included -- separate scoped session.
+app.get('/api/dashboard', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+
+    // You'll Get / You'll Give — reuse existing primitive, zero new logic
+    const { position, error: posError } = await getFinancialPosition({
+      orgId: organisationId,
+      scope: { type: 'org' },
+      supabase,
+    });
+    if (posError) {
+      console.warn('[GET /api/dashboard] getFinancialPosition error:', posError);
+    }
+
+    // Expenses this month
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
+    const { data: expenseRows, error: expError } = await supabase
+      .from('expenses')
+      .select('amount')
+      .eq('organisation_id', organisationId)
+      .gte('expense_date', monthStart)
+      .neq('status', 'rejected')
+      .is('deleted_at', null);
+    if (expError) console.warn('[GET /api/dashboard] expenses query error:', expError.message);
+    const expensesThisMonth = (expenseRows || []).reduce((s, e) => s + Number(e.amount || 0), 0);
+
+    // Sales trend — last 3 calendar months (current + 2 prior)
+    const monthWindows = [];
+    for (let i = 2; i >= 0; i--) {
+      const start = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const end = new Date(now.getFullYear(), now.getMonth() - i + 1, 1);
+      monthWindows.push({
+        label: start.toLocaleDateString('en-US', { month: 'short' }),
+        start: start.toISOString().slice(0, 10),
+        end: end.toISOString().slice(0, 10),
+      });
+    }
+    const earliestStart = monthWindows[0].start;
+    const { data: invoiceRows, error: invError } = await supabase
+      .from('invoices')
+      .select('issue_date, total_amount')
+      .eq('organisation_id', organisationId)
+      .eq('is_historical', false)
+      .not('status', 'in', '("draft","cancelled")')
+      .gte('issue_date', earliestStart)
+      .is('deleted_at', null);
+    if (invError) console.warn('[GET /api/dashboard] invoices query error:', invError.message);
+
+    const salesTrend = monthWindows.map(w => {
+      const total = (invoiceRows || [])
+        .filter(inv => inv.issue_date >= w.start && inv.issue_date < w.end)
+        .reduce((s, inv) => s + Number(inv.total_amount || 0), 0);
+      return { month: w.start.slice(0, 7), label: w.label, total: Math.round(total * 100) / 100 };
+    });
+    const currentMonthTotal = salesTrend[salesTrend.length - 1]?.total || 0;
+    const priorMonthTotal = salesTrend[salesTrend.length - 2]?.total || 0;
+    const pctChangeVsPriorMonth = priorMonthTotal > 0
+      ? Math.round(((currentMonthTotal - priorMonthTotal) / priorMonthTotal) * 10000) / 100
+      : (currentMonthTotal > 0 ? 100 : 0);
+
+    return c.json({
+      position: position || null,
+      expensesThisMonth: Math.round(expensesThisMonth * 100) / 100,
+      salesTrend,
+      pctChangeVsPriorMonth,
+    });
+  } catch (err) {
+    console.error('[GET /api/dashboard] Error:', err);
     return c.json({ error: 'internal_error' }, 500);
   }
 });

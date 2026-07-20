@@ -713,7 +713,7 @@ export default function HomeScreen() {
         <Ionicons name={fabExpanded ? 'close' : 'add'} size={28} color="#FFFFFF" />
       </TouchableOpacity>
 
-      <Text style={{ textAlign: "center", fontSize: 10, color: "#CCC", paddingVertical: 2 }}>v1.3.404</Text>
+      <Text style={{ textAlign: "center", fontSize: 10, color: "#CCC", paddingVertical: 2 }}>v1.3.405</Text>
       {/* Bottom Navigation SafeAreaView */}
       <SafeAreaView style={styles.bottomNavSafeArea} edges={['bottom']}>
         <View style={styles.bottomNav}>
@@ -771,11 +771,20 @@ export default function HomeScreen() {
               MUTED-v1 removed items preserved as comments at end of this block. */}
           <View style={styles.menuCard}>
             <Text style={styles.menuSection}>BUSINESS OPERATIONS</Text>
-            <View style={[styles.menuItem, styles.comingSoonRow]}>
-              <Ionicons name="stats-chart-outline" size={20} color="#B0B0B0" />
-              <Text style={styles.comingSoonItemText}>Dashboard</Text>
-              <View style={styles.comingSoonBadge}><Text style={styles.comingSoonBadgeText}>Coming soon</Text></View>
-            </View>
+            {/* Dashboard: live as of Tier 1 build (Home Menu Audit). Was
+                frozen "Coming soon" — no longer, per that section's own
+                stated plan ("flips to a live entry when its screen is
+                built"). Tier 2 (downloadable reports) still pending. */}
+            <TouchableOpacity
+              style={styles.menuItem}
+              onPress={() => {
+                setShowThreeDotMenu(false);
+                router.push('/dashboard');
+              }}
+            >
+              <Ionicons name="stats-chart-outline" size={20} color="#667781" />
+              <Text style={styles.menuItemText}>Dashboard</Text>
+            </TouchableOpacity>
             <View style={[styles.menuItem, styles.comingSoonRow]}>
               <Ionicons name="megaphone-outline" size={20} color="#B0B0B0" />
               <Text style={styles.comingSoonItemText}>Broadcast</Text>
