@@ -1392,7 +1392,7 @@ app.get('/api/export/download', async (c) => {
     if (!storagePath) return c.json({ error: 'no_export_yet' }, 404);
     const { data: signedData, error: signErr } = await supabase.storage
       .from('exports')
-      .createSignedUrl(storagePath, 600);
+      .createSignedUrl(storagePath, 600, { download: 'data-export.zip' });
     if (signErr) {
       console.error('[GET /api/export/download] sign error:', signErr.message);
       return c.json({ error: 'sign_failed' }, 500);
