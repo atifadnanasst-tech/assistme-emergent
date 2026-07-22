@@ -6,20 +6,14 @@ import {
   TouchableOpacity,
   ScrollView,
   ActivityIndicator,
-  Linking,
   Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { Directory, File, Paths } from 'expo-file-system';
+import * as Sharing from 'expo-sharing';
 import { authService } from '../../lib/auth';
-
-// Export My Data — Home Menu Audit build item. Shows the last automatic
-// (daily 3am) or manual export, lets the owner trigger a fresh one now, and
-// downloads via a freshly-minted short-lived signed URL (never a stored
-// permanent link — this bundle contains full bank account numbers and the
-// complete business ledger). Chat history export is a SEPARATE, per-customer
-// feature (customer chat -> 3-dot menu -> "Export chat"), not here.
 
 export default function ExportMyData() {
   const router = useRouter();
@@ -92,17 +86,32 @@ export default function ExportMyData() {
       const res = await fetch(`${backendUrl}/api/export/download`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (res.ok) {
-        const json = await res.json();
-        if (json.url) {
-          await Linking.openURL(json.url);
-        }
-      } else {
+      if (!res.ok) {
         Alert.alert('Download failed', 'Could not prepare your download link. Please try again.');
+        return;
+      }
+      const json = await res.json();
+      if (!json.url) {
+        Alert.alert('Download failed', 'Could not prepare your download link. Please try again.');
+        return;
+      }
+
+      const destination = new Directory(Paths.cache, 'exports');
+      destination.create({ intermediates: true, idempotent: true });
+      const localFile = await File.downloadFileAsync(json.url, destination);
+
+      const canShare = await Sharing.isAvailableAsync();
+      if (canShare) {
+        await Sharing.shareAsync(localFile.uri, {
+          mimeType: 'application/zip',
+          dialogTitle: 'Save or share your business data export',
+        });
+      } else {
+        Alert.alert('Downloaded', `Saved to: ${localFile.uri}`);
       }
     } catch (err) {
       console.error('Export download error:', err);
-      Alert.alert('Download failed', 'Could not prepare your download link. Please try again.');
+      Alert.alert('Download failed', 'Could not download your export. Please try again.');
     } finally {
       setDownloading(false);
     }
