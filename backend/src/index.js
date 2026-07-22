@@ -1310,6 +1310,44 @@ app.get('/api/dashboard', async (c) => {
   }
 });
 
+// ─── GET /api/customers/search ───────────────────────────────
+// Header Search, Tier 1 (Home Menu Audit). Search by customer name/phone/
+// company, navigate to their chat (/chat/[customer_id] -- no conversation
+// join needed, that route resolves the conversation itself).
+// Tier 2 (full message-content search) is a separate, heavier, future
+// scoped session -- see file header comment above for why.
+app.get('/api/customers/search', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+
+    const q = (c.req.query('q') || '').trim();
+    if (!q) return c.json({ customers: [] });
+
+    // ILIKE across name/phone/company -- mirrors customerSelector.js's own
+    // proven first step (partial match before any fuzzy fallback).
+    const { data, error } = await supabase
+      .from('customers')
+      .select('id, name, phone, company, outstanding_balance')
+      .eq('organisation_id', organisationId)
+      .is('deleted_at', null)
+      .or(`name.ilike.%${q}%,phone.ilike.%${q}%,company.ilike.%${q}%`)
+      .order('name', { ascending: true })
+      .limit(20);
+
+    if (error) {
+      console.error('[GET /api/customers/search] error:', error.message);
+      return c.json({ error: 'search_failed' }, 500);
+    }
+
+    return c.json({ customers: data || [] });
+  } catch (err) {
+    console.error('[GET /api/customers/search] Error:', err);
+    return c.json({ error: 'internal_error' }, 500);
+  }
+});
+
 // ─── PATCH /api/organisations ───────────────────────────────
 // Update organisation settings — language preferences and future config
 // Allowed fields: primary_language, customer_language_auto
