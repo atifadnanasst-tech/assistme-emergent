@@ -19,6 +19,7 @@ import { getDocumentBrandingProfile } from './services/pdf/documentBrandingProfi
 import { listBankAccounts, createBankAccount, updateBankAccount, deleteBankAccount } from './services/capabilities/bankAccountsService.js';
 import { extractBankAccountFromImage } from './services/ai/extractBankAccountFromImage.js';
 import { getFinancialPosition } from './services/ai/queryEngine/primitives.js';
+import { generateOwnerDataExport } from './services/export/generateOwnerDataExport.js';
 import PDFDocument from 'pdfkit';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -1344,6 +1345,75 @@ app.get('/api/customers/search', async (c) => {
     return c.json({ customers: data || [] });
   } catch (err) {
     console.error('[GET /api/customers/search] Error:', err);
+    return c.json({ error: 'internal_error' }, 500);
+  }
+});
+
+// ─── Export My Data (Home Menu Audit) ────────────────────────
+// Core logic lives in services/export/generateOwnerDataExport.js.
+
+async function jobDataExport(orgId) {
+  const result = await generateOwnerDataExport({ orgId, supabase });
+  return result.success ? 1 : 0;
+}
+
+app.get('/api/export/status', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+    const { data: orgRow, error } = await supabase
+      .from('organisations').select('settings').eq('id', organisationId).maybeSingle();
+    if (error) return c.json({ error: 'internal_error' }, 500);
+    const settings = orgRow?.settings || {};
+    return c.json({
+      hasExport: !!settings.last_export_path,
+      generatedAt: settings.last_export_generated_at || null,
+    });
+  } catch (err) {
+    console.error('[GET /api/export/status] Error:', err);
+    return c.json({ error: 'internal_error' }, 500);
+  }
+});
+
+// Mints a short-lived (10 min) signed URL on demand -- never stored, never
+// returned by /api/export/status. This bundle contains full bank account
+// numbers + the complete business ledger, meaningfully more sensitive than
+// a single invoice PDF, hence signed-URL-on-demand rather than a permanent
+// public link.
+app.get('/api/export/download', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+    const { data: orgRow } = await supabase
+      .from('organisations').select('settings').eq('id', organisationId).maybeSingle();
+    const storagePath = orgRow?.settings?.last_export_path;
+    if (!storagePath) return c.json({ error: 'no_export_yet' }, 404);
+    const { data: signedData, error: signErr } = await supabase.storage
+      .from('exports')
+      .createSignedUrl(storagePath, 600);
+    if (signErr) {
+      console.error('[GET /api/export/download] sign error:', signErr.message);
+      return c.json({ error: 'sign_failed' }, 500);
+    }
+    return c.json({ url: signedData.signedUrl });
+  } catch (err) {
+    console.error('[GET /api/export/download] Error:', err);
+    return c.json({ error: 'internal_error' }, 500);
+  }
+});
+
+app.post('/api/export/trigger', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+    const result = await generateOwnerDataExport({ orgId: organisationId, supabase });
+    if (!result.success) return c.json({ error: 'export_failed', message: result.error }, 500);
+    return c.json({ generatedAt: result.generatedAt });
+  } catch (err) {
+    console.error('[POST /api/export/trigger] Error:', err);
     return c.json({ error: 'internal_error' }, 500);
   }
 });
@@ -8555,6 +8625,7 @@ cron.schedule('0 8 * * *', () => runWatchJobForAllOrgs('jobDailyInsight', jobDai
 // TODO Batch 3: move this fixed 8 PM schedule to organisations.settings.job_schedule
 // once the Preferences Center exists -- 20:00 here is a placeholder, not business logic.
 cron.schedule('0 20 * * *', () => runWatchJobForAllOrgs('jobBankReconciliation', jobBankReconciliation), CRON_TZ);
+cron.schedule('0 3 * * *', () => runWatchJobForAllOrgs('jobDataExport', jobDataExport), CRON_TZ);
 cron.schedule('0 */4 * * *', () => runWatchJobForAllOrgs('jobDraftCleanup', jobDraftCleanup), CRON_TZ);
 cron.schedule('*/5 * * * *', () => runWatchJobForAllOrgs('jobTaskReminders', jobTaskReminders), CRON_TZ);
 cron.schedule('*/5 * * * *', () => runWatchJobForAllOrgs('jobLiveDistillation', jobLiveDistillation), CRON_TZ);

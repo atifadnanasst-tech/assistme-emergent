@@ -96,6 +96,50 @@ export default function HomeScreen() {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<Array<{ id: string; name: string; phone: string | null; company: string | null; outstanding_balance: number }>>([]);
   const [searching, setSearching] = useState(false);
+
+  // Header Search, Tier 1 — debounced customer search (350ms, same pattern
+  // as the Tutorials & Help screen). Empty query clears results without a
+  // network call. MOVED HERE (hotfix): must be unconditional, before the
+  // `if (loading && !homeData) return (...)` early return below -- every
+  // hook must run in the same order on every render (Rules of Hooks).
+  // Placing it after that early return caused a white-screen crash on
+  // launch, since the hook wasn't called during the initial loading render
+  // but WAS called on the next render once data arrived.
+  useEffect(() => {
+    if (!searchActive) return;
+    const q = searchQuery.trim();
+    if (!q) {
+      setSearchResults([]);
+      setSearching(false);
+      return;
+    }
+    setSearching(true);
+    const timer = setTimeout(async () => {
+      try {
+        const token = await authService.getAccessToken();
+        if (!token) return;
+        const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+        const res = await fetch(`${backendUrl}/api/customers/search?q=${encodeURIComponent(q)}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok) {
+          const json = await res.json();
+          setSearchResults(json.customers || []);
+        }
+      } catch (err) {
+        console.error('Customer search error:', err);
+      } finally {
+        setSearching(false);
+      }
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [searchQuery, searchActive]);
+
+  const closeSearch = () => {
+    setSearchActive(false);
+    setSearchQuery('');
+    setSearchResults([]);
+  };
   const [showToolsSheet, setShowToolsSheet] = useState(false);
   // Must be in the state block, not after the early return at line ~400
   // (if loading && !homeData) -- a useState after that return causes
@@ -511,45 +555,6 @@ export default function HomeScreen() {
   const insightStrip = homeData?.insight_strip;
   const insightCards = homeData?.insight_cards || [];
 
-  // Header Search, Tier 1 — debounced customer search (350ms, same pattern
-  // as the Tutorials & Help screen). Empty query clears results without a
-  // network call.
-  useEffect(() => {
-    if (!searchActive) return;
-    const q = searchQuery.trim();
-    if (!q) {
-      setSearchResults([]);
-      setSearching(false);
-      return;
-    }
-    setSearching(true);
-    const timer = setTimeout(async () => {
-      try {
-        const token = await authService.getAccessToken();
-        if (!token) return;
-        const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
-        const res = await fetch(`${backendUrl}/api/customers/search?q=${encodeURIComponent(q)}`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        if (res.ok) {
-          const json = await res.json();
-          setSearchResults(json.customers || []);
-        }
-      } catch (err) {
-        console.error('Customer search error:', err);
-      } finally {
-        setSearching(false);
-      }
-    }, 350);
-    return () => clearTimeout(timer);
-  }, [searchQuery, searchActive]);
-
-  const closeSearch = () => {
-    setSearchActive(false);
-    setSearchQuery('');
-    setSearchResults([]);
-  };
-
   return (
     <>
       {/* Header SafeAreaView */}
@@ -808,7 +813,7 @@ export default function HomeScreen() {
         <Ionicons name={fabExpanded ? 'close' : 'add'} size={28} color="#FFFFFF" />
       </TouchableOpacity>
 
-      <Text style={{ textAlign: "center", fontSize: 10, color: "#CCC", paddingVertical: 2 }}>v1.3.406</Text>
+      <Text style={{ textAlign: "center", fontSize: 10, color: "#CCC", paddingVertical: 2 }}>v1.3.408</Text>
       {/* Bottom Navigation SafeAreaView */}
       <SafeAreaView style={styles.bottomNavSafeArea} edges={['bottom']}>
         <View style={styles.bottomNav}>
