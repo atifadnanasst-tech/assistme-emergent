@@ -98,7 +98,12 @@ export default function ExportMyData() {
 
       const destination = new Directory(Paths.cache, 'exports');
       destination.create({ intermediates: true, idempotent: true });
-      const localFile = await File.downloadFileAsync(json.url, destination);
+      // idempotent: true -- overwrite if a previous download already exists at
+      // this path (fixed filename, reused every generation). Without this,
+      // downloadFileAsync rejects with DestinationAlreadyExists on any tap
+      // after the first successful one -- confirmed root cause of repeated
+      // "Download failed" after a working first download.
+      const localFile = await File.downloadFileAsync(json.url, destination, { idempotent: true });
 
       const canShare = await Sharing.isAvailableAsync();
       if (canShare) {
