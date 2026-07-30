@@ -193,13 +193,17 @@ export async function checkUsageAllowed({ orgId, supabase }) {
     if (orgErr) throw orgErr;
 
     const plan = org?.subscription_plan || 'free';
-    const periodType = plan === 'free' ? 'free_window' : 'paid_month';
-    // Unrecognized plan values default to the LOWER (pro) ceiling, not the
-    // higher (business) one -- safer to under-grant than over-grant budget
-    // for a plan value we don't actually recognize.
-    const ceilingPaisa = periodType === 'free_window'
-      ? CEILINGS_PAISA.free_window
-      : (CEILINGS_PAISA[plan] ?? CEILINGS_PAISA.pro);
+
+    // Step 4 scope: enforcement applies to FREE TIER ONLY. Paid-tier
+    // ceilings (Step 6) aren't wired to any user-facing wallet/upgrade UI
+    // yet -- blocking a paying customer with no way to resolve it would be
+    // a real regression, not a feature. Paid orgs always pass for now.
+    if (plan !== 'free') {
+      return { allowed: true, reason: 'paid_tier_not_yet_enforced' };
+    }
+
+    const periodType = 'free_window';
+    const ceilingPaisa = CEILINGS_PAISA.free_window;
 
     const period = await getOrCreateCurrentPeriod({ orgId, periodType, supabase });
     const costUsedPaisa = period.cost_used_paisa || 0;
@@ -212,6 +216,11 @@ export async function checkUsageAllowed({ orgId, supabase }) {
       ceilingPaisa,
       periodType,
       periodEnd: period.period_end,
+      // Pre-formatted for the "Usage limit reached - Resets at <time> - Get
+      // more usage" message (IST, matches the rest of the app's convention).
+      periodEndFormatted: new Date(period.period_end).toLocaleString('en-IN', {
+        timeZone: 'Asia/Kolkata', hour: 'numeric', minute: '2-digit', hour12: true,
+      }),
     };
   } catch (err) {
     console.warn('[checkUsageAllowed] error, failing OPEN (allowing request):', err.message);
