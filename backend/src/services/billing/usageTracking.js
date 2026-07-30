@@ -141,3 +141,80 @@ export async function recordAiUsage({ orgId, model, inputTokens, outputTokens, s
     console.warn('[recordAiUsage] non-blocking tracking error:', err.message);
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// Step 3: Enforcement (built here, NOT yet wired into any pipeline).
+// See ASSISTME_V2_ARCHITECTURAL_BACKLOG.md -> "Subscription & Billing".
+//
+// ENFORCEMENT_ENABLED defaults to false. Flipping it to true is Step 4 --
+// deliberately a tiny, one-line, trivially-revertible change, done only
+// after this logic has been verified safe while disabled.
+//
+// Ceilings, back-calculated from Atif's real targets:
+//   free_window: Rs 0.50 per 5-hour window -- worst-case ~90 windows/month
+//     (3/day x 30 days) x Rs 0.50 = Rs 45/month absolute ceiling per free
+//     org, matching the Rs 40-50/month target.
+//   pro (Rs 499/month): Rs 129/month ceiling (~26% of revenue)
+//   business (Rs 1999/month): Rs 799/month ceiling (~40% of revenue,
+//     intentionally higher % than pro -- reinforces upgrade psychology)
+// ─────────────────────────────────────────────────────────────────────────
+
+export const ENFORCEMENT_ENABLED = false;
+
+const CEILINGS_PAISA = {
+  free_window: 50,     // Rs 0.50
+  pro: 12900,           // Rs 129
+  business: 79900,      // Rs 799
+};
+
+/**
+ * Checks whether an org is within its usage budget for the current period.
+ * FAILS OPEN on any internal error -- a bug in enforcement must never be
+ * able to block a legitimate (or paying) user. The worst case of a fail-
+ * open bug is someone gets a query they technically shouldn't have; the
+ * worst case of a fail-closed bug is blocking a paying customer, which is
+ * far worse for the business.
+ *
+ * Returns { allowed, reason, costUsedPaisa, ceilingPaisa, periodType,
+ * periodEnd }. Callers should treat `allowed` as the only field that
+ * matters for gating; the rest is context for UI messaging.
+ */
+export async function checkUsageAllowed({ orgId, supabase }) {
+  if (!ENFORCEMENT_ENABLED) {
+    return { allowed: true, reason: 'enforcement_disabled' };
+  }
+
+  try {
+    const { data: org, error: orgErr } = await supabase
+      .from('organisations')
+      .select('subscription_plan')
+      .eq('id', orgId)
+      .maybeSingle();
+    if (orgErr) throw orgErr;
+
+    const plan = org?.subscription_plan || 'free';
+    const periodType = plan === 'free' ? 'free_window' : 'paid_month';
+    // Unrecognized plan values default to the LOWER (pro) ceiling, not the
+    // higher (business) one -- safer to under-grant than over-grant budget
+    // for a plan value we don't actually recognize.
+    const ceilingPaisa = periodType === 'free_window'
+      ? CEILINGS_PAISA.free_window
+      : (CEILINGS_PAISA[plan] ?? CEILINGS_PAISA.pro);
+
+    const period = await getOrCreateCurrentPeriod({ orgId, periodType, supabase });
+    const costUsedPaisa = period.cost_used_paisa || 0;
+    const allowed = costUsedPaisa < ceilingPaisa;
+
+    return {
+      allowed,
+      reason: allowed ? 'within_budget' : 'budget_exceeded',
+      costUsedPaisa,
+      ceilingPaisa,
+      periodType,
+      periodEnd: period.period_end,
+    };
+  } catch (err) {
+    console.warn('[checkUsageAllowed] error, failing OPEN (allowing request):', err.message);
+    return { allowed: true, reason: 'check_error_fail_open' };
+  }
+}
