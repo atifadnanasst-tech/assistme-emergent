@@ -19,7 +19,7 @@ import { getDocumentBrandingProfile } from './services/pdf/documentBrandingProfi
 import { listBankAccounts, createBankAccount, updateBankAccount, deleteBankAccount } from './services/capabilities/bankAccountsService.js';
 import { extractBankAccountFromImage } from './services/ai/extractBankAccountFromImage.js';
 import { getFinancialPosition } from './services/ai/queryEngine/primitives.js';
-import { recordAiUsage } from './services/billing/usageTracking.js';
+import { recordAiUsage, checkUsageAllowed } from './services/billing/usageTracking.js';
 import { generateOwnerDataExport } from './services/export/generateOwnerDataExport.js';
 import PDFDocument from 'pdfkit';
 
@@ -4927,6 +4927,23 @@ app.post('/api/chat/:customer_id/ai-query', async (c) => {
       if (!aiConvCheck) {
         return c.json({ error: 'invalid_ai_conversation_id', message: 'AI conversation not found or access denied.' }, 403);
       }
+    }
+
+    // Usage enforcement (Subscription & Billing, Step 4b). Placed early --
+    // before Whisper transcription and both completion calls -- so a
+    // blocked request skips ALL downstream cost, not just the final call.
+    // checkUsageAllowed() returns allowed:true unconditionally while
+    // ENFORCEMENT_ENABLED is false (current state), so this is a genuine
+    // no-op right now -- verified inert, not just assumed.
+    const usageCheck = await checkUsageAllowed({ orgId: organisationId, supabase });
+    if (!usageCheck.allowed) {
+      return c.json({
+        response: `Usage limit reached · Resets at ${usageCheck.periodEndFormatted} · Get more usage`,
+        message_type: 'usage_limit',
+        card_type: null,
+        shareable: false,
+        chart_data: null,
+      });
     }
 
     // Get owner's preferred language
