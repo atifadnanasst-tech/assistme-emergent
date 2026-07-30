@@ -19,6 +19,7 @@ import { getDocumentBrandingProfile } from './services/pdf/documentBrandingProfi
 import { listBankAccounts, createBankAccount, updateBankAccount, deleteBankAccount } from './services/capabilities/bankAccountsService.js';
 import { extractBankAccountFromImage } from './services/ai/extractBankAccountFromImage.js';
 import { getFinancialPosition } from './services/ai/queryEngine/primitives.js';
+import { recordAiUsage } from './services/billing/usageTracking.js';
 import { generateOwnerDataExport } from './services/export/generateOwnerDataExport.js';
 import PDFDocument from 'pdfkit';
 
@@ -5279,6 +5280,14 @@ Hard rules:
         model: 'gpt-4o-mini', messages, tools: AI_QUERY_TOOLS, tool_choice: 'auto', temperature: 0.1,
       }, { signal: controller1.signal });
       clearTimeout(t1);
+      // Usage tracking (Subscription & Billing, Step 2b) -- fire-and-forget,
+      // tracking only, no enforcement. Never awaited: adds zero latency to
+      // the response the customer/owner is waiting on.
+      recordAiUsage({
+        orgId: organisationId, model: 'gpt-4o-mini',
+        inputTokens: completion.usage?.prompt_tokens, outputTokens: completion.usage?.completion_tokens,
+        supabase,
+      }).catch(() => {});
     } catch (e) {
       clearTimeout(t1);
       return c.json({ error: 'ai_error', message: 'AI temporarily unavailable' }, 500);
@@ -5304,6 +5313,12 @@ Hard rules:
         }, { signal: controller2.signal });
         clearTimeout(t2);
         responseText = completion2.choices[0].message.content || 'No response';
+        // Usage tracking (Subscription & Billing, Step 2b) -- fire-and-forget.
+        recordAiUsage({
+          orgId: organisationId, model: 'gpt-4o-mini',
+          inputTokens: completion2.usage?.prompt_tokens, outputTokens: completion2.usage?.completion_tokens,
+          supabase,
+        }).catch(() => {});
       } catch (e) {
         clearTimeout(t2);
         responseText = 'AI processing failed. Please try again.';
