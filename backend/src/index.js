@@ -3334,6 +3334,16 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
       tokensInput = completion.usage?.prompt_tokens || 0;
       tokensOutput = completion.usage?.completion_tokens || 0;
       parsed = parseSparkResponse(completion.choices[0].message.content || '');
+      // Usage tracking (Subscription & Billing, Step 2d) -- fire-and-forget,
+      // tracking only, no enforcement. Reuses tokensInput/tokensOutput
+      // already extracted above for Spark's own logging -- no new
+      // extraction needed. recordAiUsage already imported in this file
+      // (Step 2b).
+      recordAiUsage({
+        orgId: organisationId, model: 'gpt-4o-mini',
+        inputTokens: tokensInput, outputTokens: tokensOutput,
+        supabase,
+      }).catch(() => {});
       console.log(`[SPARK] op=${startTime} OpenAI call completed after ${Date.now() - startTime}ms total, tokens_in=${tokensInput} tokens_out=${tokensOutput}`);
     } catch (aiErr) {
       clearTimeout(timeoutId);
