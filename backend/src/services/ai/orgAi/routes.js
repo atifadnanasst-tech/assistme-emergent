@@ -24,6 +24,7 @@ import { dispatchMenuQuery } from './index.js';
 import { dispatchFreeform } from './freeform.js';
 import { getConversationMemory, refreshConversationSummary } from '../queryEngine/primitives.js';
 import { randomUUID } from 'crypto';
+import { checkUsageAllowed } from '../../billing/usageTracking.js';
 
 // ── Server-owned menu labels ──────────────────────────────────
 // Backend owns these — never trust frontend-supplied labels.
@@ -205,6 +206,22 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
         .maybeSingle();
 
       if (!convCheck) return c.json({ error: 'invalid_ai_conversation_id' }, 403);
+
+      // Usage enforcement (Subscription & Billing, Step 4c). One gate at
+      // the top of the whole Org AI pipeline -- unlike Step 2's cost
+      // TRACKING (which needed every completion call site), enforcement
+      // only needs a single check before any dispatch work begins.
+      // checkUsageAllowed() returns allowed:true unconditionally while
+      // ENFORCEMENT_ENABLED is false (current state) -- genuine no-op.
+      const usageCheck = await checkUsageAllowed({ orgId: organisationId, supabase });
+      if (!usageCheck.allowed) {
+        return c.json({
+          response: `Usage limit reached · Resets at ${usageCheck.periodEndFormatted} · Get more usage`,
+          message_type: 'usage_limit',
+          chart_data: null,
+          next_action: null,
+        });
+      }
 
       // Fetch org currency
       const { data: org } = await supabase
