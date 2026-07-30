@@ -3155,6 +3155,23 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
       .eq('id', conversationId).eq('organisation_id', organisationId).maybeSingle();
     if (!conv) { console.log(`[SPARK] op=${startTime} conversation_not_found after ${Date.now() - startTime}ms`); return c.json({ error: 'conversation_not_found' }, 404); }
 
+    // Usage enforcement (Subscription & Billing, Step 4d). Single gate
+    // before any context-fetching (ai_context, entity_memory) or the
+    // completion call. checkUsageAllowed already imported in this file
+    // (Step 4b). Reuses the existing 'clarify' routing shape -- no new
+    // frontend handling needed, Spark already displays routing:'clarify'
+    // + message as a chat bubble.
+    const usageCheck = await checkUsageAllowed({ orgId: organisationId, supabase });
+    if (!usageCheck.allowed) {
+      console.log(`[SPARK] op=${startTime} usage_limit_reached after ${Date.now() - startTime}ms`);
+      return c.json({
+        routing: 'clarify',
+        message: `Usage limit reached · Resets at ${usageCheck.periodEndFormatted} · Get more usage`,
+        confidence_score: null,
+        actions: [],
+      });
+    }
+
     // Layer 1: ai_context (global)
     let globalContext = '';
     try {
