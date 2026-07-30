@@ -116,6 +116,8 @@ const normalizeLanguage = (lang) => {
   return LANGUAGE_INSTRUCTIONS[base] ? base : 'en';
 };
 
+import { recordAiUsage } from '../../billing/usageTracking.js';
+
 export async function narrate(data, functionKey, openai, options = {}) {
   const {
     timeoutMs   = 8000,
@@ -155,6 +157,17 @@ export async function narrate(data, functionKey, openai, options = {}) {
       temperature,
       max_tokens: maxTokens,
     }, { signal: controller.signal });
+
+    // Usage tracking (Subscription & Billing, Step 2c) -- fire-and-forget,
+    // tracking only. Only fires if the caller supplied orgId+supabase in
+    // options; every existing/future caller that doesn't is unaffected.
+    if (options.orgId && options.supabase) {
+      recordAiUsage({
+        orgId: options.orgId, model: 'gpt-4o-mini',
+        inputTokens: completion.usage?.prompt_tokens, outputTokens: completion.usage?.completion_tokens,
+        supabase: options.supabase,
+      }).catch(() => {});
+    }
 
     return completion.choices[0]?.message?.content?.trim() || fallback;
   } catch (e) {

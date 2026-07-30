@@ -1,3 +1,4 @@
+import { recordAiUsage } from '../../billing/usageTracking.js';
 /**
  * AssistMe — Freeform Orchestrator
  *
@@ -33,7 +34,7 @@ export async function dispatchFreeform({
   // Step 1: Plan
   let planResult;
   try {
-    planResult = await planExecution({ userMessage: message, scope, orgContext, conversationHistory, openai });
+    planResult = await planExecution({ userMessage: message, scope, orgContext, conversationHistory, openai, orgId, supabase });
   } catch (err) {
     console.error('[freeform] planner error:', err.message);
     return _fallback('AI planning failed. Please try again.');
@@ -336,7 +337,7 @@ const HELP_GUARDRAIL_PROMPT = [
   'If the owner asked in Hindi or a mix, reply in that same style.',
 ].join(' ');
 
-async function tryHelpArticle({ message, supabase, orgContext }) {
+async function tryHelpArticle({ message, supabase, orgContext, orgId }) {
   try {
     if (!message || !supabase) return null;
     // Uses the search_help_articles RPC (matches the codebase convention of
@@ -388,6 +389,15 @@ async function tryHelpArticle({ message, supabase, orgContext }) {
       temperature: 0.3,
     });
 
+    // Usage tracking (Subscription & Billing, Step 2c) -- fire-and-forget.
+    if (orgId && supabase) {
+      recordAiUsage({
+        orgId, model: 'gpt-4o-mini',
+        inputTokens: completion.usage?.prompt_tokens, outputTokens: completion.usage?.completion_tokens,
+        supabase,
+      }).catch(() => {});
+    }
+
     const response_text = completion.choices?.[0]?.message?.content?.trim();
     if (!response_text) {
       // Model returned nothing -- fall back to raw steps rather than failing.
@@ -428,7 +438,7 @@ export async function handleWorldIntelligence({ message, orgId, supabase, orgCon
   // help_articles registry can answer, return that instead of falling
   // through to general knowledge. Non-blocking -- any failure returns null
   // and the normal Brain 3 path continues.
-  const helpResult = await tryHelpArticle({ message, supabase, orgContext });
+  const helpResult = await tryHelpArticle({ message, supabase, orgContext, orgId });
   if (helpResult) return helpResult;
 
   if (!openai) {
@@ -465,6 +475,15 @@ export async function handleWorldIntelligence({ message, orgId, supabase, orgCon
       max_tokens: 500,
       temperature: 0.5,
     });
+
+    // Usage tracking (Subscription & Billing, Step 2c) -- fire-and-forget.
+    if (orgId && supabase) {
+      recordAiUsage({
+        orgId, model: 'gpt-4o-mini',
+        inputTokens: completion.usage?.prompt_tokens, outputTokens: completion.usage?.completion_tokens,
+        supabase,
+      }).catch(() => {});
+    }
 
     const response_text = completion.choices?.[0]?.message?.content?.trim()
       || "Could you tell me a bit more about what you're trying to do? I can help with business questions, customers, payments, products, sales, or how to use AssistMe.";

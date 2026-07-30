@@ -229,7 +229,7 @@ export async function collectionsToday(supabase, orgId, orgCurrency, openai, lan
     { total, count, topPayerName, currency: orgCurrency, avgLast7: Math.round(avgLast7) },
     'collections_today',
     openai,
-    { language }
+    { language, orgId, supabase }
   );
 
   console.log('[orgAi]', { fn: 'collectionsToday', ms: Date.now() - start, rows: count });
@@ -343,7 +343,7 @@ export async function totalOutstanding(supabase, orgId, orgCurrency, openai, lan
     topCustomers: (topCustomers || []).slice(0, 3).map(c => ({
       name: c.name, amount: c.outstanding_balance,
     })),
-  }, 'total_outstanding', openai, { language });
+  }, 'total_outstanding', openai, { language, orgId, supabase });
   console.log('[orgAi] totalOutstanding ms=' + (Date.now() - start));
   return { response_text, chart_data, next_action };
 }
@@ -507,7 +507,7 @@ export async function topCustomers(supabase, orgId, orgCurrency, openai, languag
     currency: orgCurrency,
     topName: ranked[0]?.name,
     topAmount: ranked[0]?.total,
-  }, 'top_customers', openai, { language });
+  }, 'top_customers', openai, { language, orgId, supabase });
   const response_text = `📈 Top customers by revenue this month:
 ${rawNarration}`;
 
@@ -721,7 +721,7 @@ export async function revenueThisMonth(supabase, orgId, orgCurrency, openai, lan
     totalRevenue, invoiceCount, avgInvoiceValue,
     topCustomerName, topCustomerRevenue, topCustomerPct,
     currency: orgCurrency,
-  }, 'revenue_this_month', openai, { language });
+  }, 'revenue_this_month', openai, { language, orgId, supabase });
 
   console.log('[orgAi]', { fn: 'revenueThisMonth', ms: Date.now() - start, rows: invoiceCount });
   return { response_text, chart_data, next_action };
@@ -899,7 +899,7 @@ export async function invoicesDueThisWeek(supabase, orgId, orgCurrency, openai, 
   const response_text = await narrate({
     count, totalDue, ranked: ranked.slice(0, 3), currency: orgCurrency,
     dueTodayCount: dueToday.length,
-  }, 'invoices_due_this_week', openai, { language });
+  }, 'invoices_due_this_week', openai, { language, orgId, supabase });
 
   console.log('[orgAi]', { fn: 'invoicesDueThisWeek', ms: Date.now() - start, rows: count });
   return { response_text, chart_data, next_action };
@@ -1052,7 +1052,7 @@ export async function weeklyTrend(supabase, orgId, orgCurrency, openai, language
     topProducts: topProducts.map(p => ({ name: p.name, total: p.total })),
     dormantCount: dormantCustomers.length, dormantNames: dormantCustomers.map(c => c.customer_name),
     currency: orgCurrency,
-  }, 'weekly_trend', openai, { language });
+  }, 'weekly_trend', openai, { language, orgId, supabase });
 
   console.log('[orgAi]', { fn: 'weeklyTrend', ms: Date.now() - start, weeks: weekSeries.length, dormant: dormantCustomers.length });
   return { response_text, chart_data, next_action };
@@ -1202,7 +1202,7 @@ export async function followUpToday(supabase, orgId, orgCurrency, openai, langua
     totalDueSoon: dueSoonActive.length,
     totalQuoteExpiry: quoteActive.length,
     currency: orgCurrency,
-  }, 'follow_up_today', openai, { language });
+  }, 'follow_up_today', openai, { language, orgId, supabase });
   console.log('[orgAi]', { fn: 'followUpToday', ms: Date.now() - start, signal: activeSignal, count: followUpEntities.length, suppressed: totalSuppressed, exhausted: exhaustedSignals });
   return { response_text, chart_data, next_action };
 }
@@ -1289,7 +1289,7 @@ export async function riskAlerts(supabase, orgId, orgCurrency, openai, language 
     const escalationMsg = primarySignal === 'severely_overdue' ? `${topEntity.customer_name}, your invoice(s) ${topEntity.invoice_number} totalling ${formatCurrency(topEntity.amount, orgCurrency)} ${topEntity.days_overdue ? `are ${topEntity.days_overdue} days overdue` : 'are significantly overdue'}. This requires immediate settlement.` : primarySignal === 'multiple_overdue' ? `${topEntity.customer_name}, you have ${topEntity.risk_reason} totalling ${formatCurrency(topEntity.amount, orgCurrency)}. Kindly arrange payment for all outstanding amounts immediately.` : `${topEntity.customer_name}, your outstanding balance of ${formatCurrency(topEntity.amount, orgCurrency)} has exceeded your agreed credit limit. Kindly settle at your earliest to continue our business relationship.`;
     next_action = { text: actionText, type: 'send_reminder', signal_type: primarySignal === 'credit_exceeded' ? 'risk_alert_credit_exceeded' : 'risk_alert_overdue', source_surface: 'risk_alerts', risk_level, execution_mode: topEntities.length > 1 ? 'bulk' : 'single', entities: topEntities, prefill: topEntities.length === 1 ? { message: escalationMsg, language: language || 'en' } : null };
   }
-  const response_text = await narrate({ primarySignal, risk_level, count: topEntities.length, topName: topEntities[0]?.customer_name, topAmount: topEntities[0]?.amount, topRiskReason: topEntities[0]?.risk_reason, daysOverdue: topEntities[0]?.days_overdue || null, severeOverdueCount: Object.keys(severeByCustomer).length, multipleOverdueCount: multipleRisk.length, creditBreachCount: creditRisk.length, currency: orgCurrency }, 'risk_alerts', openai, { language });
+  const response_text = await narrate({ primarySignal, risk_level, count: topEntities.length, topName: topEntities[0]?.customer_name, topAmount: topEntities[0]?.amount, topRiskReason: topEntities[0]?.risk_reason, daysOverdue: topEntities[0]?.days_overdue || null, severeOverdueCount: Object.keys(severeByCustomer).length, multipleOverdueCount: multipleRisk.length, creditBreachCount: creditRisk.length, currency: orgCurrency }, 'risk_alerts', openai, { language, orgId, supabase });
   console.log('[orgAi]', { fn: 'riskAlerts', ms: Date.now() - start, risk_level, count: topEntities.length, signal: primarySignal });
   return { response_text, chart_data, next_action };
 }
@@ -1418,7 +1418,7 @@ export async function goneSilent(supabase, orgId, orgCurrency, openai, language 
     topLastOrderAmount: silentEntities[0]?.last_order_amount,
     topTotalValue: silentEntities[0]?.amount,
     suppressedCount, totalSilent, currency: orgCurrency,
-  }, 'gone_silent', openai, { language });
+  }, 'gone_silent', openai, { language, orgId, supabase });
 
   console.log('[orgAi]', { fn: 'goneSilent', ms: Date.now() - start, count: silentEntities.length, suppressed: suppressedCount });
   return { response_text, chart_data, next_action };
@@ -1489,7 +1489,7 @@ export async function topSellers(supabase, orgId, orgCurrency, openai, language 
   } else {
     next_action = { text: topProduct.name + ' leads with ' + formatCurrency(topProduct.revenue, orgCurrency) + ' and ' + Math.round(topProduct.units_sold) + ' units. Create new quotes to keep the momentum.', type: 'create_quote', signal_type: 'product_momentum_outreach', source_surface: 'top_sellers', execution_mode: null, entities: [], prefill: null };
   }
-  const response_text = await narrate({ count: rankedProducts.length, topProductName: topProduct?.name, topProductRevenue: topProduct?.revenue, topProductUnits: topProduct ? Math.round(topProduct.units_sold) : 0, topProductBuyers: topProduct?.unique_customer_count, lapsedBuyerCount: reactivationEntities.length, lapsedBuyerName: reactivationEntities[0]?.customer_name, totalRevenue, currency: orgCurrency }, 'top_sellers', openai, { language });
+  const response_text = await narrate({ count: rankedProducts.length, topProductName: topProduct?.name, topProductRevenue: topProduct?.revenue, topProductUnits: topProduct ? Math.round(topProduct.units_sold) : 0, topProductBuyers: topProduct?.unique_customer_count, lapsedBuyerCount: reactivationEntities.length, lapsedBuyerName: reactivationEntities[0]?.customer_name, totalRevenue, currency: orgCurrency }, 'top_sellers', openai, { language, orgId, supabase });
   console.log('[orgAi]', { fn: 'topSellers', ms: Date.now() - start, products: rankedProducts.length, lapsedBuyers: reactivationEntities.length });
   return { response_text, chart_data, next_action };
 }
@@ -1508,7 +1508,7 @@ export async function lowStock(supabase, orgId, orgCurrency, openai, language = 
     .eq('organisation_id', orgId).gt('reorder_point', 0).is('deleted_at', null);
   const lowInvItems = (allInv || []).filter(i => Number(i.quantity) <= Number(i.reorder_point));
   if (lowInvItems.length === 0) {
-    const response_text = await narrate({ count: 0, topProductName: null, topQty: null, topReorderPoint: null, currency: orgCurrency }, 'low_stock', openai, { language });
+    const response_text = await narrate({ count: 0, topProductName: null, topQty: null, topReorderPoint: null, currency: orgCurrency }, 'low_stock', openai, { language, orgId, supabase });
     return {
       response_text,
       chart_data: { type: 'insight', title: 'Low Stock', text: 'All products are adequately stocked. No reorder action required.', level: 'info' },
@@ -1588,7 +1588,7 @@ export async function lowStock(supabase, orgId, orgCurrency, openai, language = 
     topQty: topItem?.quantity, topReorderPoint: topItem?.reorder_point,
     topSupplierName: topItem?.supplier_name, topLeadTime: topItem?.lead_time_days,
     currency: orgCurrency,
-  }, 'low_stock', openai, { language });
+  }, 'low_stock', openai, { language, orgId, supabase });
   console.log('[orgAi]', { fn: 'lowStock', ms: Date.now() - start, count: lowStockItems.length });
   return { response_text, chart_data, next_action };
 }
@@ -1616,7 +1616,7 @@ export async function whatIOwe(supabase, orgId, orgCurrency, openai, language = 
   const allBills = bills || [];
 
   if (allBills.length === 0) {
-    const response_text = await narrate({ total: 0, count: 0, overdueCount: 0, currency: orgCurrency }, 'what_i_owe', openai, { language });
+    const response_text = await narrate({ total: 0, count: 0, overdueCount: 0, currency: orgCurrency }, 'what_i_owe', openai, { language, orgId, supabase });
     return {
       response_text,
       chart_data: { type: 'insight', title: 'What I Owe', text: 'No outstanding payables. All supplier bills are settled.', level: 'info' },
@@ -1696,7 +1696,7 @@ export async function whatIOwe(supabase, orgId, orgCurrency, openai, language = 
     overdueCount,
     topName: topEntity?.customer_name,
     currency: orgCurrency,
-  }, 'what_i_owe', openai, { language });
+  }, 'what_i_owe', openai, { language, orgId, supabase });
 
   console.log('[orgAi]', { fn: 'whatIOwe', ms: Date.now() - start, count: entries.length, total: totalOwed });
   return { response_text, chart_data, next_action };
@@ -1723,7 +1723,7 @@ export async function overduePayables(supabase, orgId, orgCurrency, openai, lang
   const overdueBills = bills || [];
 
   if (overdueBills.length === 0) {
-    const response_text = await narrate({ count: 0, topName: null, currency: orgCurrency }, 'overdue_payables', openai, { language });
+    const response_text = await narrate({ count: 0, topName: null, currency: orgCurrency }, 'overdue_payables', openai, { language, orgId, supabase });
     return {
       response_text,
       chart_data: { type: 'insight', title: 'Overdue Payables', text: 'No overdue supplier bills. All payables are within terms.', level: 'info' },
@@ -1797,7 +1797,7 @@ export async function overduePayables(supabase, orgId, orgCurrency, openai, lang
     topDaysOverdue: topEntity?.days_overdue,
     topAmount: formatCurrency(topEntity?.amount, orgCurrency),
     currency: orgCurrency,
-  }, 'overdue_payables', openai, { language });
+  }, 'overdue_payables', openai, { language, orgId, supabase });
 
   console.log('[orgAi]', { fn: 'overduePayables', ms: Date.now() - start, count: entries.length });
   return { response_text, chart_data, next_action };
@@ -1824,7 +1824,7 @@ export async function topSupplier(supabase, orgId, orgCurrency, openai, language
   const allBills = bills || [];
 
   if (allBills.length === 0) {
-    const response_text = await narrate({ topName: null, currency: orgCurrency }, 'top_supplier', openai, { language });
+    const response_text = await narrate({ topName: null, currency: orgCurrency }, 'top_supplier', openai, { language, orgId, supabase });
     return {
       response_text,
       chart_data: { type: 'insight', title: 'Top Supplier', text: 'No purchase bills recorded this month.', level: 'info' },
@@ -1893,7 +1893,7 @@ export async function topSupplier(supabase, orgId, orgCurrency, openai, language
     topBillCount: topEntity?.bill_count,
     count: entries.length,
     currency: orgCurrency,
-  }, 'top_supplier', openai, { language });
+  }, 'top_supplier', openai, { language, orgId, supabase });
 
   console.log('[orgAi]', { fn: 'topSupplier', ms: Date.now() - start, count: entries.length });
   return { response_text, chart_data, next_action };

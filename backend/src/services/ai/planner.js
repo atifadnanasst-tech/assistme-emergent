@@ -1,3 +1,4 @@
+import { recordAiUsage } from '../billing/usageTracking.js';
 /**
  * AssistMe — AI Planner
  *
@@ -121,7 +122,7 @@ PARAM EXAMPLES:
   Do NOT use it for correcting/adjusting an existing customer's balance (e.g. "set Ramesh balance to 12000", "we reconciled, balance is now 6000") -- that is not supported yet; set clarification_needed and explain this is not available.`;
 }
 
-export async function planExecution({ userMessage, scope = 'org', orgContext = {}, conversationHistory = [], openai }) {
+export async function planExecution({ userMessage, scope = 'org', orgContext = {}, conversationHistory = [], openai, orgId, supabase }) {
   if (!openai) throw new Error('[planner] OpenAI client not provided');
   if (!userMessage?.trim()) throw new Error('[planner] Empty user message');
 
@@ -152,6 +153,16 @@ export async function planExecution({ userMessage, scope = 'org', orgContext = {
       { signal: controller.signal }
     );
     clearTimeout(timeoutId);
+
+    // Usage tracking (Subscription & Billing, Step 2c) -- fire-and-forget,
+    // tracking only. Only fires if the caller supplied orgId+supabase.
+    if (orgId && supabase) {
+      recordAiUsage({
+        orgId, model: 'gpt-4o-mini',
+        inputTokens: completion.usage?.prompt_tokens, outputTokens: completion.usage?.completion_tokens,
+        supabase,
+      }).catch(() => {});
+    }
 
     const raw = completion.choices[0].message.content;
     let parsed;
