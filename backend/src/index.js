@@ -20,6 +20,7 @@ import { listBankAccounts, createBankAccount, updateBankAccount, deleteBankAccou
 import { extractBankAccountFromImage } from './services/ai/extractBankAccountFromImage.js';
 import { getFinancialPosition } from './services/ai/queryEngine/primitives.js';
 import { recordAiUsage, checkUsageAllowed } from './services/billing/usageTracking.js';
+import { createWalletOrder, creditWalletTopup, verifyClientPayment, verifyWebhookSignature } from './services/billing/walletService.js';
 import { generateOwnerDataExport } from './services/export/generateOwnerDataExport.js';
 import PDFDocument from 'pdfkit';
 
@@ -1415,6 +1416,127 @@ app.post('/api/export/trigger', async (c) => {
     return c.json({ generatedAt: result.generatedAt });
   } catch (err) {
     console.error('[POST /api/export/trigger] Error:', err);
+    return c.json({ error: 'internal_error' }, 500);
+  }
+});
+
+// ─── Wallet Top-ups (Subscription & Billing, Step 5A-3) ──────
+// See ASSISTME_V2_ARCHITECTURAL_BACKLOG.md -> "Subscription & Billing".
+
+// POST /api/wallet/create-order -- creates a Razorpay Order for one of the
+// 5 fixed amounts, returns everything the app needs to open
+// react-native-razorpay checkout.
+app.post('/api/wallet/create-order', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+    const body = await c.req.json();
+    const amountInr = Number(body.amountInr);
+
+    const result = await createWalletOrder({ orgId: organisationId, amountInr, supabase });
+    if (!result.success) return c.json({ error: result.error }, 400);
+    return c.json(result);
+  } catch (err) {
+    console.error('[POST /api/wallet/create-order] Error:', err);
+    return c.json({ error: 'internal_error' }, 500);
+  }
+});
+
+// POST /api/wallet/verify-payment -- called by the app right after
+// react-native-razorpay's checkout success handler returns payment
+// details. This is the FAST path (instant client-side confirmation);
+// the webhook below is the authoritative backstop for cases where the
+// app closes before this call completes.
+app.post('/api/wallet/verify-payment', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const body = await c.req.json();
+    const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = body;
+
+    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+      return c.json({ error: 'missing_fields' }, 400);
+    }
+
+    const isValid = verifyClientPayment({
+      orderId: razorpay_order_id,
+      paymentId: razorpay_payment_id,
+      signature: razorpay_signature,
+    });
+    if (!isValid) {
+      console.warn('[POST /api/wallet/verify-payment] signature mismatch for order:', razorpay_order_id);
+      return c.json({ error: 'invalid_signature' }, 400);
+    }
+
+    const result = await creditWalletTopup({
+      razorpayOrderId: razorpay_order_id,
+      razorpayPaymentId: razorpay_payment_id,
+      supabase,
+    });
+    if (!result.success) return c.json({ error: result.error }, 400);
+    return c.json({ success: true, aiCredits: result.aiCredits, alreadyCredited: result.alreadyCredited });
+  } catch (err) {
+    console.error('[POST /api/wallet/verify-payment] Error:', err);
+    return c.json({ error: 'internal_error' }, 500);
+  }
+});
+
+// POST /api/wallet/webhook -- Razorpay calls this server-to-server. The
+// AUTHORITATIVE source of truth, independent of whether the app is even
+// open. Must respond 2XX within 5 seconds (Razorpay's own requirement) or
+// it's treated as a failure and retried for up to 24 hours.
+//
+// CRITICAL: verifies against the RAW, unparsed request body (via
+// c.req.text()) BEFORE any JSON.parse() -- Razorpay's own docs: "Do not
+// parse or cast the webhook request body" before verifying, since
+// re-serializing JSON can change whitespace/key order and silently break
+// the signature match. No auth middleware here -- Razorpay is not an
+// authenticated app user; the signature IS the authentication.
+//
+// c.req.text() raw-body behavior verified end-to-end against a real
+// running server using this exact Hono version before this code was
+// written -- confirmed byte-exact raw body + correct signature match.
+app.post('/api/wallet/webhook', async (c) => {
+  try {
+    const rawBody = await c.req.text();
+    const signature = c.req.header('x-razorpay-signature');
+
+    if (!signature || !verifyWebhookSignature({ rawBody, signature })) {
+      console.warn('[POST /api/wallet/webhook] invalid or missing signature');
+      return c.json({ error: 'invalid_signature' }, 400);
+    }
+
+    const payload = JSON.parse(rawBody);
+    // Only payment.captured triggers crediting -- any other signature-valid
+    // event (order.paid, etc.) is a legitimate non-error, not a failure;
+    // acknowledge it with 200 so Razorpay never retries unnecessarily.
+    if (payload.event === 'payment.captured') {
+      const paymentEntity = payload.payload?.payment?.entity;
+      if (paymentEntity?.order_id && paymentEntity?.id) {
+        const creditResult = await creditWalletTopup({
+          razorpayOrderId: paymentEntity.order_id,
+          razorpayPaymentId: paymentEntity.id,
+          supabase,
+        });
+        // creditWalletTopup() does not throw -- it returns
+        // { success: false, error } on failure. We must explicitly check
+        // and throw here ourselves, or a genuine crediting failure would
+        // be silently discarded and this webhook would still return 200.
+        // Throwing routes it to the outer catch below, which returns a
+        // real error status so Razorpay's own retry mechanism
+        // (progressive backoff, up to 24 hours) can rescue a transient
+        // failure on our side. creditWalletTopup is idempotent, so a
+        // retried webhook is always safe to reprocess -- never double-credits.
+        if (!creditResult.success) {
+          throw new Error(`creditWalletTopup failed: ${creditResult.error}`);
+        }
+      }
+    }
+
+    return c.json({ received: true });
+  } catch (err) {
+    console.error('[POST /api/wallet/webhook] Error:', err);
     return c.json({ error: 'internal_error' }, 500);
   }
 });
