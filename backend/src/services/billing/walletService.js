@@ -23,6 +23,7 @@
 import Razorpay from 'razorpay';
 import { validatePaymentVerification, validateWebhookSignature } from 'razorpay/dist/utils/razorpay-utils.js';
 import { getWalletTierPricing, walletExpiryDate } from './walletPricing.js';
+import { sendTelegramAlert } from './telegramNotify.js';
 
 function getRazorpayInstance() {
   return new Razorpay({
@@ -135,6 +136,24 @@ export async function creditWalletTopup({ razorpayOrderId, razorpayPaymentId, su
     console.error('[creditWalletTopup] update failed:', updateErr.message);
     return { success: false, error: 'update_failed' };
   }
+
+  // Telegram alert -- fire-and-forget (not awaited), and only reached here
+  // because this is a genuinely NEW credit (the alreadyCredited=true path
+  // above already returned). Reuses the exact idempotency check this
+  // function already has, so a payment can never trigger two alerts even
+  // if both the client-side verify call and the webhook fire for it.
+  supabase
+    .from('organisations')
+    .select('name')
+    .eq('id', existing.organisation_id)
+    .maybeSingle()
+    .then(({ data: org }) => {
+      const orgName = org?.name || existing.organisation_id;
+      sendTelegramAlert(
+        `💰 <b>Wallet Recharge</b>\n${orgName}\n₹${existing.total_charged_inr} → ${existing.ai_credits_total} AI Credits`
+      );
+    })
+    .catch(() => {});
 
   return { success: true, alreadyCredited: false, aiCredits: existing.ai_credits_total };
 }
