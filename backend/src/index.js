@@ -21,6 +21,7 @@ import { extractBankAccountFromImage } from './services/ai/extractBankAccountFro
 import { getFinancialPosition } from './services/ai/queryEngine/primitives.js';
 import { recordAiUsage, checkUsageAllowed, getOrCreateCurrentPeriod, getCeilingPaisaForPlan } from './services/billing/usageTracking.js';
 import { createWalletOrder, creditWalletTopup, verifyClientPayment, verifyWebhookSignature } from './services/billing/walletService.js';
+import { createSubscription, requestCancellation, handleSubscriptionEvent, verifySubscriptionWebhookSignature, jobDowngradeCancelledSubscriptions } from './services/billing/subscriptionService.js';
 import { generateOwnerDataExport } from './services/export/generateOwnerDataExport.js';
 import PDFDocument from 'pdfkit';
 
@@ -1537,6 +1538,61 @@ app.post('/api/wallet/webhook', async (c) => {
     return c.json({ received: true });
   } catch (err) {
     console.error('[POST /api/wallet/webhook] Error:', err);
+    return c.json({ error: 'internal_error' }, 500);
+  }
+});
+
+app.post('/api/subscription/create', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+    const body = await c.req.json();
+    const tier = body.tier;
+
+    const result = await createSubscription({ orgId: organisationId, tier, supabase });
+    if (!result.success) return c.json({ error: result.error }, 400);
+    return c.json(result);
+  } catch (err) {
+    console.error('[POST /api/subscription/create] Error:', err);
+    return c.json({ error: 'internal_error' }, 500);
+  }
+});
+
+app.post('/api/subscription/cancel', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+
+    const result = await requestCancellation({ orgId: organisationId, supabase });
+    if (!result.success) return c.json({ error: result.error }, 400);
+    return c.json(result);
+  } catch (err) {
+    console.error('[POST /api/subscription/cancel] Error:', err);
+    return c.json({ error: 'internal_error' }, 500);
+  }
+});
+
+app.post('/api/subscription/webhook', async (c) => {
+  try {
+    const rawBody = await c.req.text();
+    const signature = c.req.header('x-razorpay-signature');
+
+    if (!signature || !verifySubscriptionWebhookSignature({ rawBody, signature })) {
+      console.warn('[POST /api/subscription/webhook] invalid or missing signature');
+      return c.json({ error: 'invalid_signature' }, 400);
+    }
+
+    const payload = JSON.parse(rawBody);
+    const result = await handleSubscriptionEvent({ event: payload.event, payload: payload.payload, supabase });
+    if (!result.success) {
+      throw new Error('handleSubscriptionEvent failed');
+    }
+
+    return c.json({ received: true });
+  } catch (err) {
+    console.error('[POST /api/subscription/webhook] Error:', err);
     return c.json({ error: 'internal_error' }, 500);
   }
 });
@@ -8861,6 +8917,7 @@ cron.schedule('0 8 * * *', () => runWatchJobForAllOrgs('jobDailyInsight', jobDai
 // once the Preferences Center exists -- 20:00 here is a placeholder, not business logic.
 cron.schedule('0 20 * * *', () => runWatchJobForAllOrgs('jobBankReconciliation', jobBankReconciliation), CRON_TZ);
 cron.schedule('0 3 * * *', () => runWatchJobForAllOrgs('jobDataExport', jobDataExport), CRON_TZ);
+cron.schedule('0 4 * * *', () => runWatchJobForAllOrgs('jobDowngradeCancelledSubscriptions', (orgId) => jobDowngradeCancelledSubscriptions(orgId, supabase)), CRON_TZ);
 cron.schedule('0 */4 * * *', () => runWatchJobForAllOrgs('jobDraftCleanup', jobDraftCleanup), CRON_TZ);
 cron.schedule('*/5 * * * *', () => runWatchJobForAllOrgs('jobTaskReminders', jobTaskReminders), CRON_TZ);
 cron.schedule('*/5 * * * *', () => runWatchJobForAllOrgs('jobLiveDistillation', jobLiveDistillation), CRON_TZ);
