@@ -21,7 +21,7 @@ import { extractBankAccountFromImage } from './services/ai/extractBankAccountFro
 import { getFinancialPosition } from './services/ai/queryEngine/primitives.js';
 import { recordAiUsage, checkUsageAllowed, getOrCreateCurrentPeriod, getCeilingPaisaForPlan } from './services/billing/usageTracking.js';
 import { createWalletOrder, creditWalletTopup, verifyClientPayment, verifyWebhookSignature } from './services/billing/walletService.js';
-import { createSubscription, requestCancellation, handleSubscriptionEvent, verifySubscriptionWebhookSignature, jobDowngradeCancelledSubscriptions } from './services/billing/subscriptionService.js';
+import { createSubscription, requestCancellation, handleSubscriptionEvent, verifySubscriptionWebhookSignature, jobDowngradeCancelledSubscriptions, verifyClientSubscriptionPayment, activateSubscriptionClientSide } from './services/billing/subscriptionService.js';
 import { generateOwnerDataExport } from './services/export/generateOwnerDataExport.js';
 import PDFDocument from 'pdfkit';
 
@@ -1570,6 +1570,36 @@ app.post('/api/subscription/cancel', async (c) => {
     return c.json(result);
   } catch (err) {
     console.error('[POST /api/subscription/cancel] Error:', err);
+    return c.json({ error: 'internal_error' }, 500);
+  }
+});
+
+app.post('/api/subscription/verify-payment', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+    const body = await c.req.json();
+    const { razorpay_subscription_id, razorpay_payment_id, razorpay_signature, tier } = body;
+
+    if (!razorpay_subscription_id || !razorpay_payment_id || !razorpay_signature || !tier) {
+      return c.json({ error: 'missing_fields' }, 400);
+    }
+
+    const isValid = verifyClientSubscriptionPayment({
+      subscriptionId: razorpay_subscription_id,
+      paymentId: razorpay_payment_id,
+      signature: razorpay_signature,
+    });
+    if (!isValid) {
+      console.warn('[POST /api/subscription/verify-payment] signature mismatch for subscription:', razorpay_subscription_id);
+      return c.json({ error: 'invalid_signature' }, 400);
+    }
+
+    await activateSubscriptionClientSide({ orgId: organisationId, tier, supabase });
+    return c.json({ success: true, tier });
+  } catch (err) {
+    console.error('[POST /api/subscription/verify-payment] Error:', err);
     return c.json({ error: 'internal_error' }, 500);
   }
 });

@@ -26,7 +26,7 @@
 //                                    Rs 1999 base + 18% GST)
 
 import Razorpay from 'razorpay';
-import { validateWebhookSignature } from 'razorpay/dist/utils/razorpay-utils.js';
+import { validateWebhookSignature, validatePaymentVerification } from 'razorpay/dist/utils/razorpay-utils.js';
 
 const PLAN_IDS = {
   pro: 'plan_TMlrUSFrLzANMV',
@@ -134,6 +134,31 @@ async function recordSubscriptionEvent({ orgId, razorpaySubscriptionId, eventTyp
   if (error) {
     console.error('[recordSubscriptionEvent] insert failed:', error.message);
   }
+}
+
+export function verifyClientSubscriptionPayment({ subscriptionId, paymentId, signature }) {
+  try {
+    return validatePaymentVerification(
+      { subscription_id: subscriptionId, payment_id: paymentId },
+      signature,
+      process.env.RAZORPAY_KEY_SECRET
+    );
+  } catch (err) {
+    console.error('[verifyClientSubscriptionPayment] error:', err.message);
+    return false;
+  }
+}
+
+export async function activateSubscriptionClientSide({ orgId, tier, supabase }) {
+  await supabase
+    .from('subscriptions')
+    .update({ status: 'active', updated_at: new Date().toISOString() })
+    .eq('organisation_id', orgId);
+
+  await supabase
+    .from('organisations')
+    .update({ subscription_plan: tier })
+    .eq('id', orgId);
 }
 
 export function verifySubscriptionWebhookSignature({ rawBody, signature }) {
