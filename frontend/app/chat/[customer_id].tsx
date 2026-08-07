@@ -1309,9 +1309,16 @@ export default function CustomerChatScreen() {
       }
 
       if (data.routing === 'clarify') {
-        // AI asks clarifying question — reload to show it
-        setSparkWorkflowState('idle');
-        await loadChat();
+        if (data.message_type === 'usage_limit') {
+          setSparkWorkflowState('idle');
+          Alert.alert('Usage limit reached', data.message, [
+            { text: 'OK', style: 'cancel' },
+            { text: 'Get more usage', onPress: () => router.push('/settings/billing') },
+          ]);
+        } else {
+          setSparkWorkflowState('idle');
+          await loadChat();
+        }
       } else if (data.routing === 'preview') {
         // Show Action Preview Sheet
         setPreviewDraftId(data.draft_id);
@@ -1829,14 +1836,27 @@ export default function CustomerChatScreen() {
     </View>
   );
 
-  const renderSystemAlert = (msg: ChatMessage) => (
-    <View style={styles.systemAlertContainer}>
-      <View style={styles.systemAlertStrip}>
-        <Ionicons name="warning" size={14} color="#D32F2F" />
-        <Text style={styles.systemAlertText}>{msg.content}</Text>
+  const renderSystemAlert = (msg: ChatMessage) => {
+    const isUsageLimitAlert = (msg.content || '').includes('Get more usage');
+    return (
+      <View style={styles.systemAlertContainer}>
+        <View style={styles.systemAlertStrip}>
+          <Ionicons name="warning" size={14} color="#D32F2F" />
+          <Text style={styles.systemAlertText}>{msg.content}</Text>
+        </View>
+        {isUsageLimitAlert && (
+          <TouchableOpacity
+            style={{ alignSelf: 'flex-start', marginTop: 4, marginLeft: 4 }}
+            onPress={() => router.push('/settings/billing')}
+          >
+            <Text style={{ fontSize: 12, color: '#075E54', fontWeight: '700', textDecorationLine: 'underline' }}>
+              Get more usage →
+            </Text>
+          </TouchableOpacity>
+        )}
       </View>
-    </View>
-  );
+    );
+  };
 
   const renderInvoiceCard = (msg: ChatMessage) => {
     const cd = msg.card_data || {};

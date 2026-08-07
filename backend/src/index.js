@@ -3341,6 +3341,7 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
       console.log(`[SPARK] op=${startTime} usage_limit_reached after ${Date.now() - startTime}ms`);
       return c.json({
         routing: 'clarify',
+        message_type: 'usage_limit',
         message: `Usage limit reached · Resets at ${usageCheck.periodEndFormatted} · Get more usage`,
         confidence_score: null,
         actions: [],
