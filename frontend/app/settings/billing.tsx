@@ -43,6 +43,7 @@ const TIER_INFO: TierInfo[] = [
 interface UsageSummary {
   plan: string;
   walletCreditsRemaining: number;
+  subscriptionPeriodEndFormatted: string | null;
   currentPeriod: {
     periodType: string;
     costUsedPaisa: number;
@@ -296,9 +297,12 @@ export default function SubscriptionBilling() {
     }
 
     if (targetTier.tier === 'free') {
+      const dateText = usage?.subscriptionPeriodEndFormatted
+        ? `on ${usage.subscriptionPeriodEndFormatted}`
+        : 'once your current billing period ends';
       Alert.alert(
         'Move to Free?',
-        "You'll lose access to features beyond the Free plan once your current billing period ends. You can resubscribe any time.",
+        `You'll lose access to features beyond the Free plan ${dateText}. You can resubscribe any time.`,
         [
           { text: 'Keep current plan', style: 'cancel' },
           { text: 'Move to Free', style: 'destructive', onPress: handleCancelToFree },
