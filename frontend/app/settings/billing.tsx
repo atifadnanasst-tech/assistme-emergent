@@ -43,6 +43,7 @@ const WALLET_TIERS: WalletTier[] = [
 ];
 
 interface UsageSummary {
+  plan: string;
   walletCreditsRemaining: number;
   currentPeriod: {
     periodType: string;
@@ -175,7 +176,12 @@ export default function SubscriptionBilling() {
       <ScrollView contentContainerStyle={{ padding: 20 }}>
         {!loadingUsage && usage && (
           <View style={styles.card}>
-            <Text style={styles.cardTitle}>Your Usage</Text>
+            <View style={styles.usageHeaderRow}>
+              <Text style={styles.cardTitleLeft}>Your Usage</Text>
+              <View style={styles.planBadge}>
+                <Text style={styles.planBadgeText}>{usage.plan.toUpperCase()}</Text>
+              </View>
+            </View>
             <View style={styles.usageRow}>
               <Text style={styles.usageLabel}>AI Credits balance</Text>
               <Text style={styles.usageValueBold}>{usage.walletCreditsRemaining}</Text>
@@ -190,7 +196,11 @@ export default function SubscriptionBilling() {
               <View
                 style={[
                   styles.progressFill,
-                  { width: `${Math.min(100, usage.currentPeriod.percentUsed)}%` },
+                  // Text percentage stays exactly accurate above; only the
+                  // BAR gets a floor so genuinely-nonzero-but-tiny usage
+                  // (e.g. 0.02%) still shows a visible sliver instead of
+                  // rendering identically to zero usage.
+                  { width: `${usage.currentPeriod.percentUsed > 0 ? Math.max(2, Math.min(100, usage.currentPeriod.percentUsed)) : 0}%` },
                   usage.currentPeriod.percentUsed >= 100 && styles.progressFillFull,
                 ]}
               />
@@ -274,6 +284,20 @@ const styles = StyleSheet.create({
   tierCredits: { fontSize: 12, color: '#888', marginTop: 2 },
   footnote: { fontSize: 11, color: '#999', marginTop: 14, lineHeight: 16, textAlign: 'center' },
   comingSoonCard: { opacity: 0.7 },
+  usageHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  cardTitleLeft: { fontSize: 16, fontWeight: '700', color: '#222' },
+  planBadge: {
+    backgroundColor: '#075E54',
+    borderRadius: 4,
+    paddingVertical: 3,
+    paddingHorizontal: 8,
+  },
+  planBadgeText: { fontSize: 10, fontWeight: '700', color: '#FFFFFF', letterSpacing: 0.5 },
   usageRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
