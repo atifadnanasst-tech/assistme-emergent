@@ -1311,7 +1311,8 @@ export default function CustomerChatScreen() {
       if (data.routing === 'clarify') {
         if (data.message_type === 'usage_limit') {
           setSparkWorkflowState('idle');
-          Alert.alert('Usage limit reached', data.message, [
+          const alertBody = (data.message || '').replace(/\s*·\s*Get more usage\s*$/, '');
+          Alert.alert('Usage limit reached', alertBody, [
             { text: 'OK', style: 'cancel' },
             { text: 'Get more usage', onPress: () => router.push('/settings/billing') },
           ]);
