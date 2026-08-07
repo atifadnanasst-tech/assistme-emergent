@@ -1838,11 +1838,14 @@ export default function CustomerChatScreen() {
 
   const renderSystemAlert = (msg: ChatMessage) => {
     const isUsageLimitAlert = (msg.content || '').includes('Get more usage');
+    const displayContent = isUsageLimitAlert
+      ? (msg.content || '').replace(/\s*·\s*Get more usage\s*$/, '')
+      : msg.content;
     return (
       <View style={styles.systemAlertContainer}>
         <View style={styles.systemAlertStrip}>
           <Ionicons name="warning" size={14} color="#D32F2F" />
-          <Text style={styles.systemAlertText}>{msg.content}</Text>
+          <Text style={styles.systemAlertText}>{displayContent}</Text>
         </View>
         {isUsageLimitAlert && (
           <TouchableOpacity

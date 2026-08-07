@@ -801,9 +801,23 @@ export default function AIScreen() {
     const na = msg.next_action;
     const hasAction = na && na.type && na.type !== 'none' && na.entities && na.entities.length > 0;
     const isBulk = na?.execution_mode === 'bulk';
+    const isUsageLimitAlert = (msg.content || '').includes('Get more usage');
+    const displayContent = isUsageLimitAlert
+      ? (msg.content || '').replace(/\s*·\s*Get more usage\s*$/, '')
+      : msg.content;
     return (
       <View style={styles.aiTextBubble}>
-        <Text style={styles.aiTextContent}>{msg.content}</Text>
+        <Text style={styles.aiTextContent}>{displayContent}</Text>
+        {isUsageLimitAlert && (
+          <TouchableOpacity
+            style={{ alignSelf: 'flex-start', marginTop: 4 }}
+            onPress={() => router.push('/settings/billing')}
+          >
+            <Text style={{ fontSize: 12, color: '#075E54', fontWeight: '700', textDecorationLine: 'underline' }}>
+              Get more usage →
+            </Text>
+          </TouchableOpacity>
+        )}
         {msg.chart_data && (
           <VisualizationCard data={msg.chart_data} />
         )}
