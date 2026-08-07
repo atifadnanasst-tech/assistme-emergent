@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -42,9 +42,45 @@ const WALLET_TIERS: WalletTier[] = [
   { amountInr: 2000, aiCredits: 1600 },
 ];
 
+interface UsageSummary {
+  walletCreditsRemaining: number;
+  currentPeriod: {
+    periodType: string;
+    costUsedPaisa: number;
+    ceilingPaisa: number;
+    percentUsed: number;
+    periodEndFormatted: string;
+  };
+}
+
 export default function SubscriptionBilling() {
   const router = useRouter();
   const [purchasingTier, setPurchasingTier] = useState<number | null>(null);
+  const [usage, setUsage] = useState<UsageSummary | null>(null);
+  const [loadingUsage, setLoadingUsage] = useState(true);
+
+  const fetchUsageSummary = useCallback(async () => {
+    try {
+      const token = await authService.getAccessToken();
+      if (!token) return;
+      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+      const res = await fetch(`${backendUrl}/api/billing/usage-summary`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setUsage(data);
+      }
+    } catch (err) {
+      console.error('Usage summary fetch error:', err);
+    } finally {
+      setLoadingUsage(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchUsageSummary();
+  }, [fetchUsageSummary]);
 
   const handleBuyCredits = async (tier: WalletTier) => {
     if (purchasingTier !== null) return;
@@ -109,6 +145,7 @@ export default function SubscriptionBilling() {
       if (verifyRes.ok) {
         const result = await verifyRes.json();
         Alert.alert('Success', `${result.aiCredits} AI Credits added to your account.`);
+        fetchUsageSummary();
       } else {
         // Payment succeeded on Razorpay's side even if this specific call
         // failed -- the webhook will still credit it shortly. Tell the
@@ -136,6 +173,32 @@ export default function SubscriptionBilling() {
       </View>
 
       <ScrollView contentContainerStyle={{ padding: 20 }}>
+        {!loadingUsage && usage && (
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Your Usage</Text>
+            <View style={styles.usageRow}>
+              <Text style={styles.usageLabel}>AI Credits balance</Text>
+              <Text style={styles.usageValueBold}>{usage.walletCreditsRemaining}</Text>
+            </View>
+            <View style={styles.usageRow}>
+              <Text style={styles.usageLabel}>
+                {usage.currentPeriod.periodType === 'free_window' ? 'Current 5-hour window' : 'This month'}
+              </Text>
+              <Text style={styles.usageValue}>{usage.currentPeriod.percentUsed}% used</Text>
+            </View>
+            <View style={styles.progressTrack}>
+              <View
+                style={[
+                  styles.progressFill,
+                  { width: `${Math.min(100, usage.currentPeriod.percentUsed)}%` },
+                  usage.currentPeriod.percentUsed >= 100 && styles.progressFillFull,
+                ]}
+              />
+            </View>
+            <Text style={styles.usageReset}>Resets {usage.currentPeriod.periodEndFormatted}</Text>
+          </View>
+        )}
+
         <View style={styles.card}>
           <Ionicons name="flash-outline" size={36} color="#075E54" style={{ alignSelf: 'center', marginBottom: 10 }} />
           <Text style={styles.cardTitle}>Buy AI Credits</Text>
@@ -211,4 +274,27 @@ const styles = StyleSheet.create({
   tierCredits: { fontSize: 12, color: '#888', marginTop: 2 },
   footnote: { fontSize: 11, color: '#999', marginTop: 14, lineHeight: 16, textAlign: 'center' },
   comingSoonCard: { opacity: 0.7 },
+  usageRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 10,
+  },
+  usageLabel: { fontSize: 13, color: '#666' },
+  usageValue: { fontSize: 13, color: '#333', fontWeight: '600' },
+  usageValueBold: { fontSize: 18, color: '#075E54', fontWeight: '700' },
+  progressTrack: {
+    height: 8,
+    backgroundColor: '#F0F0F0',
+    borderRadius: 4,
+    marginTop: 10,
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: 8,
+    backgroundColor: '#075E54',
+    borderRadius: 4,
+  },
+  progressFillFull: { backgroundColor: '#C62828' },
+  usageReset: { fontSize: 11, color: '#999', marginTop: 8, textAlign: 'right' },
 });
