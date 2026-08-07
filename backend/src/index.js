@@ -1574,6 +1574,7 @@ app.get('/api/billing/usage-summary', async (c) => {
     const percentUsed = ceilingPaisa > 0 ? Math.round((costUsedPaisa / ceilingPaisa) * 100) : 0;
 
     return c.json({
+      plan,
       walletCreditsRemaining,
       currentPeriod: {
         periodType,
