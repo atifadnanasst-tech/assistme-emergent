@@ -164,6 +164,15 @@ export default function SubscriptionBilling() {
     }
   };
 
+  // Three-tier progress bar color: teal (normal) -> orange (>=75%,
+  // approaching limit) -> red (>=90%, at/near limit). Purely visual;
+  // does not affect the exact text percentage shown above the bar.
+  const getProgressBarColorStyle = (percentUsed: number) => {
+    if (percentUsed >= 90) return styles.progressFillRed;
+    if (percentUsed >= 75) return styles.progressFillOrange;
+    return null;
+  };
+
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
@@ -201,7 +210,7 @@ export default function SubscriptionBilling() {
                   // (e.g. 0.02%) still shows a visible sliver instead of
                   // rendering identically to zero usage.
                   { width: `${usage.currentPeriod.percentUsed > 0 ? Math.max(2, Math.min(100, usage.currentPeriod.percentUsed)) : 0}%` },
-                  usage.currentPeriod.percentUsed >= 100 && styles.progressFillFull,
+                  getProgressBarColorStyle(usage.currentPeriod.percentUsed),
                 ]}
               />
             </View>
@@ -319,6 +328,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#075E54',
     borderRadius: 4,
   },
-  progressFillFull: { backgroundColor: '#C62828' },
+  progressFillOrange: { backgroundColor: '#E67E22' },
+  progressFillRed: { backgroundColor: '#C62828' },
   usageReset: { fontSize: 11, color: '#999', marginTop: 8, textAlign: 'right' },
 });
