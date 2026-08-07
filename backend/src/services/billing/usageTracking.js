@@ -168,6 +168,17 @@ const CEILINGS_PAISA = {
 };
 
 /**
+ * Exported so the usage-summary endpoint (display only, no enforcement
+ * implications) can show "X used of Y" even while ENFORCEMENT_ENABLED is
+ * false. Same plan -> ceiling mapping logic checkUsageAllowed() itself
+ * uses, extracted so it's not duplicated.
+ */
+export function getCeilingPaisaForPlan(plan) {
+  if (plan === 'free' || !plan) return CEILINGS_PAISA.free_window;
+  return CEILINGS_PAISA[plan] ?? CEILINGS_PAISA.pro;
+}
+
+/**
  * Checks whether an org is within its usage budget for the current period.
  * FAILS OPEN on any internal error -- a bug in enforcement must never be
  * able to block a legitimate (or paying) user. The worst case of a fail-

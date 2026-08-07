@@ -19,7 +19,7 @@ import { getDocumentBrandingProfile } from './services/pdf/documentBrandingProfi
 import { listBankAccounts, createBankAccount, updateBankAccount, deleteBankAccount } from './services/capabilities/bankAccountsService.js';
 import { extractBankAccountFromImage } from './services/ai/extractBankAccountFromImage.js';
 import { getFinancialPosition } from './services/ai/queryEngine/primitives.js';
-import { recordAiUsage, checkUsageAllowed } from './services/billing/usageTracking.js';
+import { recordAiUsage, checkUsageAllowed, getOrCreateCurrentPeriod, getCeilingPaisaForPlan } from './services/billing/usageTracking.js';
 import { createWalletOrder, creditWalletTopup, verifyClientPayment, verifyWebhookSignature } from './services/billing/walletService.js';
 import { generateOwnerDataExport } from './services/export/generateOwnerDataExport.js';
 import PDFDocument from 'pdfkit';
@@ -1537,6 +1537,58 @@ app.post('/api/wallet/webhook', async (c) => {
     return c.json({ received: true });
   } catch (err) {
     console.error('[POST /api/wallet/webhook] Error:', err);
+    return c.json({ error: 'internal_error' }, 500);
+  }
+});
+
+app.get('/api/billing/usage-summary', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+
+    const { data: org, error: orgErr } = await supabase
+      .from('organisations')
+      .select('subscription_plan')
+      .eq('id', organisationId)
+      .maybeSingle();
+    if (orgErr) return c.json({ error: 'internal_error' }, 500);
+    const plan = org?.subscription_plan || 'free';
+
+    const { data: walletRows, error: walletErr } = await supabase
+      .from('wallet_topups')
+      .select('ai_credits_total, ai_credits_used, expires_at, status')
+      .eq('organisation_id', organisationId)
+      .eq('status', 'paid');
+    if (walletErr) return c.json({ error: 'internal_error' }, 500);
+
+    const now = new Date();
+    const walletCreditsRemaining = (walletRows || [])
+      .filter(r => new Date(r.expires_at) > now)
+      .reduce((sum, r) => sum + (r.ai_credits_total - r.ai_credits_used), 0);
+
+    const periodType = plan === 'free' ? 'free_window' : 'paid_month';
+    const period = await getOrCreateCurrentPeriod({ orgId: organisationId, periodType, supabase });
+    const ceilingPaisa = getCeilingPaisaForPlan(plan);
+    const costUsedPaisa = period.cost_used_paisa || 0;
+    const percentUsed = ceilingPaisa > 0 ? Math.round((costUsedPaisa / ceilingPaisa) * 100) : 0;
+
+    return c.json({
+      walletCreditsRemaining,
+      currentPeriod: {
+        periodType,
+        costUsedPaisa,
+        ceilingPaisa,
+        percentUsed,
+        periodEnd: period.period_end,
+        periodEndFormatted: new Date(period.period_end).toLocaleString('en-IN', {
+          timeZone: 'Asia/Kolkata', hour: 'numeric', minute: '2-digit', hour12: true,
+          day: 'numeric', month: 'short',
+        }),
+      },
+    });
+  } catch (err) {
+    console.error('[GET /api/billing/usage-summary] Error:', err);
     return c.json({ error: 'internal_error' }, 500);
   }
 });
