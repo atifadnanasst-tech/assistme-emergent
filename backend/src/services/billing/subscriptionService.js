@@ -146,6 +146,11 @@ export async function changeSubscriptionTier({ orgId, newTier, supabase }) {
     console.error('[changeSubscriptionTier] cancel-old failed:', cancelErr.message);
   }
 
+  await supabase
+    .from('organisations')
+    .update({ subscription_plan: 'free' })
+    .eq('id', orgId);
+
   const newSubResult = await createSubscription({ orgId, tier: newTier, supabase });
   if (!newSubResult.success) {
     return { success: false, error: 'new_subscription_creation_failed' };
@@ -320,7 +325,7 @@ export async function jobDowngradeCancelledSubscriptions(orgId, supabase) {
 
   if (!sub) return 0;
 
-  const periodEnded = sub.current_period_end && new Date(sub.current_period_end) < new Date();
+  const periodEnded = !sub.current_period_end || new Date(sub.current_period_end) < new Date();
   if (!periodEnded) return 0;
 
   await supabase
