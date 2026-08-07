@@ -21,7 +21,7 @@ import { extractBankAccountFromImage } from './services/ai/extractBankAccountFro
 import { getFinancialPosition } from './services/ai/queryEngine/primitives.js';
 import { recordAiUsage, checkUsageAllowed, getOrCreateCurrentPeriod, getCeilingPaisaForPlan } from './services/billing/usageTracking.js';
 import { createWalletOrder, creditWalletTopup, verifyClientPayment, verifyWebhookSignature } from './services/billing/walletService.js';
-import { createSubscription, requestCancellation, handleSubscriptionEvent, verifySubscriptionWebhookSignature, jobDowngradeCancelledSubscriptions, verifyClientSubscriptionPayment, activateSubscriptionClientSide } from './services/billing/subscriptionService.js';
+import { createSubscription, requestCancellation, handleSubscriptionEvent, verifySubscriptionWebhookSignature, jobDowngradeCancelledSubscriptions, verifyClientSubscriptionPayment, activateSubscriptionClientSide, changeSubscriptionTier } from './services/billing/subscriptionService.js';
 import { generateOwnerDataExport } from './services/export/generateOwnerDataExport.js';
 import PDFDocument from 'pdfkit';
 
@@ -1600,6 +1600,23 @@ app.post('/api/subscription/verify-payment', async (c) => {
     return c.json({ success: true, tier });
   } catch (err) {
     console.error('[POST /api/subscription/verify-payment] Error:', err);
+    return c.json({ error: 'internal_error' }, 500);
+  }
+});
+
+app.post('/api/subscription/change-tier', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+    const body = await c.req.json();
+    const newTier = body.newTier;
+
+    const result = await changeSubscriptionTier({ orgId: organisationId, newTier, supabase });
+    if (!result.success) return c.json({ error: result.error }, 400);
+    return c.json(result);
+  } catch (err) {
+    console.error('[POST /api/subscription/change-tier] Error:', err);
     return c.json({ error: 'internal_error' }, 500);
   }
 });

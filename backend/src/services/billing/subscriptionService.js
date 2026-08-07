@@ -91,6 +91,85 @@ export async function createSubscription({ orgId, tier, supabase }) {
   };
 }
 
+export async function changeSubscriptionTier({ orgId, newTier, supabase }) {
+  const newPlanId = PLAN_IDS[newTier];
+  if (!newPlanId) {
+    return { success: false, error: 'invalid_tier' };
+  }
+
+  const { data: sub, error: fetchErr } = await supabase
+    .from('subscriptions')
+    .select('*')
+    .eq('organisation_id', orgId)
+    .maybeSingle();
+
+  if (fetchErr || !sub || !sub.razorpay_subscription_id) {
+    return { success: false, error: 'no_active_subscription' };
+  }
+
+  const razorpay = getRazorpayInstance();
+
+  try {
+    await razorpay.subscriptions.update(sub.razorpay_subscription_id, {
+      plan_id: newPlanId,
+      schedule_change_at: 'now',
+    });
+
+    await supabase
+      .from('subscriptions')
+      .update({ plan_tier: newTier, updated_at: new Date().toISOString() })
+      .eq('id', sub.id);
+
+    await supabase
+      .from('organisations')
+      .update({ subscription_plan: newTier })
+      .eq('id', orgId);
+
+    await recordSubscriptionEvent({
+      orgId,
+      razorpaySubscriptionId: sub.razorpay_subscription_id,
+      eventType: 'tier_changed_instant',
+      planTier: newTier,
+      amountPaisa: null,
+      payload: { from_tier: sub.plan_tier, to_tier: newTier, method: 'in_place_update' },
+      supabase,
+    });
+
+    return { success: true, instant: true };
+  } catch (updateErr) {
+    console.warn('[changeSubscriptionTier] in-place update failed (likely UPI/eMandate), falling back to cancel+recreate:', updateErr.message);
+  }
+
+  try {
+    await razorpay.subscriptions.cancel(sub.razorpay_subscription_id);
+  } catch (cancelErr) {
+    console.error('[changeSubscriptionTier] cancel-old failed:', cancelErr.message);
+  }
+
+  const newSubResult = await createSubscription({ orgId, tier: newTier, supabase });
+  if (!newSubResult.success) {
+    return { success: false, error: 'new_subscription_creation_failed' };
+  }
+
+  await recordSubscriptionEvent({
+    orgId,
+    razorpaySubscriptionId: sub.razorpay_subscription_id,
+    eventType: 'tier_change_requires_reauth',
+    planTier: newTier,
+    amountPaisa: null,
+    payload: { from_tier: sub.plan_tier, to_tier: newTier, method: 'cancel_and_recreate' },
+    supabase,
+  });
+
+  return {
+    success: true,
+    instant: false,
+    needsReauth: true,
+    subscriptionId: newSubResult.subscriptionId,
+    keyId: newSubResult.keyId,
+  };
+}
+
 export async function requestCancellation({ orgId, supabase }) {
   const { data: sub, error: fetchErr } = await supabase
     .from('subscriptions')
