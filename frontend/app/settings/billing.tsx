@@ -14,21 +14,6 @@ import { Ionicons } from '@expo/vector-icons';
 import RazorpayCheckout from 'react-native-razorpay';
 import { authService } from '../../lib/auth';
 
-// Subscription & Billing — Step 5A mobile piece (Home Menu Audit build
-// item). Scoped to wallet top-ups (AI Credits) for now -- Step 5B
-// (recurring pro/business subscriptions) has no backend yet, so no
-// subscription UI is built here until that exists.
-//
-// Flow: tap a tier -> POST /api/wallet/create-order -> open
-// react-native-razorpay's native checkout with the returned order_id ->
-// on success, POST /api/wallet/verify-payment (fast client-side
-// confirmation; the webhook on the backend is the authoritative backstop
-// regardless of what happens here).
-//
-// order_id is REQUIRED, not optional -- Razorpay's own docs: "Payments
-// made without an order_id cannot be captured and will be automatically
-// refunded." Every checkout call below includes it.
-
 interface WalletTier {
   amountInr: number;
   aiCredits: number;
@@ -42,15 +27,17 @@ const WALLET_TIERS: WalletTier[] = [
   { amountInr: 2000, aiCredits: 1600 },
 ];
 
-interface SubscriptionTier {
-  tier: 'pro' | 'business';
+interface TierInfo {
+  tier: 'free' | 'pro' | 'business';
   displayName: string;
-  totalChargedInr: number;
+  priceLabel: string;
+  rank: number;
 }
 
-const SUBSCRIPTION_TIERS: SubscriptionTier[] = [
-  { tier: 'pro', displayName: 'Pro', totalChargedInr: 588.82 },
-  { tier: 'business', displayName: 'Business', totalChargedInr: 2358.82 },
+const TIER_INFO: TierInfo[] = [
+  { tier: 'free', displayName: 'Free', priceLabel: 'Free', rank: 0 },
+  { tier: 'pro', displayName: 'Pro', priceLabel: '₹499 + GST /month', rank: 1 },
+  { tier: 'business', displayName: 'Business', priceLabel: '₹1999 + GST /month', rank: 2 },
 ];
 
 interface UsageSummary {
@@ -71,6 +58,7 @@ export default function SubscriptionBilling() {
   const [subscribingTier, setSubscribingTier] = useState<string | null>(null);
   const [usage, setUsage] = useState<UsageSummary | null>(null);
   const [loadingUsage, setLoadingUsage] = useState(true);
+  const currentTier = usage?.plan || 'free';
 
   const fetchUsageSummary = useCallback(async () => {
     try {
@@ -106,7 +94,6 @@ export default function SubscriptionBilling() {
       }
       const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
 
-      // Step 1: create the order server-side
       const orderRes = await fetch(`${backendUrl}/api/wallet/create-order`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
@@ -118,7 +105,6 @@ export default function SubscriptionBilling() {
       }
       const order = await orderRes.json();
 
-      // Step 2: open native Razorpay checkout with the real order_id
       const checkoutOptions = {
         description: `${order.aiCredits} AI Credits`,
         currency: 'INR',
@@ -133,18 +119,12 @@ export default function SubscriptionBilling() {
       try {
         paymentResult = await RazorpayCheckout.open(checkoutOptions);
       } catch (checkoutErr: any) {
-        // User cancelled or payment failed -- not a bug, just no purchase.
-        // Razorpay's own error shape: { code, description }.
         if (checkoutErr?.code !== 0) {
-          // code 0 is typically user-cancelled; anything else is worth a message
           Alert.alert('Payment not completed', checkoutErr?.description || 'Please try again.');
         }
         return;
       }
 
-      // Step 3: fast client-side confirmation. The webhook (server-side,
-      // already proven live-tested) is the authoritative backstop
-      // regardless of whether this call succeeds.
       const verifyRes = await fetch(`${backendUrl}/api/wallet/verify-payment`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
@@ -160,9 +140,6 @@ export default function SubscriptionBilling() {
         Alert.alert('Success', `${result.aiCredits} AI Credits added to your account.`);
         fetchUsageSummary();
       } else {
-        // Payment succeeded on Razorpay's side even if this specific call
-        // failed -- the webhook will still credit it shortly. Tell the
-        // owner honestly rather than imply failure.
         Alert.alert(
           'Payment received',
           'Your payment went through. Credits may take a moment to appear.'
@@ -176,82 +153,171 @@ export default function SubscriptionBilling() {
     }
   };
 
-  // Three-tier progress bar color: teal (normal) -> orange (>=75%,
-  // approaching limit) -> red (>=90%, at/near limit). Purely visual;
-  // does not affect the exact text percentage shown above the bar.
   const getProgressBarColorStyle = (percentUsed: number) => {
     if (percentUsed >= 90) return styles.progressFillRed;
     if (percentUsed >= 75) return styles.progressFillOrange;
     return null;
   };
 
-  const handleSubscribe = async (subTier: SubscriptionTier) => {
+  const openCheckoutAndVerify = async (subscriptionId: string, keyId: string, targetTier: TierInfo, token: string) => {
+    const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+    const checkoutOptions = {
+      description: `AssistMe ${targetTier.displayName} — monthly subscription`,
+      key: keyId,
+      subscription_id: subscriptionId,
+      name: 'AssistMe',
+      theme: { color: '#075E54' },
+    };
+
+    let paymentResult;
+    try {
+      paymentResult = await RazorpayCheckout.open(checkoutOptions);
+    } catch (checkoutErr: any) {
+      if (checkoutErr?.code !== 0) {
+        Alert.alert('Not completed', checkoutErr?.description || 'Please try again.');
+      }
+      return;
+    }
+
+    const verifyRes = await fetch(`${backendUrl}/api/subscription/verify-payment`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        razorpay_subscription_id: paymentResult.razorpay_subscription_id,
+        razorpay_payment_id: paymentResult.razorpay_payment_id,
+        razorpay_signature: paymentResult.razorpay_signature,
+        tier: targetTier.tier,
+      }),
+    });
+
+    if (verifyRes.ok) {
+      Alert.alert('Success', `You're now on the ${targetTier.displayName} plan.`);
+      fetchUsageSummary();
+    } else {
+      Alert.alert('Payment received', "Your payment went through. Your plan may take a moment to update.");
+    }
+  };
+
+  const handleFreshSubscribe = async (targetTier: TierInfo) => {
     if (subscribingTier !== null) return;
-    setSubscribingTier(subTier.tier);
+    setSubscribingTier(targetTier.tier);
     try {
       const token = await authService.getAccessToken();
-      if (!token) {
-        router.back();
-        return;
-      }
+      if (!token) { router.back(); return; }
       const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
 
       const subRes = await fetch(`${backendUrl}/api/subscription/create`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ tier: subTier.tier }),
+        body: JSON.stringify({ tier: targetTier.tier }),
       });
       if (!subRes.ok) {
         Alert.alert('Could not start subscription', 'Please try again.');
         return;
       }
       const sub = await subRes.json();
-
-      // Subscription checkout: pass subscription_id, NOT order_id/amount --
-      // the Plan itself defines the billing amount, per Razorpay's docs.
-      const checkoutOptions = {
-        description: `AssistMe ${subTier.displayName} — monthly subscription`,
-        key: sub.keyId,
-        subscription_id: sub.subscriptionId,
-        name: 'AssistMe',
-        theme: { color: '#075E54' },
-      };
-
-      let paymentResult;
-      try {
-        paymentResult = await RazorpayCheckout.open(checkoutOptions);
-      } catch (checkoutErr: any) {
-        if (checkoutErr?.code !== 0) {
-          Alert.alert('Subscription not completed', checkoutErr?.description || 'Please try again.');
-        }
-        return;
-      }
-
-      const verifyRes = await fetch(`${backendUrl}/api/subscription/verify-payment`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({
-          razorpay_subscription_id: paymentResult.razorpay_subscription_id,
-          razorpay_payment_id: paymentResult.razorpay_payment_id,
-          razorpay_signature: paymentResult.razorpay_signature,
-          tier: subTier.tier,
-        }),
-      });
-
-      if (verifyRes.ok) {
-        Alert.alert('Subscribed!', `You're now on the ${subTier.displayName} plan.`);
-        fetchUsageSummary();
-      } else {
-        Alert.alert(
-          'Payment received',
-          "Your payment went through. Your plan may take a moment to update."
-        );
-      }
+      await openCheckoutAndVerify(sub.subscriptionId, sub.keyId, targetTier, token);
     } catch (err) {
-      console.error('Subscription error:', err);
+      console.error('Subscribe error:', err);
       Alert.alert('Something went wrong', 'Please try again, or contact support if this continues.');
     } finally {
       setSubscribingTier(null);
+    }
+  };
+
+  const handleChangeTier = async (targetTier: TierInfo) => {
+    if (subscribingTier !== null) return;
+    setSubscribingTier(targetTier.tier);
+    try {
+      const token = await authService.getAccessToken();
+      if (!token) { router.back(); return; }
+      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+
+      const res = await fetch(`${backendUrl}/api/subscription/change-tier`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ newTier: targetTier.tier }),
+      });
+      if (!res.ok) {
+        Alert.alert('Could not switch plans', 'Please try again.');
+        return;
+      }
+      const result = await res.json();
+
+      if (result.instant) {
+        Alert.alert('Success', `You're now on the ${targetTier.displayName} plan.`);
+        fetchUsageSummary();
+      } else if (result.needsReauth) {
+        await openCheckoutAndVerify(result.subscriptionId, result.keyId, targetTier, token);
+      }
+    } catch (err) {
+      console.error('Change tier error:', err);
+      Alert.alert('Something went wrong', 'Please try again, or contact support if this continues.');
+    } finally {
+      setSubscribingTier(null);
+    }
+  };
+
+  const handleCancelToFree = async () => {
+    if (subscribingTier !== null) return;
+    setSubscribingTier('free');
+    try {
+      const token = await authService.getAccessToken();
+      if (!token) { router.back(); return; }
+      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+
+      const res = await fetch(`${backendUrl}/api/subscription/cancel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        Alert.alert('Could not cancel', 'Please try again.');
+        return;
+      }
+      Alert.alert(
+        'Cancellation scheduled',
+        "You'll keep your current plan's features until this billing period ends, then move to Free."
+      );
+    } catch (err) {
+      console.error('Cancel error:', err);
+      Alert.alert('Something went wrong', 'Please try again, or contact support if this continues.');
+    } finally {
+      setSubscribingTier(null);
+    }
+  };
+
+  const handleTierTap = (targetTier: TierInfo) => {
+    if (subscribingTier !== null || targetTier.tier === currentTier) return;
+    const currentInfo = TIER_INFO.find((t) => t.tier === currentTier)!;
+
+    if (currentTier === 'free') {
+      handleFreshSubscribe(targetTier);
+      return;
+    }
+
+    if (targetTier.tier === 'free') {
+      Alert.alert(
+        'Move to Free?',
+        "You'll lose access to features beyond the Free plan once your current billing period ends. You can resubscribe any time.",
+        [
+          { text: 'Keep current plan', style: 'cancel' },
+          { text: 'Move to Free', style: 'destructive', onPress: handleCancelToFree },
+        ]
+      );
+      return;
+    }
+
+    if (targetTier.rank > currentInfo.rank) {
+      handleChangeTier(targetTier);
+    } else {
+      Alert.alert(
+        `Switch to ${targetTier.displayName}?`,
+        'Some features and your monthly AI usage ceiling will change. You may need to quickly re-confirm your payment method to complete the switch.',
+        [
+          { text: 'Keep current plan', style: 'cancel' },
+          { text: 'Switch', onPress: () => handleChangeTier(targetTier) },
+        ]
+      );
     }
   };
 
@@ -333,31 +399,44 @@ export default function SubscriptionBilling() {
           <Ionicons name="star-outline" size={36} color="#075E54" style={{ alignSelf: 'center', marginBottom: 10 }} />
           <Text style={styles.cardTitle}>Subscription Plans</Text>
           <Text style={styles.cardBody}>
-            Upgrade for a higher monthly AI usage ceiling and full access.
+            Your current plan is highlighted. Tap another to switch.
           </Text>
 
-          {SUBSCRIPTION_TIERS.map((subTier) => (
-            <TouchableOpacity
-              key={subTier.tier}
-              style={[styles.tierRow, subscribingTier !== null && styles.tierRowDisabled]}
-              onPress={() => handleSubscribe(subTier)}
-              disabled={subscribingTier !== null}
-            >
-              <View>
-                <Text style={styles.tierAmount}>{subTier.displayName}</Text>
-                <Text style={styles.tierCredits}>₹{subTier.totalChargedInr}/month</Text>
-              </View>
-              {subscribingTier === subTier.tier ? (
-                <ActivityIndicator size="small" color="#075E54" />
-              ) : (
-                <Ionicons name="chevron-forward" size={20} color="#CCCCCC" />
-              )}
-            </TouchableOpacity>
-          ))}
+          {TIER_INFO.map((tierRow) => {
+            const isCurrent = tierRow.tier === currentTier;
+            return (
+              <TouchableOpacity
+                key={tierRow.tier}
+                style={[
+                  styles.tierRow,
+                  isCurrent && styles.tierRowCurrent,
+                  subscribingTier !== null && !isCurrent && styles.tierRowDisabled,
+                ]}
+                onPress={() => handleTierTap(tierRow)}
+                disabled={subscribingTier !== null || isCurrent}
+              >
+                <View>
+                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                    <Text style={styles.tierAmount}>{tierRow.displayName}</Text>
+                    {isCurrent && (
+                      <View style={styles.currentBadge}>
+                        <Text style={styles.currentBadgeText}>CURRENT</Text>
+                      </View>
+                    )}
+                  </View>
+                  <Text style={styles.tierCredits}>{tierRow.priceLabel}</Text>
+                </View>
+                {subscribingTier === tierRow.tier ? (
+                  <ActivityIndicator size="small" color="#075E54" />
+                ) : !isCurrent ? (
+                  <Ionicons name="chevron-forward" size={20} color="#CCCCCC" />
+                ) : null}
+              </TouchableOpacity>
+            );
+          })}
 
           <Text style={styles.footnote}>
-            Prices shown are GST-inclusive. Billed monthly, cancel any time -- you keep access
-            through the end of the period you've already paid for.
+            Prices shown are exclusive of GST. Billed monthly, switch or cancel any time.
           </Text>
         </View>
       </ScrollView>
@@ -394,6 +473,15 @@ const styles = StyleSheet.create({
     borderBottomColor: '#F0F0F0',
   },
   tierRowDisabled: { opacity: 0.5 },
+  tierRowCurrent: { backgroundColor: '#F0F7F5' },
+  currentBadge: {
+    backgroundColor: '#075E54',
+    borderRadius: 4,
+    paddingVertical: 2,
+    paddingHorizontal: 6,
+    marginLeft: 8,
+  },
+  currentBadgeText: { fontSize: 9, fontWeight: '700', color: '#FFFFFF', letterSpacing: 0.5 },
   tierAmount: { fontSize: 17, fontWeight: '700', color: '#222' },
   tierCredits: { fontSize: 12, color: '#888', marginTop: 2 },
   footnote: { fontSize: 11, color: '#999', marginTop: 14, lineHeight: 16, textAlign: 'center' },
