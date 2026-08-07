@@ -1676,9 +1676,24 @@ app.get('/api/billing/usage-summary', async (c) => {
     const costUsedPaisa = period.cost_used_paisa || 0;
     const percentUsed = ceilingPaisa > 0 ? Math.round((costUsedPaisa / ceilingPaisa) * 100) : 0;
 
+    let subscriptionPeriodEndFormatted = null;
+    if (plan !== 'free') {
+      const { data: sub } = await supabase
+        .from('subscriptions')
+        .select('current_period_end')
+        .eq('organisation_id', organisationId)
+        .maybeSingle();
+      if (sub?.current_period_end) {
+        subscriptionPeriodEndFormatted = new Date(sub.current_period_end).toLocaleDateString('en-IN', {
+          timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', year: 'numeric',
+        });
+      }
+    }
+
     return c.json({
       plan,
       walletCreditsRemaining,
+      subscriptionPeriodEndFormatted,
       currentPeriod: {
         periodType,
         costUsedPaisa,

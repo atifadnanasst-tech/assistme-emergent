@@ -207,22 +207,6 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
 
       if (!convCheck) return c.json({ error: 'invalid_ai_conversation_id' }, 403);
 
-      // Usage enforcement (Subscription & Billing, Step 4c). One gate at
-      // the top of the whole Org AI pipeline -- unlike Step 2's cost
-      // TRACKING (which needed every completion call site), enforcement
-      // only needs a single check before any dispatch work begins.
-      // checkUsageAllowed() returns allowed:true unconditionally while
-      // ENFORCEMENT_ENABLED is false (current state) -- genuine no-op.
-      const usageCheck = await checkUsageAllowed({ orgId: organisationId, supabase });
-      if (!usageCheck.allowed) {
-        return c.json({
-          response: `Usage limit reached · Resets at ${usageCheck.periodEndFormatted} · Get more usage`,
-          message_type: 'usage_limit',
-          chart_data: null,
-          next_action: null,
-        });
-      }
-
       // Fetch org currency
       const { data: org } = await supabase
         .from('organisations')
@@ -266,6 +250,24 @@ export function registerOrgAiRoutes(app, supabase, authenticateChat, getOpenAI) 
           },
         });
       if (userMsgError) console.error('[orgAi] user message insert failed:', userMsgError.message);
+
+      // Usage enforcement (Subscription & Billing, Step 4c). Deliberately
+      // placed AFTER the user message save above -- a real bug (found via
+      // live testing) had this check running BEFORE persistence, meaning
+      // a blocked request meant the user's own message was never saved,
+      // vanishing along with the block notice on reload. Moved here so
+      // the user's message always survives regardless of what happens
+      // next. checkUsageAllowed() returns allowed:true unconditionally
+      // while ENFORCEMENT_ENABLED is false -- genuine no-op either way.
+      const usageCheck = await checkUsageAllowed({ orgId: organisationId, supabase });
+      if (!usageCheck.allowed) {
+        return c.json({
+          response: `Usage limit reached · Resets at ${usageCheck.periodEndFormatted} · Get more usage`,
+          message_type: 'usage_limit',
+          chart_data: null,
+          next_action: null,
+        });
+      }
 
       // Auto-title parity with Customer AI (backend/src/index.js): if the
       // conversation has no real title yet, name it from the first query

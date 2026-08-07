@@ -304,7 +304,15 @@ export async function handleSubscriptionEvent({ event, payload, supabase }) {
       .update({ status: 'past_due', updated_at: new Date().toISOString() })
       .eq('id', sub.id);
   } else if (event === 'subscription.halted') {
-    console.warn('[handleSubscriptionEvent] subscription.halted for org', sub.organisation_id, '-- no auto-action taken, needs a product decision.');
+    await supabase
+      .from('subscriptions')
+      .update({ status: 'halted', updated_at: new Date().toISOString() })
+      .eq('id', sub.id);
+
+    await supabase
+      .from('organisations')
+      .update({ subscription_plan: 'free' })
+      .eq('id', sub.organisation_id);
   } else if (event === 'subscription.cancelled' || event === 'subscription.completed') {
     await supabase
       .from('subscriptions')
