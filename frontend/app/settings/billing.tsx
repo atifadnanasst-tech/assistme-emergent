@@ -42,6 +42,17 @@ const WALLET_TIERS: WalletTier[] = [
   { amountInr: 2000, aiCredits: 1600 },
 ];
 
+interface SubscriptionTier {
+  tier: 'pro' | 'business';
+  displayName: string;
+  totalChargedInr: number;
+}
+
+const SUBSCRIPTION_TIERS: SubscriptionTier[] = [
+  { tier: 'pro', displayName: 'Pro', totalChargedInr: 588.82 },
+  { tier: 'business', displayName: 'Business', totalChargedInr: 2358.82 },
+];
+
 interface UsageSummary {
   plan: string;
   walletCreditsRemaining: number;
@@ -57,6 +68,7 @@ interface UsageSummary {
 export default function SubscriptionBilling() {
   const router = useRouter();
   const [purchasingTier, setPurchasingTier] = useState<number | null>(null);
+  const [subscribingTier, setSubscribingTier] = useState<string | null>(null);
   const [usage, setUsage] = useState<UsageSummary | null>(null);
   const [loadingUsage, setLoadingUsage] = useState(true);
 
@@ -173,6 +185,76 @@ export default function SubscriptionBilling() {
     return null;
   };
 
+  const handleSubscribe = async (subTier: SubscriptionTier) => {
+    if (subscribingTier !== null) return;
+    setSubscribingTier(subTier.tier);
+    try {
+      const token = await authService.getAccessToken();
+      if (!token) {
+        router.back();
+        return;
+      }
+      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+
+      const subRes = await fetch(`${backendUrl}/api/subscription/create`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ tier: subTier.tier }),
+      });
+      if (!subRes.ok) {
+        Alert.alert('Could not start subscription', 'Please try again.');
+        return;
+      }
+      const sub = await subRes.json();
+
+      // Subscription checkout: pass subscription_id, NOT order_id/amount --
+      // the Plan itself defines the billing amount, per Razorpay's docs.
+      const checkoutOptions = {
+        description: `AssistMe ${subTier.displayName} — monthly subscription`,
+        key: sub.keyId,
+        subscription_id: sub.subscriptionId,
+        name: 'AssistMe',
+        theme: { color: '#075E54' },
+      };
+
+      let paymentResult;
+      try {
+        paymentResult = await RazorpayCheckout.open(checkoutOptions);
+      } catch (checkoutErr: any) {
+        if (checkoutErr?.code !== 0) {
+          Alert.alert('Subscription not completed', checkoutErr?.description || 'Please try again.');
+        }
+        return;
+      }
+
+      const verifyRes = await fetch(`${backendUrl}/api/subscription/verify-payment`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          razorpay_subscription_id: paymentResult.razorpay_subscription_id,
+          razorpay_payment_id: paymentResult.razorpay_payment_id,
+          razorpay_signature: paymentResult.razorpay_signature,
+          tier: subTier.tier,
+        }),
+      });
+
+      if (verifyRes.ok) {
+        Alert.alert('Subscribed!', `You're now on the ${subTier.displayName} plan.`);
+        fetchUsageSummary();
+      } else {
+        Alert.alert(
+          'Payment received',
+          "Your payment went through. Your plan may take a moment to update."
+        );
+      }
+    } catch (err) {
+      console.error('Subscription error:', err);
+      Alert.alert('Something went wrong', 'Please try again, or contact support if this continues.');
+    } finally {
+      setSubscribingTier(null);
+    }
+  };
+
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
@@ -205,10 +287,6 @@ export default function SubscriptionBilling() {
               <View
                 style={[
                   styles.progressFill,
-                  // Text percentage stays exactly accurate above; only the
-                  // BAR gets a floor so genuinely-nonzero-but-tiny usage
-                  // (e.g. 0.02%) still shows a visible sliver instead of
-                  // rendering identically to zero usage.
                   { width: `${usage.currentPeriod.percentUsed > 0 ? Math.max(2, Math.min(100, usage.currentPeriod.percentUsed)) : 0}%` },
                   getProgressBarColorStyle(usage.currentPeriod.percentUsed),
                 ]}
@@ -251,9 +329,36 @@ export default function SubscriptionBilling() {
           </Text>
         </View>
 
-        <View style={[styles.card, styles.comingSoonCard]}>
+        <View style={styles.card}>
+          <Ionicons name="star-outline" size={36} color="#075E54" style={{ alignSelf: 'center', marginBottom: 10 }} />
           <Text style={styles.cardTitle}>Subscription Plans</Text>
-          <Text style={styles.footnote}>Pro and Business subscription plans are coming soon.</Text>
+          <Text style={styles.cardBody}>
+            Upgrade for a higher monthly AI usage ceiling and full access.
+          </Text>
+
+          {SUBSCRIPTION_TIERS.map((subTier) => (
+            <TouchableOpacity
+              key={subTier.tier}
+              style={[styles.tierRow, subscribingTier !== null && styles.tierRowDisabled]}
+              onPress={() => handleSubscribe(subTier)}
+              disabled={subscribingTier !== null}
+            >
+              <View>
+                <Text style={styles.tierAmount}>{subTier.displayName}</Text>
+                <Text style={styles.tierCredits}>₹{subTier.totalChargedInr}/month</Text>
+              </View>
+              {subscribingTier === subTier.tier ? (
+                <ActivityIndicator size="small" color="#075E54" />
+              ) : (
+                <Ionicons name="chevron-forward" size={20} color="#CCCCCC" />
+              )}
+            </TouchableOpacity>
+          ))}
+
+          <Text style={styles.footnote}>
+            Prices shown are GST-inclusive. Billed monthly, cancel any time -- you keep access
+            through the end of the period you've already paid for.
+          </Text>
         </View>
       </ScrollView>
     </SafeAreaView>
