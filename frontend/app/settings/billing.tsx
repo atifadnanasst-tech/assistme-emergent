@@ -43,6 +43,9 @@ const TIER_INFO: TierInfo[] = [
 interface UsageSummary {
   plan: string;
   walletCreditsRemaining: number;
+  walletCreditsTotal: number;
+  walletCreditsUsed: number;
+  walletPercentUsed: number;
   subscriptionPeriodEndFormatted: string | null;
   currentPeriod: {
     periodType: string;
@@ -368,6 +371,28 @@ export default function SubscriptionBilling() {
               />
             </View>
             <Text style={styles.usageReset}>Resets {usage.currentPeriod.periodEndFormatted}</Text>
+
+            {usage.walletCreditsTotal > 0 && (
+              <>
+                <View style={[styles.usageRow, { marginTop: 16 }]}>
+                  <Text style={styles.usageLabel}>Wallet Credits</Text>
+                  <Text style={styles.usageValue}>{usage.walletPercentUsed}% used</Text>
+                </View>
+                <View style={styles.progressTrack}>
+                  <View
+                    style={[
+                      styles.progressFill,
+                      styles.progressFillWallet,
+                      { width: `${usage.walletPercentUsed > 0 ? Math.max(2, Math.min(100, usage.walletPercentUsed)) : 0}%` },
+                      getProgressBarColorStyle(usage.walletPercentUsed),
+                    ]}
+                  />
+                </View>
+                <Text style={styles.usageReset}>
+                  {usage.walletCreditsUsed} of {usage.walletCreditsTotal} credits used
+                </Text>
+              </>
+            )}
           </View>
         )}
 
@@ -532,6 +557,7 @@ const styles = StyleSheet.create({
   },
   progressFillOrange: { backgroundColor: '#E67E22' },
   progressFillRed: { backgroundColor: '#C62828' },
+  progressFillWallet: { backgroundColor: '#5B6ABF' },
   usageReset: { fontSize: 11, color: '#999', marginTop: 8, textAlign: 'right' },
   usageSkeletonCard: {
     minHeight: 184,
