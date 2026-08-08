@@ -335,6 +335,11 @@ export default function SubscriptionBilling() {
       </View>
 
       <ScrollView contentContainerStyle={{ padding: 20 }}>
+        {loadingUsage && (
+          <View style={[styles.card, styles.usageSkeletonCard]}>
+            <Text style={styles.usageSkeletonText}>Usage loading...</Text>
+          </View>
+        )}
         {!loadingUsage && usage && (
           <View style={styles.card}>
             <View style={styles.usageHeaderRow}>
@@ -528,4 +533,10 @@ const styles = StyleSheet.create({
   progressFillOrange: { backgroundColor: '#E67E22' },
   progressFillRed: { backgroundColor: '#C62828' },
   usageReset: { fontSize: 11, color: '#999', marginTop: 8, textAlign: 'right' },
+  usageSkeletonCard: {
+    minHeight: 184,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  usageSkeletonText: { fontSize: 13, color: '#BBB' },
 });
