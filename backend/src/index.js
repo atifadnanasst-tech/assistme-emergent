@@ -1652,11 +1652,18 @@ app.get('/api/billing/usage-summary', async (c) => {
 
     const { data: org, error: orgErr } = await supabase
       .from('organisations')
-      .select('subscription_plan')
+      .select('subscription_plan, name')
       .eq('id', organisationId)
       .maybeSingle();
     if (orgErr) return c.json({ error: 'internal_error' }, 500);
     const plan = org?.subscription_plan || 'free';
+
+    const { data: ownerRow } = await supabase
+      .from('users')
+      .select('phone')
+      .eq('organisation_id', organisationId)
+      .eq('role', 'owner')
+      .maybeSingle();
 
     const { data: walletRows, error: walletErr } = await supabase
       .from('wallet_topups')
@@ -1695,6 +1702,9 @@ app.get('/api/billing/usage-summary', async (c) => {
 
     return c.json({
       plan,
+      businessName: org?.name || null,
+      ownerPhone: ownerRow?.phone || null,
+      supportEmail: process.env.SUPPORT_EMAIL || null,
       walletCreditsRemaining,
       walletCreditsTotal,
       walletCreditsUsed,
