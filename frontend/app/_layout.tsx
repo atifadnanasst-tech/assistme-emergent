@@ -5,6 +5,10 @@ import * as SplashScreen from 'expo-splash-screen';
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 import { AuthProvider, useAuth } from '../contexts/AuthContext';
+import { QueryClient } from '@tanstack/react-query';
+import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client';
+import { createAsyncStoragePersister } from '@tanstack/query-async-storage-persister';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Prevent splash screen from auto-hiding
 SplashScreen.preventAutoHideAsync();
@@ -66,6 +70,38 @@ async function registerForPushNotifications() {
 // response on every mount. We track its identifier so we only process each
 // unique notification once, regardless of how many times the layout remounts.
 let _lastHandledNotificationId: string | null = null;
+
+// TanStack Query + AsyncStorage persistence (offline-cache sprint, per
+// AssistMe_Offline_Cache_Handover.md -- fully resolved architectural
+// decision, TanStack + AsyncStorage over Zustand/SQLite).
+//
+// Phase 1: infrastructure only. No screen uses useQuery yet, so this
+// wrapper is intentionally a no-op for current app behavior -- adding it
+// should be completely invisible until screens are actually migrated,
+// one at a time, in later phases.
+//
+// networkMode: 'offlineFirst' (mandatory per the handover doc) -- serves
+// cached data immediately rather than blocking the UI on a network round
+// trip, which is the whole point of this sprint.
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      networkMode: 'offlineFirst',
+      staleTime: 1000 * 60 * 5, // 5 min -- data considered fresh before a background refetch
+      gcTime: 1000 * 60 * 60 * 24, // 24 hr -- how long unused cache entries survive (v5 naming, was cacheTime in v4)
+      retry: 2,
+    },
+    mutations: {
+      networkMode: 'offlineFirst',
+    },
+  },
+});
+
+const asyncStoragePersister = createAsyncStoragePersister({
+  storage: AsyncStorage,
+  key: 'ASSISTME_QUERY_CACHE',
+  throttleTime: 1000,
+});
 
 function RootLayoutNav() {
   const [isReady, setIsReady] = useState(false);
@@ -226,9 +262,14 @@ function RootLayoutNav() {
 
 export default function RootLayout() {
   return (
-    <AuthProvider>
-      <RootLayoutNav />
-    </AuthProvider>
+    <PersistQueryClientProvider
+      client={queryClient}
+      persistOptions={{ persister: asyncStoragePersister, maxAge: 1000 * 60 * 60 * 24 }}
+    >
+      <AuthProvider>
+        <RootLayoutNav />
+      </AuthProvider>
+    </PersistQueryClientProvider>
   );
 }
 
