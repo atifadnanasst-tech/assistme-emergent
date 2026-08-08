@@ -1666,9 +1666,12 @@ app.get('/api/billing/usage-summary', async (c) => {
     if (walletErr) return c.json({ error: 'internal_error' }, 500);
 
     const now = new Date();
-    const walletCreditsRemaining = (walletRows || [])
-      .filter(r => new Date(r.expires_at) > now)
+    const validWalletRows = (walletRows || []).filter(r => new Date(r.expires_at) > now);
+    const walletCreditsRemaining = validWalletRows
       .reduce((sum, r) => sum + (r.ai_credits_total - r.ai_credits_used), 0);
+    const walletCreditsTotal = validWalletRows.reduce((sum, r) => sum + r.ai_credits_total, 0);
+    const walletCreditsUsed = validWalletRows.reduce((sum, r) => sum + r.ai_credits_used, 0);
+    const walletPercentUsed = walletCreditsTotal > 0 ? Math.round((walletCreditsUsed / walletCreditsTotal) * 100) : 0;
 
     const periodType = plan === 'free' ? 'free_window' : 'paid_month';
     const period = await getOrCreateCurrentPeriod({ orgId: organisationId, periodType, supabase });
@@ -1693,6 +1696,9 @@ app.get('/api/billing/usage-summary', async (c) => {
     return c.json({
       plan,
       walletCreditsRemaining,
+      walletCreditsTotal,
+      walletCreditsUsed,
+      walletPercentUsed,
       subscriptionPeriodEndFormatted,
       currentPeriod: {
         periodType,
