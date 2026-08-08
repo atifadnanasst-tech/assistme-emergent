@@ -7,6 +7,7 @@ import {
   ScrollView,
   ActivityIndicator,
   Alert,
+  Linking,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -42,6 +43,9 @@ const TIER_INFO: TierInfo[] = [
 
 interface UsageSummary {
   plan: string;
+  businessName: string | null;
+  ownerPhone: string | null;
+  supportEmail: string | null;
   walletCreditsRemaining: number;
   walletCreditsTotal: number;
   walletCreditsUsed: number;
@@ -328,6 +332,21 @@ export default function SubscriptionBilling() {
     }
   };
 
+  const handleContactUs = () => {
+    if (!usage?.supportEmail) {
+      Alert.alert('Not available', 'Contact details are temporarily unavailable. Please try again shortly.');
+      return;
+    }
+    const subject = encodeURIComponent(`AssistMe Inquiry — ${usage.businessName || 'My Business'}`);
+    const body = encodeURIComponent(
+      `Business: ${usage.businessName || ''}\nPhone: ${usage.ownerPhone || ''}\n\n(Please describe what you're looking for below)\n\n`
+    );
+    const url = `mailto:${usage.supportEmail}?subject=${subject}&body=${body}`;
+    Linking.openURL(url).catch(() => {
+      Alert.alert('Could not open mail app', `You can reach us directly at ${usage.supportEmail}`);
+    });
+  };
+
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
@@ -473,6 +492,18 @@ export default function SubscriptionBilling() {
             Prices shown are exclusive of GST. Billed monthly, switch or cancel any time.
           </Text>
         </View>
+
+        <View style={styles.card}>
+          <Ionicons name="chatbubbles-outline" size={36} color="#075E54" style={{ alignSelf: 'center', marginBottom: 10 }} />
+          <Text style={styles.cardTitle}>Need Something More?</Text>
+          <Text style={styles.cardBody}>
+            Need more usage than any plan offers, want to bring your whole team onto AssistMe, a
+            customized feature, or a fully custom solution for your business? We'd love to talk.
+          </Text>
+          <TouchableOpacity style={styles.contactButton} onPress={handleContactUs}>
+            <Text style={styles.contactButtonText}>Contact Us</Text>
+          </TouchableOpacity>
+        </View>
       </ScrollView>
     </SafeAreaView>
   );
@@ -558,6 +589,14 @@ const styles = StyleSheet.create({
   progressFillOrange: { backgroundColor: '#E67E22' },
   progressFillRed: { backgroundColor: '#C62828' },
   progressFillWallet: { backgroundColor: '#5B6ABF' },
+  contactButton: {
+    backgroundColor: '#075E54',
+    borderRadius: 8,
+    paddingVertical: 12,
+    alignItems: 'center',
+    marginTop: 4,
+  },
+  contactButtonText: { color: '#FFFFFF', fontSize: 15, fontWeight: '700' },
   usageReset: { fontSize: 11, color: '#999', marginTop: 8, textAlign: 'right' },
   usageSkeletonCard: {
     minHeight: 184,
