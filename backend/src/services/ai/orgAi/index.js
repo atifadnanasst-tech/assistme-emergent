@@ -1923,11 +1923,15 @@ export async function dispatchMenuQuery(menuId, supabase, orgId, orgCurrency, op
     case 'top_sellers': result = await topSellers(supabase, orgId, orgCurrency, openai, language); break;
     case 'low_stock': result = await lowStock(supabase, orgId, orgCurrency, openai, language); break;
     case 'slow_moving':
-    // Session B — Ops
     case 'deliveries_today':
     case 'expiring_quotes':
     case 'todays_tasks':
-    // Session F — Suppliers
+      result = {
+        response_text: "This isn't available yet -- coming in a future update.",
+        chart_data: null,
+        next_action: null,
+      };
+      break;
     case 'what_i_owe': result = await whatIOwe(supabase, orgId, orgCurrency, openai, language); break;
     case 'overdue_payables': result = await overduePayables(supabase, orgId, orgCurrency, openai, language); break;
     case 'top_supplier': result = await topSupplier(supabase, orgId, orgCurrency, openai, language); break;

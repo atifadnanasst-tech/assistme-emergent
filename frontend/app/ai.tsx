@@ -109,13 +109,12 @@ export default function AIScreen() {
     { id: 'products', label: '📦 Products', items: [
       { id: 'top_sellers', label: '⭐ Top Sellers' },
       { id: 'low_stock', label: '🔴 Low Stock' },
-      { id: 'slow_moving', label: '🐌 Slow Moving' },
     ]},
-    { id: 'ops', label: '⚙️ Ops', items: [
-      { id: 'deliveries_today', label: '🚚 Deliveries Today' },
-      { id: 'expiring_quotes', label: '📄 Expiring Quotes' },
-      { id: 'todays_tasks', label: "✅ Today's Tasks" },
-    ]},
+    // { id: 'ops', label: '⚙️ Ops', items: [
+    //   { id: 'deliveries_today', label: '🚚 Deliveries Today' },
+    //   { id: 'expiring_quotes', label: '📄 Expiring Quotes' },
+    //   { id: 'todays_tasks', label: "✅ Today's Tasks" },
+    // ]},
     { id: 'suppliers', label: '🏭 Suppliers', items: [
       { id: 'what_i_owe', label: '💸 What I Owe' },
       { id: 'overdue_payables', label: '⏰ Overdue Payables' },
