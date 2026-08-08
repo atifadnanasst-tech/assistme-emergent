@@ -119,10 +119,6 @@ export async function creditWalletTopup({ razorpayOrderId, razorpayPaymentId, su
     return { success: false, error: 'order_not_found' };
   }
 
-  // Idempotency guard -- if already credited (by the other path), this is
-  // a harmless no-op, not an error. This is what makes it safe for both
-  // the client-side verify call and the webhook to potentially fire for
-  // the same order.
   if (existing.status === 'paid') {
     return { success: true, alreadyCredited: true, aiCredits: existing.ai_credits_total };
   }
@@ -137,11 +133,6 @@ export async function creditWalletTopup({ razorpayOrderId, razorpayPaymentId, su
     return { success: false, error: 'update_failed' };
   }
 
-  // Telegram alert -- fire-and-forget (not awaited), and only reached here
-  // because this is a genuinely NEW credit (the alreadyCredited=true path
-  // above already returned). Reuses the exact idempotency check this
-  // function already has, so a payment can never trigger two alerts even
-  // if both the client-side verify call and the webhook fire for it.
   supabase
     .from('organisations')
     .select('name')
@@ -175,6 +166,102 @@ export function verifyClientPayment({ orderId, paymentId, signature }) {
     console.error('[verifyClientPayment] error:', err.message);
     return false;
   }
+}
+
+// Exact conversion factor -- derived from the SAME pricing constants
+// already used to size the credit amounts in walletPricing.js (GPT-4o-mini
+// $0.15/$0.60 per 1M tokens, blended 75% input : 25% output, $1=Rs96, 1
+// credit=10,000 tokens). NOT an approximation of an approximation --
+// recomputed from first principles and verified to reproduce the exact
+// generous-rounding relationship already baked into all 5 wallet tiers.
+export const PAISA_PER_CREDIT = 25.2;
+
+/**
+ * Total remaining real spendable budget across ALL of an org's valid
+ * (paid, unexpired) wallet top-ups, in paisa. This is the authoritative
+ * "how much overage can this org still draw on" figure -- consistent
+ * with Atif's explicit decision that the CREDITS number shown to the
+ * customer (already deliberately rounded up when originally priced) is
+ * the real promise, not a hidden smaller number underneath.
+ */
+export async function getWalletBudgetRemainingPaisa({ orgId, supabase }) {
+  const { data: rows, error } = await supabase
+    .from('wallet_topups')
+    .select('id, ai_credits_total, paisa_consumed, expires_at, status')
+    .eq('organisation_id', orgId)
+    .eq('status', 'paid');
+
+  if (error) {
+    console.error('[getWalletBudgetRemainingPaisa] fetch failed:', error.message);
+    return 0;
+  }
+
+  const now = new Date();
+  return (rows || [])
+    .filter(r => new Date(r.expires_at) > now)
+    .reduce((sum, r) => {
+      const totalBudgetPaisa = r.ai_credits_total * PAISA_PER_CREDIT;
+      const remaining = totalBudgetPaisa - (r.paisa_consumed || 0);
+      return sum + Math.max(0, remaining);
+    }, 0);
+}
+
+/**
+ * Draws down real paisa spend from an org's wallet top-ups, oldest-
+ * expiring-first (so credits closer to expiry get used before ones with
+ * more runway). Updates paisa_consumed (source of truth) and the
+ * derived, display-only ai_credits_used on each affected row. Returns
+ * how much was actually drawn -- may be less than requested if the
+ * wallet doesn't have enough remaining (never draws more than exists).
+ */
+export async function drawFromWallet({ orgId, paisaAmount, supabase }) {
+  if (paisaAmount <= 0) return 0;
+
+  const { data: rows, error } = await supabase
+    .from('wallet_topups')
+    .select('id, ai_credits_total, paisa_consumed, expires_at, status')
+    .eq('organisation_id', orgId)
+    .eq('status', 'paid');
+
+  if (error) {
+    console.error('[drawFromWallet] fetch failed:', error.message);
+    return 0;
+  }
+
+  const now = new Date();
+  const validRows = (rows || [])
+    .filter(r => new Date(r.expires_at) > now)
+    .filter(r => (r.ai_credits_total * PAISA_PER_CREDIT) - (r.paisa_consumed || 0) > 0)
+    .sort((a, b) => new Date(a.expires_at) - new Date(b.expires_at));
+
+  let remainingToDraw = paisaAmount;
+  let totalDrawn = 0;
+
+  for (const row of validRows) {
+    if (remainingToDraw <= 0) break;
+    const rowBudget = row.ai_credits_total * PAISA_PER_CREDIT;
+    const rowRemaining = rowBudget - (row.paisa_consumed || 0);
+    const drawFromThisRow = Math.min(remainingToDraw, rowRemaining);
+    const newPaisaConsumed = (row.paisa_consumed || 0) + drawFromThisRow;
+
+    const { error: updateErr } = await supabase
+      .from('wallet_topups')
+      .update({
+        paisa_consumed: newPaisaConsumed,
+        ai_credits_used: Math.round(newPaisaConsumed / PAISA_PER_CREDIT),
+      })
+      .eq('id', row.id);
+
+    if (updateErr) {
+      console.error('[drawFromWallet] update failed for row', row.id, ':', updateErr.message);
+      continue;
+    }
+
+    remainingToDraw -= drawFromThisRow;
+    totalDrawn += drawFromThisRow;
+  }
+
+  return totalDrawn;
 }
 
 /**
