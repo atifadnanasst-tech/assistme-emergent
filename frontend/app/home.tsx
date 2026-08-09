@@ -609,10 +609,16 @@ export default function HomeScreen() {
               <View>
                 <Text style={styles.headerTitle}>AssistMe</Text>
                 {/* "Last synced" indicator (TanStack Offline Cache Sprint,
-                    Phase 2) -- moved here per Atif's preference: a small,
-                    subtle subtitle attached to the title, not a separate
-                    full-width banner line. */}
-                {lastSyncedText && (
+                    Phase 2). Per Atif's explicit request: only shown when
+                    currently offline (fetchStatus:'paused' -- a real,
+                    built-in TanStack Query signal set when a network
+                    request has genuinely failed and retries are paused,
+                    confirmed via TanStack's own docs before using it, no
+                    new package/native build needed). Not shown while
+                    online/synced -- no value in cluttering the header
+                    with information that's only actually useful during
+                    an outage. */}
+                {lastSyncedText && homeQuery.fetchStatus === 'paused' && (
                   <Text style={styles.lastSyncedSubtitle}>{lastSyncedText}</Text>
                 )}
               </View>
@@ -849,7 +855,7 @@ export default function HomeScreen() {
         <Ionicons name={fabExpanded ? 'close' : 'add'} size={28} color="#FFFFFF" />
       </TouchableOpacity>
 
-      <Text style={{ textAlign: "center", fontSize: 10, color: "#CCC", paddingVertical: 2 }}>v1.3.428</Text>
+      <Text style={{ textAlign: "center", fontSize: 10, color: "#CCC", paddingVertical: 2 }}>v1.3.429</Text>
       {/* Bottom Navigation SafeAreaView */}
       <SafeAreaView style={styles.bottomNavSafeArea} edges={['bottom']}>
         <View style={styles.bottomNav}>
@@ -1099,6 +1105,7 @@ const styles = StyleSheet.create({
   },
   lastSyncedSubtitle: {
     fontSize: 11,
+    fontStyle: 'italic',
     color: '#FFFFFFAA',
     marginTop: 2,
   },
