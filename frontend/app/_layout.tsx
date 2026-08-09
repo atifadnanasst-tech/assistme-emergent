@@ -5,6 +5,10 @@ import * as SplashScreen from 'expo-splash-screen';
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 import { AuthProvider, useAuth } from '../contexts/AuthContext';
+import { QueryClient } from '@tanstack/react-query';
+import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client';
+import { createAsyncStoragePersister } from '@tanstack/query-async-storage-persister';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Prevent splash screen from auto-hiding
 SplashScreen.preventAutoHideAsync();
@@ -67,39 +71,47 @@ async function registerForPushNotifications() {
 // unique notification once, regardless of how many times the layout remounts.
 let _lastHandledNotificationId: string | null = null;
 
+// TanStack Query + AsyncStorage persistence (offline-cache sprint, per
+// AssistMe_Offline_Cache_Handover.md -- fully resolved architectural
+// decision, TanStack + AsyncStorage over Zustand/SQLite).
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      networkMode: 'offlineFirst',
+      staleTime: 1000 * 60 * 5,
+      gcTime: 1000 * 60 * 60 * 24,
+      retry: 2,
+    },
+    mutations: {
+      networkMode: 'offlineFirst',
+    },
+  },
+});
+
+const asyncStoragePersister = createAsyncStoragePersister({
+  storage: AsyncStorage,
+  key: 'ASSISTME_QUERY_CACHE',
+  throttleTime: 1000,
+});
+
 function RootLayoutNav() {
   const [isReady, setIsReady] = useState(false);
   const { isAuthenticated, isCheckingAuth } = useAuth();
   const router = useRouter();
   const segments = useSegments();
-  // Holds a pending deep-link tab from a notification tap.
-  // Set by the notification effect; consumed by the isReady effect.
-  // Ensures navigation only happens after the router is fully initialized.
   const pendingNotificationRouteRef = useRef<string | null>(null);
 
   useEffect(() => {
-    // Hide splash when auth check is complete
     if (!isCheckingAuth && !isReady) {
       setIsReady(true);
       SplashScreen.hideAsync();
     }
-    // Register for push notifications once authenticated
     if (!isCheckingAuth && isAuthenticated) {
       registerForPushNotifications();
     }
   }, [isCheckingAuth, isReady, isAuthenticated]);
 
-  // Notification tap deep-link handler.
-  // Architecture:
-  // - CAPTURE: store the intended tab in pendingNotificationRouteRef.
-  //   Never call router.push() here — router is not ready on mount.
-  // - EXECUTE: the isReady useEffect drains the ref once app is initialized.
-  // Dedup by notification identifier (not a boolean) so future real taps
-  // in the same process are still handled correctly.
   useEffect(() => {
-    // Single routing helper — all notification navigation goes through here.
-    // Identifier dedup is applied before this is called, so double-navigation
-    // is impossible regardless of whether the listener also fires on terminated launch.
     const navigateToNotificationRoute = (tab: string) => {
       console.log('[PUSH] Navigating to activity tab:', tab);
       router.push({ pathname: '/activity', params: { tab } });
@@ -123,33 +135,25 @@ function RootLayoutNav() {
       if (!data) return;
       const tab = resolveTab(data);
       if (immediate) {
-        // Backgrounded app: router is ready, navigate now.
         console.log('[PUSH] Backgrounded tap — routing immediately to:', tab);
         navigateToNotificationRoute(tab);
       } else {
-        // Terminated app: router not yet ready, defer to isReady effect.
         console.log('[PUSH] Terminated launch — capturing pending route to:', tab);
         pendingNotificationRouteRef.current = tab;
       }
     };
 
-    // Terminated app: router not ready yet — defer navigation via ref.
     Notifications.getLastNotificationResponseAsync().then(r => handleResponse(r, false));
-
-    // Backgrounded app: router is ready — navigate immediately.
     const sub = Notifications.addNotificationResponseReceivedListener(r => handleResponse(r, true));
-
     return () => sub.remove();
   }, []);
 
   useEffect(() => {
-    // LOADING GATE: Do not run redirect logic while auth state is loading
     if (!isReady || isCheckingAuth) {
       console.log('🚦 [LAYOUT] Auth check in progress, skipping navigation logic');
       return;
     }
 
-    // Drain any pending notification deep-link now that router is ready.
     if (pendingNotificationRouteRef.current) {
       const tab = pendingNotificationRouteRef.current;
       pendingNotificationRouteRef.current = null;
@@ -168,11 +172,9 @@ function RootLayoutNav() {
     });
 
     if (isAuthenticated && inAuthGroup) {
-      // Redirect to home if authenticated and on auth screens
       console.log('🚀 [LAYOUT] Authenticated user on auth screen → redirecting to /home');
       router.replace('/home');
     } else if (!isAuthenticated && !inAuthGroup && segments[0] !== undefined) {
-      // Redirect to login if not authenticated and not on auth screens
       console.log('🚀 [LAYOUT] Unauthenticated user on protected screen → redirecting to /login');
       router.replace('/login');
     } else {
@@ -180,7 +182,6 @@ function RootLayoutNav() {
     }
   }, [isReady, isAuthenticated, isCheckingAuth, segments]);
 
-  // LOADING GATE: Show loading screen while checking auth
   if (!isReady || isCheckingAuth) {
     return (
       <View style={styles.loading}>
@@ -226,9 +227,14 @@ function RootLayoutNav() {
 
 export default function RootLayout() {
   return (
-    <AuthProvider>
-      <RootLayoutNav />
-    </AuthProvider>
+    <PersistQueryClientProvider
+      client={queryClient}
+      persistOptions={{ persister: asyncStoragePersister, maxAge: 1000 * 60 * 60 * 24 }}
+    >
+      <AuthProvider>
+        <RootLayoutNav />
+      </AuthProvider>
+    </PersistQueryClientProvider>
   );
 }
 
