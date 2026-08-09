@@ -20,6 +20,7 @@ import { supabase } from '../lib/supabase';
 import { authService } from '../lib/auth';
 import { getLanguageLabel, DEFAULT_LANGUAGE } from '../constants/languages';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 let Contacts: any = null;
 try { Contacts = require('expo-contacts'); } catch { Contacts = null; }
 
@@ -75,7 +76,6 @@ export default function HomeScreen() {
   const { setIsAuthenticated } = useAuth();
   
   const insets = useSafeAreaInsets();
-  const [homeData, setHomeData] = useState<HomeData | null>(null);
   // Home FAB redesign, Phase 1 -- Add Contact + Set Reminder only. Voice
   // Reminder is deliberately NOT included yet: its real pipeline (Audio
   // Intelligence Primitive, transcription, AI extraction, confirmation
@@ -83,7 +83,11 @@ export default function HomeScreen() {
   // owner can't actually use isn't shipped here -- it gets added as its
   // own complete, reviewed patch once Phase 2 actually lands.
   const [fabExpanded, setFabExpanded] = useState(false);
-  const [loading, setLoading] = useState(true);
+  // refreshing stays a SEPARATE local state from useQuery's own
+  // isFetching -- isFetching is also true during background polling and
+  // realtime-triggered refetches, which would make the pull-to-refresh
+  // spinner appear unexpectedly every 30s. refreshing is deliberately
+  // only ever set by the user's actual pull gesture (see handleRefresh).
   const [refreshing, setRefreshing] = useState(false);
   // Home screen pagination (v1.3.399) -- tracked separately from
   // loading/refreshing so the footer spinner only shows for "load more",
@@ -155,12 +159,58 @@ export default function HomeScreen() {
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
 
-  const debouncedLoadHomeData = useCallback((tabId?: string) => {
+  // Phase 2 of the TanStack Offline Cache Sprint (AssistMe_Offline_Cache_
+  // Handover.md). Query key includes the active filter tab so each tab
+  // (All/Dues/Quotes) caches independently -- switching tabs shows that
+  // tab's own last-known data instantly rather than blocking on a
+  // network round trip, and works offline if that tab was ever
+  // successfully loaded before.
+  //
+  // MUST be declared before debouncedLoadHomeData below -- a real bug,
+  // found via Atif's on-device testing, had homeQuery declared AFTER
+  // debouncedLoadHomeData while debouncedLoadHomeData's dependency array
+  // already referenced homeQuery.refetch, throwing "Cannot read property
+  // 'refetch' of undefined" on every single render. This ordering is
+  // deliberate and load-bearing -- do not move this block back down.
+  const queryClient = useQueryClient();
+  const homeQueryKey = ['home-customers', activeTab || 'all'];
+  const homeQuery = useQuery({
+    queryKey: homeQueryKey,
+    queryFn: async () => {
+      let token = await authService.getAccessToken();
+      if (!token) {
+        const refreshed = await authService.refreshSession();
+        if (!refreshed) throw new Error('AUTH_REQUIRED');
+        token = await authService.getAccessToken();
+        if (!token) throw new Error('AUTH_REQUIRED');
+      }
+      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+      const filterTab = activeTab === 'all' ? undefined : activeTab;
+      const url = filterTab
+        ? `${backendUrl}/api/home?filter=${filterTab}`
+        : `${backendUrl}/api/home`;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000);
+      try {
+        const response = await fetch(url, {
+          headers: { Authorization: `Bearer ${token}` },
+          signal: controller.signal,
+        });
+        if (response.status === 401) throw new Error('UNAUTHORIZED');
+        if (!response.ok) throw new Error('Failed to load home data');
+        return (await response.json()) as HomeData;
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    },
+  });
+
+  const debouncedLoadHomeData = useCallback((_tabId?: string) => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
-      loadHomeData(tabId);
+      homeQuery.refetch();
     }, 500);
-  }, []);
+  }, [homeQuery.refetch]);
 
   const syncContactNames = async (conversations: any[]) => {
     if (!Contacts) return;
@@ -214,9 +264,39 @@ export default function HomeScreen() {
     }
   };
 
+  // v5-correct pattern for query-success side effects (onSuccess was
+  // removed in TanStack Query v5 -- confirmed via TanStack's own
+  // migration guide). query.data's reference is stable/memoized by the
+  // library and only changes when genuinely new data arrives, so this
+  // effect does not re-run on every render.
   useEffect(() => {
-    loadHomeData();
-  }, []);
+    if (homeQuery.data?.conversations && homeQuery.data.conversations.length > 0) {
+      syncContactNames(homeQuery.data.conversations);
+    }
+  }, [homeQuery.data]);
+
+  // v5-correct pattern for query-error side effects (onError removed in
+  // v5, same reasoning as above). Preserves the EXACT prior 401/auth
+  // handling -- AUTH_REQUIRED (no valid token, refresh failed) sends
+  // straight to login; UNAUTHORIZED (server says the session itself is
+  // invalid) does a full sign-out first, matching loadHomeData's
+  // original behavior exactly.
+  useEffect(() => {
+    if (!homeQuery.error) return;
+    const msg = (homeQuery.error as Error).message;
+    if (msg === 'AUTH_REQUIRED') {
+      router.replace('/login');
+    } else if (msg === 'UNAUTHORIZED') {
+      (async () => {
+        await authService.clearSession();
+        await supabase.auth.signOut();
+        setIsAuthenticated(false);
+        router.replace('/login');
+      })();
+    } else {
+      console.error('Load home data error:', homeQuery.error);
+    }
+  }, [homeQuery.error]);
 
   useEffect(() => {
     const setupRealtime = async () => {
@@ -281,75 +361,6 @@ export default function HomeScreen() {
     return unsubscribe;
   }, [navigation, activeTab]);
 
-  const loadHomeData = async (filterTab?: string) => {
-    try {
-      let token = await authService.getAccessToken();
-      if (!token) {
-        const refreshed = await authService.refreshSession();
-        if (!refreshed) {
-          router.replace('/login');
-          return;
-        }
-        token = await authService.getAccessToken();
-        if (!token) {
-          router.replace('/login');
-          return;
-        }
-      }
-
-      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
-      const url = filterTab && filterTab !== 'all' 
-        ? `${backendUrl}/api/home?filter=${filterTab}`
-        : `${backendUrl}/api/home`;
-
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 8000);
-
-      const response = await fetch(url, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-        },
-        signal: controller.signal,
-      });
-
-      clearTimeout(timeoutId);
-
-      if (response.status === 401) {
-        await authService.clearSession();
-        await supabase.auth.signOut();
-        setIsAuthenticated(false);
-        router.replace('/login');
-        return;
-      }
-
-      if (!response.ok) {
-        throw new Error('Failed to load home data');
-      }
-
-      const data: HomeData = await response.json();
-      setHomeData(data);
-      // Sync contact names for phone-number-named customers
-      if (data.conversations && data.conversations.length > 0) {
-        syncContactNames(data.conversations);
-      }
-      // Set default active tab to 'all' if not set
-      if (!activeTab) {
-        setActiveTab('all');
-      }
-      
-    } catch (error) {
-      if (error.name === 'AbortError') {
-        // Timeout - silent fail
-        console.warn('Request timeout');
-      } else {
-        console.error('Load home data error:', error);
-      }
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  };
-
   // Home screen pagination (v1.3.399). See
   // ASSISTME_V2_ARCHITECTURAL_BACKLOG.md -> "Home Screen Pagination /
   // Enrichment Cost". Unlike loadHomeData (which replaces homeData
@@ -357,7 +368,7 @@ export default function HomeScreen() {
   // APPENDS the next page onto the existing conversations list, since
   // filter_tabs/insight_strip/insight_cards don't change page to page.
   const loadMoreConversations = async () => {
-    if (isLoadingMore || !homeData?.has_more || homeData?.next_offset == null) {
+    if (isLoadingMore || !homeQuery.data?.has_more || homeQuery.data?.next_offset == null) {
       return;
     }
 
@@ -374,7 +385,7 @@ export default function HomeScreen() {
       const base = filterTab
         ? `${backendUrl}/api/home?filter=${filterTab}`
         : `${backendUrl}/api/home`;
-      const url = `${base}${filterTab ? '&' : '?'}offset=${homeData.next_offset}`;
+      const url = `${base}${filterTab ? '&' : '?'}offset=${homeQuery.data.next_offset}`;
 
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 8000);
@@ -394,7 +405,7 @@ export default function HomeScreen() {
 
       const data: HomeData = await response.json();
 
-      setHomeData(prev => {
+      queryClient.setQueryData(homeQueryKey, (prev: HomeData | undefined) => {
         if (!prev) return data;
         return {
           ...prev,
@@ -421,19 +432,22 @@ export default function HomeScreen() {
 
   const handleTabPress = (tabId: string) => {
     if (tabId === activeTab) {
-      // Same tab tapped - force reload
-      loadHomeData(tabId === 'all' ? undefined : tabId);
+      // Same tab tapped again -- force a fresh fetch for this tab.
+      homeQuery.refetch();
     } else {
+      // Changing activeTab changes homeQuery's queryKey (['home-customers',
+      // activeTab]) -- useQuery automatically fetches the new tab's data,
+      // or shows its cached data instantly if this tab was loaded before.
+      // No explicit fetch call needed here, unlike the original code.
       setActiveTab(tabId);
-      setLoading(true);
-      loadHomeData(tabId === 'all' ? undefined : tabId);
     }
   };
 
-  const handleRefresh = useCallback(() => {
+  const handleRefresh = useCallback(async () => {
     setRefreshing(true);
-    loadHomeData(activeTab === 'all' ? undefined : activeTab || undefined);
-  }, [activeTab]);
+    await homeQuery.refetch();
+    setRefreshing(false);
+  }, [homeQuery.refetch]);
 
   const handleLogout = async () => {
     try {
@@ -537,7 +551,7 @@ export default function HomeScreen() {
     </TouchableOpacity>
   );
 
-  if (loading && !homeData) {
+  if (homeQuery.isLoading && !homeQuery.data) {
     return (
       <SafeAreaView style={styles.container} edges={['top']}>
         <View style={styles.header}>
@@ -550,10 +564,23 @@ export default function HomeScreen() {
     );
   }
 
-  const conversations = homeData?.conversations || [];
-  const filterTabs = homeData?.filter_tabs || [];
-  const insightStrip = homeData?.insight_strip;
-  const insightCards = homeData?.insight_cards || [];
+  const conversations = homeQuery.data?.conversations || [];
+  const filterTabs = homeQuery.data?.filter_tabs || [];
+  const insightStrip = homeQuery.data?.insight_strip;
+  const insightCards = homeQuery.data?.insight_cards || [];
+  // "Last synced" indicator (TanStack Offline Cache Sprint, Phase 2) --
+  // dataUpdatedAt is a built-in TanStack Query field, the timestamp of
+  // the last successful fetch for this exact query key.
+  const lastSyncedText = homeQuery.dataUpdatedAt
+    ? (() => {
+        const mins = Math.round((Date.now() - homeQuery.dataUpdatedAt) / 60000);
+        if (mins < 1) return 'Last synced just now';
+        if (mins === 1) return 'Last synced 1 min ago';
+        if (mins < 60) return `Last synced ${mins} mins ago`;
+        const hrs = Math.round(mins / 60);
+        return `Last synced ${hrs} hr${hrs === 1 ? '' : 's'} ago`;
+      })()
+    : null;
 
   return (
     <>
@@ -630,6 +657,13 @@ export default function HomeScreen() {
               ))
             )}
           </View>
+        )}
+
+        {/* "Last synced" indicator (TanStack Offline Cache Sprint, Phase 2)
+            -- small, unobtrusive, only shown once we have a genuine sync
+            timestamp, hidden while actively searching to avoid clutter. */}
+        {!searchActive && lastSyncedText && (
+          <Text style={styles.lastSyncedText}>{lastSyncedText}</Text>
         )}
 
         {/* Filter Tabs */}
@@ -813,7 +847,7 @@ export default function HomeScreen() {
         <Ionicons name={fabExpanded ? 'close' : 'add'} size={28} color="#FFFFFF" />
       </TouchableOpacity>
 
-      <Text style={{ textAlign: "center", fontSize: 10, color: "#CCC", paddingVertical: 2 }}>v1.3.422</Text>
+      <Text style={{ textAlign: "center", fontSize: 10, color: "#CCC", paddingVertical: 2 }}>v1.3.425</Text>
       {/* Bottom Navigation SafeAreaView */}
       <SafeAreaView style={styles.bottomNavSafeArea} edges={['bottom']}>
         <View style={styles.bottomNav}>
@@ -956,9 +990,9 @@ export default function HomeScreen() {
               <TouchableOpacity style={styles.sheetItem} onPress={() => { setShowToolsSheet(false); router.push('/settings/billing'); }}>
                 <Ionicons name="card-outline" size={24} color="#667781" />
                 <Text style={styles.sheetItemText}>Subscription & billing</Text>
-                {homeData?.subscription_plan && (
+                {homeQuery.data?.subscription_plan && (
                   <View style={styles.planBadge}>
-                    <Text style={styles.planBadgeText}>{homeData.subscription_plan.toUpperCase()}</Text>
+                    <Text style={styles.planBadgeText}>{homeQuery.data.subscription_plan.toUpperCase()}</Text>
                   </View>
                 )}
                 <Ionicons name="chevron-forward" size={20} color="#CCCCCC" />
@@ -1012,7 +1046,7 @@ export default function HomeScreen() {
               <TouchableOpacity style={styles.sheetItem} onPress={() => { setShowToolsSheet(false); router.push('/settings/language'); }}>
                 <Ionicons name="language-outline" size={24} color="#667781" />
                 <Text style={styles.sheetItemText}>Language</Text>
-                <Text style={styles.sheetItemValue}>{getLanguageLabel(homeData?.language || DEFAULT_LANGUAGE)}</Text>
+                <Text style={styles.sheetItemValue}>{getLanguageLabel(homeQuery.data?.language || DEFAULT_LANGUAGE)}</Text>
                 <Ionicons name="chevron-forward" size={20} color="#CCCCCC" />
               </TouchableOpacity>
 
@@ -1060,6 +1094,13 @@ const styles = StyleSheet.create({
   headerIcons: {
     flexDirection: 'row',
     gap: 16,
+  },
+  lastSyncedText: {
+    fontSize: 11,
+    color: '#999',
+    textAlign: 'center',
+    paddingVertical: 4,
+    backgroundColor: '#F5F5F5',
   },
   headerIcon: {
     padding: 4,
@@ -1446,8 +1487,6 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     letterSpacing: 0.5,
   },
-  // Coming-soon (frozen) treatment — Home Menu Audit. Muted row + inline badge,
-  // no navigation. Reused across 3-dot menu and Tools sheet.
   comingSoonRow: {
     opacity: 0.55,
   },
@@ -1475,7 +1514,6 @@ const styles = StyleSheet.create({
     color: '#999999',
     letterSpacing: 0.3,
   },
-  // Header Search, Tier 1 (Home Menu Audit).
   searchBarRow: {
     flex: 1,
     flexDirection: 'row',
