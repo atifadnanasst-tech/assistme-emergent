@@ -606,7 +606,16 @@ export default function HomeScreen() {
             </View>
           ) : (
             <>
-              <Text style={styles.headerTitle}>AssistMe</Text>
+              <View>
+                <Text style={styles.headerTitle}>AssistMe</Text>
+                {/* "Last synced" indicator (TanStack Offline Cache Sprint,
+                    Phase 2) -- moved here per Atif's preference: a small,
+                    subtle subtitle attached to the title, not a separate
+                    full-width banner line. */}
+                {lastSyncedText && (
+                  <Text style={styles.lastSyncedSubtitle}>{lastSyncedText}</Text>
+                )}
+              </View>
               <View style={styles.headerIcons}>
                 <TouchableOpacity style={styles.headerIcon} onPress={() => setSearchActive(true)}>
                   <Ionicons name="search-outline" size={24} color="#FFFFFF" />
@@ -657,13 +666,6 @@ export default function HomeScreen() {
               ))
             )}
           </View>
-        )}
-
-        {/* "Last synced" indicator (TanStack Offline Cache Sprint, Phase 2)
-            -- small, unobtrusive, only shown once we have a genuine sync
-            timestamp, hidden while actively searching to avoid clutter. */}
-        {!searchActive && lastSyncedText && (
-          <Text style={styles.lastSyncedText}>{lastSyncedText}</Text>
         )}
 
         {/* Filter Tabs */}
@@ -847,7 +849,7 @@ export default function HomeScreen() {
         <Ionicons name={fabExpanded ? 'close' : 'add'} size={28} color="#FFFFFF" />
       </TouchableOpacity>
 
-      <Text style={{ textAlign: "center", fontSize: 10, color: "#CCC", paddingVertical: 2 }}>v1.3.427</Text>
+      <Text style={{ textAlign: "center", fontSize: 10, color: "#CCC", paddingVertical: 2 }}>v1.3.428</Text>
       {/* Bottom Navigation SafeAreaView */}
       <SafeAreaView style={styles.bottomNavSafeArea} edges={['bottom']}>
         <View style={styles.bottomNav}>
@@ -1095,12 +1097,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 16,
   },
-  lastSyncedText: {
+  lastSyncedSubtitle: {
     fontSize: 11,
-    color: '#999',
-    textAlign: 'center',
-    paddingVertical: 4,
-    backgroundColor: '#F5F5F5',
+    color: '#FFFFFFAA',
+    marginTop: 2,
   },
   headerIcon: {
     padding: 4,
