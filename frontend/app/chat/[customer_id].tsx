@@ -1278,7 +1278,15 @@ export default function CustomerChatScreen() {
       if (!token) return;
       const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 15000);
+      // Attachment-included Spark queries go through vision-model processing,
+      // which genuinely takes longer than plain text queries. Text-only stays
+      // at 15s; attachment requests get 45s before "Taking too long" fires.
+      // Root-caused Aug 12 2026: ADB logcat showed AbortError firing at
+      // exactly 15s while uploadAttachment itself had already succeeded --
+      // the upload was never the problem, the AI response timeout was too
+      // tight for the vision path.
+      const sparkTimeoutMs = capturedAttachment ? 45000 : 15000;
+      const timeoutId = setTimeout(() => controller.abort(), sparkTimeoutMs);
 
       // ALWAYS make fresh POST to /api/chat/:customer_id/spark
       const res = await fetch(`${backendUrl}/api/chat/${customer_id}/spark`, {
