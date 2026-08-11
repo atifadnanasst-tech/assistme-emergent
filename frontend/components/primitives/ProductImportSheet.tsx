@@ -79,7 +79,11 @@ export default function ProductImportSheet({ visible, onDismiss, onComplete, exi
 
   const getToken = async () => {
     const token = await authService.getAccessToken();
-    if (!token) { Alert.alert('Session expired', 'Please log in again.'); return null; }
+    if (!token) {
+      console.warn('[UPLOAD_DEBUG] getToken: no token found in secure storage.');
+      Alert.alert('Session expired', 'Please log in again.');
+      return null;
+    }
     return token;
   };
 
@@ -88,18 +92,32 @@ export default function ProductImportSheet({ visible, onDismiss, onComplete, exi
 
   const uploadFile = async (uri: string, mimeType: string, name: string) => {
     const token = await getToken();
-    if (!token) return null;
+    if (!token) {
+      console.warn(`[UPLOAD_DEBUG] uploadFile: no token, aborting before fetch. uri=${uri}`);
+      return null;
+    }
     const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
-    const formData = new FormData();
-    formData.append('file', { uri, name, type: mimeType } as any);
-    const res = await fetch(`${backendUrl}/api/upload`, {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${token}` },
-      body: formData,
-    });
-    if (!res.ok) return null;
-    const data = await res.json();
-    return { url: data.url, mime_type: mimeType, name };
+    try {
+      const formData = new FormData();
+      formData.append('file', { uri, name, type: mimeType } as any);
+      console.log(`[UPLOAD_DEBUG] uploadFile: calling fetch. uri=${uri} name=${name} mime=${mimeType} backendUrl=${backendUrl}`);
+      const res = await fetch(`${backendUrl}/api/upload`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` },
+        body: formData,
+      });
+      console.log(`[UPLOAD_DEBUG] uploadFile: fetch resolved. status=${res.status} ok=${res.ok}`);
+      if (!res.ok) {
+        const errText = await res.text().catch(() => '');
+        console.warn(`[UPLOAD_DEBUG] uploadFile: non-ok response. status=${res.status} body=${errText}`);
+        return null;
+      }
+      const data = await res.json();
+      return { url: data.url, mime_type: mimeType, name };
+    } catch (err: any) {
+      console.error(`[UPLOAD_DEBUG] uploadFile: fetch threw. name=${err?.name} message=${err?.message} uri=${uri}`, err);
+      return null;
+    }
   };
 
   const runExtraction = async (uploadedFiles: { url: string; mime_type: string; name: string }[]) => {
@@ -150,14 +168,17 @@ export default function ProductImportSheet({ visible, onDismiss, onComplete, exi
     if (!perm.granted) { Alert.alert('Permission required', 'Please allow access to your photo library.'); return; }
     const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: 'images' as ImagePicker.MediaType, allowsMultipleSelection: true, quality: 0.8 });
     if (result.canceled || !result.assets?.length) return;
+    console.log(`[UPLOAD_DEBUG] pickFromGallery: ${result.assets.length} asset(s) selected.`);
     setStep('extracting');
     const uploaded = [];
     for (const asset of result.assets) {
       const ext = (asset.uri.split('.').pop() || 'jpg').toLowerCase();
       const mime = ext === 'png' ? 'image/png' : 'image/jpeg';
+      console.log(`[UPLOAD_DEBUG] pickFromGallery: attempting upload. uri=${asset.uri} mime=${mime}`);
       const f = await uploadFile(asset.uri, mime, asset.fileName || `photo.${ext}`);
       if (f) uploaded.push(f);
     }
+    console.log(`[UPLOAD_DEBUG] pickFromGallery: ${uploaded.length}/${result.assets.length} uploaded successfully.`);
     if (!uploaded.length) { Alert.alert('Upload failed', 'Could not upload images.'); setStep('pick'); return; }
     await runExtraction(uploaded);
   };
