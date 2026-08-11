@@ -1344,14 +1344,16 @@ export default function AIScreen() {
     <>
     <KeyboardAvoidingView
       style={styles.flex1}
-      // Root-caused Aug 12 2026 (ATT-4): app.json sets softwareKeyboardLayoutMode:'pan'
-      // app-wide, so Android already repositions the screen at the OS level. Applying
-      // KAV's own 'height' behavior on top double-compensated and never fully restored
-      // on keyboard-hide, causing a permanent container shrink after the first open/close
-      // cycle per screen mount -- looked "sporadic" but was fully deterministic. iOS has
-      // no equivalent OS-level pan, so 'padding' stays there.
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      keyboardVerticalOffset={Platform.OS === 'ios' ? 80 : 0}
+      // ATT-4, iteration 2 (Aug 12 2026): behavior=undefined on Android proved
+      // insufficient -- OS-level softwareKeyboardLayoutMode:'pan' alone does NOT
+      // reposition this screen's input above the keyboard, input became hidden.
+      // behavior='height' (original) had a confirmed non-restoring shrink bug.
+      // Testing 'padding' on Android: adds bottom padding instead of resizing
+      // container height, avoiding 'height'\'s specific resize/restore bug while
+      // still providing real compensation. No manual offset -- letting padding
+      // exactly match reported keyboard height.
+      behavior="padding"
+      keyboardVerticalOffset={0}
     >
       {/* Header */}
       <SafeAreaView style={styles.safeTop} edges={['top']}>
