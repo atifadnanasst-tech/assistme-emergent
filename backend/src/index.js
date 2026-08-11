@@ -2012,14 +2012,26 @@ app.post('/api/tags', async (c) => {
 // Auth + org helper (reusable for chat routes)
 async function authenticateChat(c) {
   const authHeader = c.req.header('Authorization');
-  if (!authHeader || !authHeader.startsWith('Bearer ')) return null;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    console.warn(`[AUTH_AUDIT] reason=no_bearer_header ts=${new Date().toISOString()}`);
+    return null;
+  }
   const token = authHeader.split(' ')[1];
-  if (!supabase) return null;
+  if (!supabase) {
+    console.warn(`[AUTH_AUDIT] reason=supabase_unavailable ts=${new Date().toISOString()}`);
+    return null;
+  }
   const { data: userData, error } = await supabase.auth.getUser(token);
-  if (error || !userData.user) return null;
+  if (error || !userData.user) {
+    console.warn(`[AUTH_AUDIT] reason=invalid_or_expired_token error="${error?.message || 'no_user'}" ts=${new Date().toISOString()}`);
+    return null;
+  }
   const { data: userRecord } = await supabase
     .from('users').select('id, organisation_id, organisations(primary_language, customer_language_auto)').eq('auth_id', userData.user.id).single();
-  if (!userRecord) return null;
+  if (!userRecord) {
+    console.warn(`[AUTH_AUDIT] reason=no_user_record auth_id=${userData.user.id} ts=${new Date().toISOString()}`);
+    return null;
+  }
   return {
     userId: userRecord.id,
     organisationId: userRecord.organisation_id,
@@ -2190,13 +2202,17 @@ app.get('/api/chat/:customer_id', async (c) => {
 app.post('/api/upload', async (c) => {
   try {
     const auth = await authenticateChat(c);
-    if (!auth) return c.json({ error: 'unauthorized' }, 401);
-    const { organisationId } = auth;
+    if (!auth) {
+      console.warn(`[UPLOAD_AUDIT] reason=unauthorized ts=${new Date().toISOString()}`);
+      return c.json({ error: 'unauthorized' }, 401);
+    }
+    const { organisationId, userId } = auth;
 
     const formData = await c.req.formData();
     const file = formData.get('file');
 
     if (!file || typeof file === 'string') {
+      console.warn(`[UPLOAD_AUDIT] reason=no_file org=${organisationId} user=${userId} ts=${new Date().toISOString()}`);
       return c.json({ error: 'no_file', message: 'No file provided' }, 400);
     }
 
@@ -2205,6 +2221,7 @@ app.post('/api/upload', async (c) => {
 
     const allowed = ['image/', 'audio/', 'application/pdf'];
     if (!allowed.some(prefix => mimeType.startsWith(prefix))) {
+      console.warn(`[UPLOAD_AUDIT] reason=invalid_mime mime="${mimeType}" name="${originalName}" org=${organisationId} user=${userId} ts=${new Date().toISOString()}`);
       return c.json({ error: 'invalid_mime', message: 'File type not allowed' }, 400);
     }
 
@@ -2217,6 +2234,7 @@ app.post('/api/upload', async (c) => {
     const buffer = Buffer.from(arrayBuffer);
 
     if (buffer.length > 10 * 1024 * 1024) {
+      console.warn(`[UPLOAD_AUDIT] reason=file_too_large size=${buffer.length} name="${originalName}" org=${organisationId} user=${userId} ts=${new Date().toISOString()}`);
       return c.json({ error: 'file_too_large', message: 'File exceeds 10MB limit' }, 400);
     }
 
@@ -2228,13 +2246,15 @@ app.post('/api/upload', async (c) => {
       });
 
     if (uploadErr) {
-      console.error('Storage upload error:', uploadErr);
+      console.error(`[UPLOAD_AUDIT] reason=storage_error message="${uploadErr.message}" org=${organisationId} user=${userId} path="${storagePath}" ts=${new Date().toISOString()}`);
       return c.json({ error: 'upload_failed', message: uploadErr.message }, 500);
     }
 
     const { data: publicUrlData } = supabase.storage
       .from('chat-attachments')
       .getPublicUrl(storagePath);
+
+    console.log(`[UPLOAD_AUDIT] reason=success mime="${mimeType}" size=${buffer.length} org=${organisationId} user=${userId} path="${storagePath}" ts=${new Date().toISOString()}`);
 
     return c.json({
       url: publicUrlData.publicUrl,
@@ -2245,7 +2265,7 @@ app.post('/api/upload', async (c) => {
     });
 
   } catch (err) {
-    console.error('POST /api/upload error:', err);
+    console.error(`[UPLOAD_AUDIT] reason=server_error message="${err.message}" ts=${new Date().toISOString()}`, err);
     return c.json({ error: 'server_error' }, 500);
   }
 });
