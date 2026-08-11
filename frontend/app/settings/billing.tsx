@@ -8,6 +8,11 @@ import {
   ActivityIndicator,
   Alert,
   Linking,
+  Modal,
+  TextInput,
+  Pressable,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -41,6 +46,12 @@ const TIER_INFO: TierInfo[] = [
   { tier: 'business', displayName: 'Business', priceLabel: '₹1999 + GST /month', rank: 2 },
 ];
 
+// Default trial length per tier, per Atif's explicit business decision.
+// Actual eligibility (first-time subscriber only) is ALWAYS enforced
+// server-side (hasEverHadSubscription) regardless of what's sent here --
+// this is just the UI default, not the source of truth.
+const TRIAL_DEFAULTS: Record<string, number> = { pro: 7, business: 10 };
+
 interface UsageSummary {
   plan: string;
   businessName: string | null;
@@ -67,6 +78,13 @@ export default function SubscriptionBilling() {
   const [usage, setUsage] = useState<UsageSummary | null>(null);
   const [loadingUsage, setLoadingUsage] = useState(true);
   const currentTier = usage?.plan || 'free';
+  // Long-press admin trial-customization modal (in-person setup only --
+  // self-downloaders never trigger this, since Atif isn't there to
+  // long-press). Typing 0 here IS the "immediate billing, no trial" case
+  // -- deliberately no separate bypass mechanism, one input handles both.
+  const [trialModalVisible, setTrialModalVisible] = useState(false);
+  const [trialModalTier, setTrialModalTier] = useState<TierInfo | null>(null);
+  const [trialDaysInput, setTrialDaysInput] = useState('');
 
   const fetchUsageSummary = useCallback(async () => {
     try {
@@ -167,7 +185,14 @@ export default function SubscriptionBilling() {
     return null;
   };
 
-  const openCheckoutAndVerify = async (subscriptionId: string, keyId: string, targetTier: TierInfo, token: string) => {
+  const openCheckoutAndVerify = async (
+    subscriptionId: string,
+    keyId: string,
+    targetTier: TierInfo,
+    token: string,
+    isTrial: boolean = false,
+    trialEndsAt: string | null = null
+  ) => {
     const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
     const checkoutOptions = {
       description: `AssistMe ${targetTier.displayName} — monthly subscription`,
@@ -199,14 +224,24 @@ export default function SubscriptionBilling() {
     });
 
     if (verifyRes.ok) {
-      Alert.alert('Success', `You're now on the ${targetTier.displayName} plan.`);
+      if (isTrial && trialEndsAt) {
+        const trialEndDate = new Date(trialEndsAt).toLocaleDateString('en-IN', {
+          day: 'numeric', month: 'short', year: 'numeric',
+        });
+        Alert.alert(
+          "You're on the " + targetTier.displayName + ' plan',
+          `Free until ${trialEndDate}, then ${targetTier.priceLabel} automatically. Cancel anytime before then from this screen.`
+        );
+      } else {
+        Alert.alert('Success', `You're now on the ${targetTier.displayName} plan.`);
+      }
       fetchUsageSummary();
     } else {
       Alert.alert('Payment received', "Your payment went through. Your plan may take a moment to update.");
     }
   };
 
-  const handleFreshSubscribe = async (targetTier: TierInfo) => {
+  const handleFreshSubscribe = async (targetTier: TierInfo, trialDays: number = 0) => {
     if (subscribingTier !== null) return;
     setSubscribingTier(targetTier.tier);
     try {
@@ -217,14 +252,14 @@ export default function SubscriptionBilling() {
       const subRes = await fetch(`${backendUrl}/api/subscription/create`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ tier: targetTier.tier }),
+        body: JSON.stringify({ tier: targetTier.tier, trialDays }),
       });
       if (!subRes.ok) {
         Alert.alert('Could not start subscription', 'Please try again.');
         return;
       }
       const sub = await subRes.json();
-      await openCheckoutAndVerify(sub.subscriptionId, sub.keyId, targetTier, token);
+      await openCheckoutAndVerify(sub.subscriptionId, sub.keyId, targetTier, token, sub.isTrial, sub.trialEndsAt);
     } catch (err) {
       console.error('Subscribe error:', err);
       Alert.alert('Something went wrong', 'Please try again, or contact support if this continues.');
@@ -294,12 +329,27 @@ export default function SubscriptionBilling() {
     }
   };
 
+  // Standard (short) tap -- default trial per tier, per Atif's business
+  // decision (Business=10 days, Pro=7 days). This is the ONLY path
+  // self-downloaders (nobody physically present to long-press) ever see.
   const handleTierTap = (targetTier: TierInfo) => {
     if (subscribingTier !== null || targetTier.tier === currentTier) return;
     const currentInfo = TIER_INFO.find((t) => t.tier === currentTier)!;
 
     if (currentTier === 'free') {
-      handleFreshSubscribe(targetTier);
+      const defaultDays = TRIAL_DEFAULTS[targetTier.tier] || 0;
+      if (defaultDays > 0) {
+        Alert.alert(
+          `Start ${targetTier.displayName} Plan?`,
+          `${defaultDays}-day free trial, then ${targetTier.priceLabel} automatically. You can cancel anytime during the trial, no charge.`,
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Start Trial', onPress: () => handleFreshSubscribe(targetTier, defaultDays) },
+          ]
+        );
+      } else {
+        handleFreshSubscribe(targetTier, 0);
+      }
       return;
     }
 
@@ -330,6 +380,23 @@ export default function SubscriptionBilling() {
         ]
       );
     }
+  };
+
+  const handleTierLongPress = (targetTier: TierInfo) => {
+    if (subscribingTier !== null || currentTier !== 'free' || targetTier.tier === 'free') return;
+    setTrialModalTier(targetTier);
+    setTrialDaysInput(String(TRIAL_DEFAULTS[targetTier.tier] || 0));
+    setTrialModalVisible(true);
+  };
+
+  const handleTrialModalConfirm = () => {
+    if (!trialModalTier) return;
+    const parsed = parseInt(trialDaysInput, 10);
+    const days = Number.isFinite(parsed) ? Math.min(90, Math.max(0, parsed)) : 0;
+    setTrialModalVisible(false);
+    const tier = trialModalTier;
+    setTrialModalTier(null);
+    handleFreshSubscribe(tier, days);
   };
 
   const handleContactUs = () => {
@@ -466,6 +533,7 @@ export default function SubscriptionBilling() {
                   subscribingTier !== null && !isCurrent && styles.tierRowDisabled,
                 ]}
                 onPress={() => handleTierTap(tierRow)}
+                onLongPress={() => handleTierLongPress(tierRow)}
                 disabled={subscribingTier !== null || isCurrent}
               >
                 <View>
@@ -505,6 +573,51 @@ export default function SubscriptionBilling() {
           </TouchableOpacity>
         </View>
       </ScrollView>
+
+      <Modal
+        visible={trialModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setTrialModalVisible(false)}
+      >
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={styles.trialModalOverlay}
+        >
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setTrialModalVisible(false)} />
+          <View style={styles.trialModalCard}>
+            <Text style={styles.trialModalTitle}>
+              {trialModalTier ? `${trialModalTier.displayName} — trial days` : ''}
+            </Text>
+            <Text style={styles.trialModalSubtitle}>
+              Enter 0 for immediate billing, no trial.
+            </Text>
+            <TextInput
+              style={styles.trialModalInput}
+              value={trialDaysInput}
+              onChangeText={setTrialDaysInput}
+              keyboardType="number-pad"
+              autoFocus
+              selectTextOnFocus
+              maxLength={2}
+            />
+            <View style={styles.trialModalButtonRow}>
+              <TouchableOpacity
+                style={[styles.trialModalButton, styles.trialModalButtonCancel]}
+                onPress={() => setTrialModalVisible(false)}
+              >
+                <Text style={styles.trialModalButtonCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.trialModalButton, styles.trialModalButtonConfirm]}
+                onPress={handleTrialModalConfirm}
+              >
+                <Text style={styles.trialModalButtonConfirmText}>Continue</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -597,6 +710,38 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   contactButtonText: { color: '#FFFFFF', fontSize: 15, fontWeight: '700' },
+  trialModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  trialModalCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 24,
+    width: '82%',
+    maxWidth: 340,
+  },
+  trialModalTitle: { fontSize: 17, fontWeight: '700', color: '#222', textAlign: 'center', marginBottom: 6 },
+  trialModalSubtitle: { fontSize: 12, color: '#888', textAlign: 'center', marginBottom: 18 },
+  trialModalInput: {
+    borderWidth: 1,
+    borderColor: '#DDD',
+    borderRadius: 10,
+    fontSize: 24,
+    fontWeight: '700',
+    textAlign: 'center',
+    paddingVertical: 12,
+    color: '#075E54',
+    marginBottom: 20,
+  },
+  trialModalButtonRow: { flexDirection: 'row', gap: 10 },
+  trialModalButton: { flex: 1, paddingVertical: 12, borderRadius: 10, alignItems: 'center' },
+  trialModalButtonCancel: { backgroundColor: '#F0F0F0' },
+  trialModalButtonCancelText: { color: '#666', fontWeight: '600', fontSize: 14 },
+  trialModalButtonConfirm: { backgroundColor: '#075E54' },
+  trialModalButtonConfirmText: { color: '#FFFFFF', fontWeight: '700', fontSize: 14 },
   usageReset: { fontSize: 11, color: '#999', marginTop: 8, textAlign: 'right' },
   usageSkeletonCard: {
     minHeight: 184,
