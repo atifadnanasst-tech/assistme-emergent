@@ -45,7 +45,23 @@ function getRazorpayInstance() {
   });
 }
 
-export async function createSubscription({ orgId, tier, supabase }) {
+export async function hasEverHadSubscription({ orgId, supabase }) {
+  const { data, error } = await supabase
+    .from('subscription_events')
+    .select('id')
+    .eq('organisation_id', orgId)
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    console.error('[hasEverHadSubscription] check failed, failing SAFE (treat as repeat, no trial):', error.message);
+    return true;
+  }
+
+  return !!data;
+}
+
+export async function createSubscription({ orgId, tier, supabase, requestedTrialDays = 0 }) {
   const planId = PLAN_IDS[tier];
   if (!planId) {
     return { success: false, error: 'invalid_tier' };
@@ -53,14 +69,26 @@ export async function createSubscription({ orgId, tier, supabase }) {
 
   const razorpay = getRazorpayInstance();
 
+  const alreadySubscribedBefore = await hasEverHadSubscription({ orgId, supabase });
+  const effectiveTrialDays = alreadySubscribedBefore ? 0 : Math.max(0, requestedTrialDays);
+
+  const subscriptionParams = {
+    plan_id: planId,
+    total_count: TOTAL_COUNT_INDEFINITE,
+    customer_notify: 1,
+    notes: { product: 'assistme', feature: 'subscription', org_id: orgId, tier, trial_days: effectiveTrialDays },
+  };
+
+  let trialEndsAt = null;
+  if (effectiveTrialDays > 0) {
+    const startAtUnix = Math.floor(Date.now() / 1000) + effectiveTrialDays * 86400;
+    subscriptionParams.start_at = startAtUnix;
+    trialEndsAt = new Date(startAtUnix * 1000).toISOString();
+  }
+
   let subscription;
   try {
-    subscription = await razorpay.subscriptions.create({
-      plan_id: planId,
-      total_count: TOTAL_COUNT_INDEFINITE,
-      customer_notify: 1,
-      notes: { product: 'assistme', feature: 'subscription', org_id: orgId, tier },
-    });
+    subscription = await razorpay.subscriptions.create(subscriptionParams);
   } catch (err) {
     console.error('[createSubscription] Razorpay subscription creation failed:', err.message);
     return { success: false, error: 'razorpay_subscription_failed' };
@@ -74,6 +102,7 @@ export async function createSubscription({ orgId, tier, supabase }) {
         razorpay_subscription_id: subscription.id,
         status: 'created',
         plan_tier: tier,
+        trial_ends_at: trialEndsAt,
         updated_at: new Date().toISOString(),
       },
       { onConflict: 'organisation_id' }
@@ -88,6 +117,8 @@ export async function createSubscription({ orgId, tier, supabase }) {
     success: true,
     subscriptionId: subscription.id,
     keyId: process.env.RAZORPAY_KEY_ID,
+    trialEndsAt,
+    isTrial: effectiveTrialDays > 0,
   };
 }
 

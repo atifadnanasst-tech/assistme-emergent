@@ -1549,8 +1549,10 @@ app.post('/api/subscription/create', async (c) => {
     const { organisationId } = auth;
     const body = await c.req.json();
     const tier = body.tier;
+    const rawTrialDays = Number(body.trialDays);
+    const trialDays = Number.isFinite(rawTrialDays) ? Math.min(90, Math.max(0, Math.floor(rawTrialDays))) : 0;
 
-    const result = await createSubscription({ orgId: organisationId, tier, supabase });
+    const result = await createSubscription({ orgId: organisationId, tier, supabase, requestedTrialDays: trialDays });
     if (!result.success) return c.json({ error: result.error }, 400);
     return c.json(result);
   } catch (err) {
