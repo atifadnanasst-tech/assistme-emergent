@@ -61,6 +61,31 @@ export async function hasEverHadSubscription({ orgId, supabase }) {
   return !!data;
 }
 
+export async function isEligibleForTrial({ orgId, supabase }) {
+  const [historyResult, orgResult] = await Promise.all([
+    supabase.from('subscription_events').select('id').eq('organisation_id', orgId).limit(1).maybeSingle(),
+    supabase.from('organisations').select('created_at').eq('id', orgId).maybeSingle(),
+  ]);
+
+  if (historyResult.error || orgResult.error) {
+    console.error('[isEligibleForTrial] check failed, failing SAFE (deny trial):', historyResult.error?.message || orgResult.error?.message);
+    return false;
+  }
+
+  const hasHistory = !!historyResult.data;
+  if (hasHistory) return false;
+
+  const orgCreatedAt = orgResult.data?.created_at;
+  if (!orgCreatedAt) {
+    console.error('[isEligibleForTrial] org created_at missing, failing SAFE (deny trial) for org:', orgId);
+    return false;
+  }
+
+  const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
+  const ageMs = Date.now() - new Date(orgCreatedAt).getTime();
+  return ageMs <= TWENTY_FOUR_HOURS_MS;
+}
+
 export async function createSubscription({ orgId, tier, supabase, requestedTrialDays = 0 }) {
   const planId = PLAN_IDS[tier];
   if (!planId) {
@@ -69,8 +94,8 @@ export async function createSubscription({ orgId, tier, supabase, requestedTrial
 
   const razorpay = getRazorpayInstance();
 
-  const alreadySubscribedBefore = await hasEverHadSubscription({ orgId, supabase });
-  const effectiveTrialDays = alreadySubscribedBefore ? 0 : Math.max(0, requestedTrialDays);
+  const trialEligible = await isEligibleForTrial({ orgId, supabase });
+  const effectiveTrialDays = trialEligible ? Math.max(0, requestedTrialDays) : 0;
 
   const subscriptionParams = {
     plan_id: planId,
