@@ -86,21 +86,7 @@ export default function AIScreen() {
   const [showConvDropdown, setShowConvDropdown] = useState(false);
   const [loadingConversations, setLoadingConversations] = useState(false);
 
-  // TEMPORARY PROBE (Aug 12 2026) -- investigating sporadic extra keyboard spacing (ATT-4).
-  // Logs actual keyboard height + KeyboardAvoidingView's measured layout height to confirm
-  // whether Android's softwareKeyboardLayoutMode:'pan' is double-compensating with RN's
-  // KeyboardAvoidingView behavior='height'. REMOVE after root cause is confirmed either way.
-  useEffect(() => {
-    const showSub = Keyboard.addListener('keyboardDidShow', (e) => {
-      console.log(`[KB_PROBE] keyboardDidShow height=${e.endCoordinates.height} screenY=${e.endCoordinates.screenY}`);
-    });
-    const hideSub = Keyboard.addListener('keyboardDidHide', () => {
-      console.log('[KB_PROBE] keyboardDidHide');
-    });
-    return () => { showSub.remove(); hideSub.remove(); };
-  }, []);
-
-  // TODO: consolidate handleMenuQuery + handleSendDirect into shared sendAiRequest helper
+// TODO: consolidate handleMenuQuery + handleSendDirect into shared sendAiRequest helper
   // Pure helper — index-based dropdown positioning (no layout measurement needed)
   const DROPDOWN_WIDTH = 220;
   const clampDropdownLeft = (rawLeft: number): number => {
@@ -1358,9 +1344,14 @@ export default function AIScreen() {
     <>
     <KeyboardAvoidingView
       style={styles.flex1}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-keyboardVerticalOffset={80}
-      onLayout={(e) => console.log(`[KB_PROBE] KAV layout height=${e.nativeEvent.layout.height}`)}
+      // Root-caused Aug 12 2026 (ATT-4): app.json sets softwareKeyboardLayoutMode:'pan'
+      // app-wide, so Android already repositions the screen at the OS level. Applying
+      // KAV's own 'height' behavior on top double-compensated and never fully restored
+      // on keyboard-hide, causing a permanent container shrink after the first open/close
+      // cycle per screen mount -- looked "sporadic" but was fully deterministic. iOS has
+      // no equivalent OS-level pan, so 'padding' stays there.
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 80 : 0}
     >
       {/* Header */}
       <SafeAreaView style={styles.safeTop} edges={['top']}>
