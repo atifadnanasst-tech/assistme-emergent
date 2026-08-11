@@ -86,6 +86,20 @@ export default function AIScreen() {
   const [showConvDropdown, setShowConvDropdown] = useState(false);
   const [loadingConversations, setLoadingConversations] = useState(false);
 
+  // TEMPORARY PROBE (Aug 12 2026) -- investigating sporadic extra keyboard spacing (ATT-4).
+  // Logs actual keyboard height + KeyboardAvoidingView's measured layout height to confirm
+  // whether Android's softwareKeyboardLayoutMode:'pan' is double-compensating with RN's
+  // KeyboardAvoidingView behavior='height'. REMOVE after root cause is confirmed either way.
+  useEffect(() => {
+    const showSub = Keyboard.addListener('keyboardDidShow', (e) => {
+      console.log(`[KB_PROBE] keyboardDidShow height=${e.endCoordinates.height} screenY=${e.endCoordinates.screenY}`);
+    });
+    const hideSub = Keyboard.addListener('keyboardDidHide', () => {
+      console.log('[KB_PROBE] keyboardDidHide');
+    });
+    return () => { showSub.remove(); hideSub.remove(); };
+  }, []);
+
   // TODO: consolidate handleMenuQuery + handleSendDirect into shared sendAiRequest helper
   // Pure helper — index-based dropdown positioning (no layout measurement needed)
   const DROPDOWN_WIDTH = 220;
@@ -1346,6 +1360,7 @@ export default function AIScreen() {
       style={styles.flex1}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
 keyboardVerticalOffset={80}
+      onLayout={(e) => console.log(`[KB_PROBE] KAV layout height=${e.nativeEvent.layout.height}`)}
     >
       {/* Header */}
       <SafeAreaView style={styles.safeTop} edges={['top']}>
