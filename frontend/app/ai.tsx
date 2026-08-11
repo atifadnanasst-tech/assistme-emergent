@@ -86,20 +86,7 @@ export default function AIScreen() {
   const [showConvDropdown, setShowConvDropdown] = useState(false);
   const [loadingConversations, setLoadingConversations] = useState(false);
 
-  // TEMPORARY PROBE, iteration 2 (Aug 12 2026) -- comparing 'padding' behavior
-  // against the earlier 'height' behavior data for the same ATT-4 investigation.
-  // REMOVE after this comparison is done.
-  useEffect(() => {
-    const showSub = Keyboard.addListener('keyboardDidShow', (e) => {
-      console.log(`[KB_PROBE2] keyboardDidShow height=${e.endCoordinates.height} screenY=${e.endCoordinates.screenY}`);
-    });
-    const hideSub = Keyboard.addListener('keyboardDidHide', () => {
-      console.log('[KB_PROBE2] keyboardDidHide');
-    });
-    return () => { showSub.remove(); hideSub.remove(); };
-  }, []);
-
-// TODO: consolidate handleMenuQuery + handleSendDirect into shared sendAiRequest helper
+  // TODO: consolidate handleMenuQuery + handleSendDirect into shared sendAiRequest helper
   // Pure helper — index-based dropdown positioning (no layout measurement needed)
   const DROPDOWN_WIDTH = 220;
   const clampDropdownLeft = (rawLeft: number): number => {
@@ -1357,17 +1344,8 @@ export default function AIScreen() {
     <>
     <KeyboardAvoidingView
       style={styles.flex1}
-      // ATT-4, iteration 2 (Aug 12 2026): behavior=undefined on Android proved
-      // insufficient -- OS-level softwareKeyboardLayoutMode:'pan' alone does NOT
-      // reposition this screen's input above the keyboard, input became hidden.
-      // behavior='height' (original) had a confirmed non-restoring shrink bug.
-      // Testing 'padding' on Android: adds bottom padding instead of resizing
-      // container height, avoiding 'height'\'s specific resize/restore bug while
-      // still providing real compensation. No manual offset -- letting padding
-      // exactly match reported keyboard height.
-      behavior="padding"
-      keyboardVerticalOffset={0}
-      onLayout={(e) => console.log(`[KB_PROBE2] KAV layout height=${e.nativeEvent.layout.height}`)}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+keyboardVerticalOffset={80}
     >
       {/* Header */}
       <SafeAreaView style={styles.safeTop} edges={['top']}>
