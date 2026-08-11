@@ -82,6 +82,12 @@ export default function CustomerChatScreen() {
   const insets = useSafeAreaInsets();
 
   const [loading, setLoading] = useState(true);
+  // Distinguishes "genuinely no messages yet" from "couldn't load them"
+  // (offline / network failure) -- these previously looked identical to
+  // the empty-state UI, which was misleading. Deliberately narrow,
+  // standalone fix -- NOT part of any caching/persistence work, just an
+  // honest failure-state message.
+  const [loadFailed, setLoadFailed] = useState(false);
   const [sending, setSending] = useState(false);
   const [conversationId, setConversationId] = useState<string | null>(null);
   // ===== TEMP SESSION 6C START =====
@@ -970,7 +976,7 @@ export default function CustomerChatScreen() {
         await authService.clearSession(); await supabase.auth.signOut();
         setIsAuthenticated(false); router.replace('/login'); return;
       }
-      if (!res.ok) { setLoading(false); return; }
+      if (!res.ok) { setLoadFailed(true); setLoading(false); return; }
 
       const data = await res.json();
       setConversationId(data.conversation_id);
@@ -980,8 +986,10 @@ export default function CustomerChatScreen() {
       if (data.messages?.length > 0) {
         setOldestTimestamp(data.messages[0].created_at);
       }
+      setLoadFailed(false);
     } catch (err: any) {
       if (err.name !== 'AbortError') console.error('Load chat error:', err);
+      setLoadFailed(true);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -2401,6 +2409,14 @@ export default function CustomerChatScreen() {
             <Ionicons name="megaphone-outline" size={48} color="#CCC" />
             <Text style={styles.emptyText}>Broadcast Messages</Text>
             <Text style={[styles.emptyText, { fontSize: 13, marginTop: 4 }]}>Coming soon</Text>
+          </View>
+        ) : displayMessages.length === 0 && loadFailed ? (
+          <View style={styles.emptyState}>
+            <Ionicons name="cloud-offline-outline" size={48} color="#CCC" />
+            <Text style={styles.emptyText}>You're offline</Text>
+            <Text style={[styles.emptyText, { fontSize: 13, marginTop: 4 }]}>
+              Messages will load once you're back online
+            </Text>
           </View>
         ) : displayMessages.length === 0 ? (
           <View style={styles.emptyState}>
