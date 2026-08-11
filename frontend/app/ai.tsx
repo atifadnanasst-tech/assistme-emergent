@@ -86,6 +86,19 @@ export default function AIScreen() {
   const [showConvDropdown, setShowConvDropdown] = useState(false);
   const [loadingConversations, setLoadingConversations] = useState(false);
 
+  // TEMPORARY PROBE, iteration 2 (Aug 12 2026) -- comparing 'padding' behavior
+  // against the earlier 'height' behavior data for the same ATT-4 investigation.
+  // REMOVE after this comparison is done.
+  useEffect(() => {
+    const showSub = Keyboard.addListener('keyboardDidShow', (e) => {
+      console.log(`[KB_PROBE2] keyboardDidShow height=${e.endCoordinates.height} screenY=${e.endCoordinates.screenY}`);
+    });
+    const hideSub = Keyboard.addListener('keyboardDidHide', () => {
+      console.log('[KB_PROBE2] keyboardDidHide');
+    });
+    return () => { showSub.remove(); hideSub.remove(); };
+  }, []);
+
 // TODO: consolidate handleMenuQuery + handleSendDirect into shared sendAiRequest helper
   // Pure helper — index-based dropdown positioning (no layout measurement needed)
   const DROPDOWN_WIDTH = 220;
@@ -1354,6 +1367,7 @@ export default function AIScreen() {
       // exactly match reported keyboard height.
       behavior="padding"
       keyboardVerticalOffset={0}
+      onLayout={(e) => console.log(`[KB_PROBE2] KAV layout height=${e.nativeEvent.layout.height}`)}
     >
       {/* Header */}
       <SafeAreaView style={styles.safeTop} edges={['top']}>
