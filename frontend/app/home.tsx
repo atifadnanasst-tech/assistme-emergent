@@ -863,7 +863,7 @@ export default function HomeScreen() {
         <Ionicons name={fabExpanded ? 'close' : 'add'} size={28} color="#FFFFFF" />
       </TouchableOpacity>
 
-      <Text style={{ textAlign: "center", fontSize: 10, color: "#CCC", paddingVertical: 2 }}>v1.3.442</Text>
+      <Text style={{ textAlign: "center", fontSize: 10, color: "#CCC", paddingVertical: 2 }}>v1.3.443</Text>
       {/* Bottom Navigation SafeAreaView */}
       <SafeAreaView style={styles.bottomNavSafeArea} edges={['bottom']}>
         <View style={styles.bottomNav}>
@@ -1050,6 +1050,12 @@ export default function HomeScreen() {
               <TouchableOpacity style={styles.sheetItem} onPress={() => { setShowToolsSheet(false); router.push('/settings/export'); }}>
                 <Ionicons name="download-outline" size={24} color="#667781" />
                 <Text style={styles.sheetItemText}>Export my data</Text>
+                <Ionicons name="chevron-forward" size={20} color="#CCCCCC" />
+              </TouchableOpacity>
+
+              <TouchableOpacity style={styles.sheetItem} onPress={() => { setShowToolsSheet(false); router.push('/settings/gst-filing'); }}>
+                <Ionicons name="document-text-outline" size={24} color="#667781" />
+                <Text style={styles.sheetItemText}>GST Filing Report</Text>
                 <Ionicons name="chevron-forward" size={20} color="#CCCCCC" />
               </TouchableOpacity>
 
