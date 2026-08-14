@@ -803,9 +803,12 @@ export default function HomeScreen() {
             <Text style={styles.emptyStateSubtext}>
               Add your first customer to get started
             </Text>
-            <TouchableOpacity onPress={() => router.push('/settings/profile')} activeOpacity={0.7} style={{ marginTop: 8 }}>
-              <Text style={[styles.emptyStateSubtext, { color: '#075E54', textDecorationLine: 'underline' }]}>
-                or set up your Business Profile (Tools {'>'} Business Profile)
+            <TouchableOpacity onPress={() => router.push('/settings/profile')} activeOpacity={0.7} style={{ marginTop: 8, alignItems: 'center' }}>
+              <Text style={[styles.emptyStateSubtext, { color: '#075E54', textDecorationLine: 'underline', fontWeight: '600' }]}>
+                or set up your Business Profile
+              </Text>
+              <Text style={[styles.emptyStateSubtext, { fontSize: 12, color: '#999', marginTop: 2 }]}>
+                (Tools {'>'} Business Profile)
               </Text>
             </TouchableOpacity>
           </View>
