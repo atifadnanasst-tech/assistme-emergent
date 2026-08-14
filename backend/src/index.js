@@ -23,6 +23,7 @@ import { recordAiUsage, checkUsageAllowed, getOrCreateCurrentPeriod, getCeilingP
 import { createWalletOrder, creditWalletTopup, verifyClientPayment, verifyWebhookSignature } from './services/billing/walletService.js';
 import { createSubscription, requestCancellation, handleSubscriptionEvent, verifySubscriptionWebhookSignature, jobDowngradeCancelledSubscriptions, verifyClientSubscriptionPayment, activateSubscriptionClientSide, changeSubscriptionTier } from './services/billing/subscriptionService.js';
 import { generateOwnerDataExport } from './services/export/generateOwnerDataExport.js';
+import { generateGstFilingReport } from './services/reports/generateGstFilingReport.js';
 import PDFDocument from 'pdfkit';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -1417,6 +1418,76 @@ app.post('/api/export/trigger', async (c) => {
     return c.json({ generatedAt: result.generatedAt });
   } catch (err) {
     console.error('[POST /api/export/trigger] Error:', err);
+    return c.json({ error: 'internal_error' }, 500);
+  }
+});
+
+// ─── GST Filing Report (Aug 2026, dedicated session) ─────────
+app.post('/api/gst-filing/generate', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId, userId } = auth;
+    const body = await c.req.json();
+    const { period_type, period_start, period_end } = body;
+    if (!period_type || !period_start || !period_end) {
+      return c.json({ error: 'missing_fields' }, 400);
+    }
+    const result = await generateGstFilingReport({
+      orgId: organisationId, userId, periodType: period_type,
+      periodStart: period_start, periodEnd: period_end, supabase,
+    });
+    return c.json(result);
+  } catch (err) {
+    console.error('[POST /api/gst-filing/generate] Error:', err.message);
+    return c.json({ error: 'generation_failed', message: err.message }, 500);
+  }
+});
+
+app.get('/api/gst-filing/history', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+    const { data, error } = await supabase
+      .from('gst_filing_exports')
+      .select('id, period_type, period_start, period_end, invoice_count, created_at')
+      .eq('organisation_id', organisationId)
+      .order('created_at', { ascending: false })
+      .limit(50);
+    if (error) return c.json({ error: 'internal_error' }, 500);
+    return c.json({ filings: data || [] });
+  } catch (err) {
+    console.error('[GET /api/gst-filing/history] Error:', err.message);
+    return c.json({ error: 'internal_error' }, 500);
+  }
+});
+
+// Mints a short-lived (10 min) signed URL on demand, same pattern as
+// /api/export/download -- looked up by audit-log id, not "the last one",
+// since gst_filing_exports keeps real per-period history.
+app.get('/api/gst-filing/:audit_id/download', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+    const auditId = c.req.param('audit_id');
+    const { data: row } = await supabase
+      .from('gst_filing_exports')
+      .select('storage_path, period_start, period_end')
+      .eq('id', auditId).eq('organisation_id', organisationId).maybeSingle();
+    if (!row) return c.json({ error: 'not_found' }, 404);
+    const fileName = `gst-filing_${row.period_start}_to_${row.period_end}.csv`;
+    const { data: signedData, error: signErr } = await supabase.storage
+      .from('exports')
+      .createSignedUrl(row.storage_path, 600, { download: fileName });
+    if (signErr) {
+      console.error('[GET /api/gst-filing/:audit_id/download] sign error:', signErr.message);
+      return c.json({ error: 'sign_failed' }, 500);
+    }
+    return c.json({ url: signedData.signedUrl });
+  } catch (err) {
+    console.error('[GET /api/gst-filing/:audit_id/download] Error:', err.message);
     return c.json({ error: 'internal_error' }, 500);
   }
 });
