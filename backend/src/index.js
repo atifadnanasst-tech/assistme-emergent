@@ -2840,10 +2840,8 @@ async function calculateInvoiceTotals(supabaseClient, organisationId, customerId
   let supplierState = null;
   let customerState = null;
   try {
-    const { data: orgData } = await supabaseClient
-      .from('organisations').select('settings')
-      .eq('id', organisationId).single();
-    supplierState = orgData?.settings?.gstin_state || null;
+    const orgProfile = await getBusinessProfile(organisationId, supabaseClient);
+    supplierState = orgProfile?.state || null;
   } catch {}
   try {
     const { data: addrs } = await supabaseClient
@@ -6566,8 +6564,8 @@ app.post('/api/invoices', async (c) => {
     let supplierState = null;
     let customerState = null;
     try {
-      const { data: orgData } = await supabase.from('organisations').select('settings').eq('id', organisationId).single();
-      supplierState = orgData?.settings?.gstin_state || null;
+      const orgProfile = await getBusinessProfile(organisationId, supabase);
+      supplierState = orgProfile?.state || null;
     } catch {}
     try {
       const { data: addrs } = await supabase.from('customer_addresses').select('state')
