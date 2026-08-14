@@ -2454,6 +2454,11 @@ export default function CustomerChatScreen() {
             <Text style={styles.emptyText}>
               {activeTab === 'ai' ? `Ask AI anything about ${customer?.name || 'this customer'}` : 'No messages yet'}
             </Text>
+            {activeTab !== 'ai' && (
+              <Text style={[styles.emptyText, { fontSize: 13, marginTop: 4, paddingHorizontal: 24, textAlign: 'center' }]}>
+                Send a message here to start a conversation, or tap the AI button below to create and send an invoice and much more
+              </Text>
+            )}
           </View>
         ) : (
           <FlatList
