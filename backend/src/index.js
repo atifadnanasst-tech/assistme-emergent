@@ -6420,6 +6420,100 @@ app.patch('/api/customer/:customer_id/defaults', async (c) => {
   }
 });
 
+// ─── GET /api/customer/:customer_id/business-profile ────────
+// Powers the Customer Business Profile screen (Aug 2026, ATT list #9).
+// Reuses customer_addresses (same table already used by /api/invoice/new)
+// -- no new schema needed, this is a plumbing build.
+app.get('/api/customer/:customer_id/business-profile', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const customerId = c.req.param('customer_id');
+    const { data: customer } = await supabase
+      .from('customers')
+      .select('id, name, phone, email, company, tax_id')
+      .eq('id', customerId)
+      .eq('organisation_id', auth.organisationId)
+      .maybeSingle();
+    if (!customer) return c.json({ error: 'customer_not_found' }, 404);
+
+    const { data: addrs } = await supabase.from('customer_addresses').select('*')
+      .eq('customer_id', customerId).eq('organisation_id', auth.organisationId);
+    const billing = (addrs || []).find(a => a.type === 'billing' && a.is_default) || (addrs || []).find(a => a.type === 'billing') || null;
+    const shipping = (addrs || []).find(a => a.type === 'shipping' && a.is_default) || (addrs || []).find(a => a.type === 'shipping') || null;
+
+    return c.json({
+      customer: { id: customer.id, name: customer.name, phone: customer.phone, email: customer.email, company: customer.company, tax_id: customer.tax_id },
+      billing_address: billing ? { line1: billing.line1 || '', line2: billing.line2 || '', city: billing.city || '', state: billing.state || '', postal_code: billing.postal_code || '', country: billing.country || '' } : null,
+      shipping_address: shipping ? { line1: shipping.line1 || '', line2: shipping.line2 || '', city: shipping.city || '', state: shipping.state || '', postal_code: shipping.postal_code || '', country: shipping.country || '' } : null,
+    });
+  } catch (error) {
+    console.error('[CUSTOMER_PROFILE_AUDIT] GET error:', error.message);
+    return c.json({ error: 'server_error' }, 500);
+  }
+});
+
+// ─── PATCH /api/customer/:customer_id/business-profile ──────
+app.patch('/api/customer/:customer_id/business-profile', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) {
+      console.warn(`[CUSTOMER_PROFILE_AUDIT] reason=unauthorized ts=${new Date().toISOString()}`);
+      return c.json({ error: 'unauthorized' }, 401);
+    }
+    const { organisationId, userId } = auth;
+    const customerId = c.req.param('customer_id');
+    const customer = await validateCustomer(customerId, organisationId);
+    if (!customer) {
+      console.warn(`[CUSTOMER_PROFILE_AUDIT] reason=customer_not_found customer_id=${customerId} org=${organisationId} ts=${new Date().toISOString()}`);
+      return c.json({ error: 'customer_not_found' }, 404);
+    }
+
+    const body = await c.req.json();
+    const { company, tax_id, phone, email, billing_address, shipping_address } = body;
+
+    const coreUpdate = {};
+    if (company !== undefined) coreUpdate.company = company;
+    if (tax_id !== undefined) coreUpdate.tax_id = tax_id;
+    if (phone !== undefined) coreUpdate.phone = phone;
+    if (email !== undefined) coreUpdate.email = email;
+    if (Object.keys(coreUpdate).length > 0) {
+      const { error: custErr } = await supabase.from('customers').update(coreUpdate)
+        .eq('id', customerId).eq('organisation_id', organisationId);
+      if (custErr) {
+        console.error(`[CUSTOMER_PROFILE_AUDIT] reason=customer_update_failed message="${custErr.message}" customer_id=${customerId} org=${organisationId} ts=${new Date().toISOString()}`);
+        return c.json({ error: 'update_failed' }, 500);
+      }
+    }
+
+    const upsertAddress = async (type, addr) => {
+      if (!addr) return;
+      const { data: existing } = await supabase.from('customer_addresses').select('id')
+        .eq('customer_id', customerId).eq('organisation_id', organisationId)
+        .eq('type', type).eq('is_default', true).maybeSingle();
+      const payload = {
+        line1: addr.line1 || '', line2: addr.line2 || null, city: addr.city || null,
+        state: addr.state || null, postal_code: addr.postal_code || null, country: addr.country || null,
+      };
+      if (existing) {
+        await supabase.from('customer_addresses').update(payload).eq('id', existing.id);
+      } else {
+        await supabase.from('customer_addresses').insert({
+          organisation_id: organisationId, customer_id: customerId, type, is_default: true, ...payload,
+        });
+      }
+    };
+    await upsertAddress('billing', billing_address);
+    await upsertAddress('shipping', shipping_address);
+
+    console.log(`[CUSTOMER_PROFILE_AUDIT] reason=success customer_id=${customerId} org=${organisationId} user=${userId} ts=${new Date().toISOString()}`);
+    return c.json({ saved: true });
+  } catch (error) {
+    console.error(`[CUSTOMER_PROFILE_AUDIT] reason=server_error message="${error.message}" ts=${new Date().toISOString()}`);
+    return c.json({ error: 'server_error' }, 500);
+  }
+});
+
 // ─── POST /api/invoices ─────────────────────────────────────
 app.post('/api/invoices', async (c) => {
   try {
