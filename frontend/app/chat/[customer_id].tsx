@@ -2283,6 +2283,7 @@ export default function CustomerChatScreen() {
     */
     // ===== TEMP SESSION 6C END =====
     { divider: true },
+    { icon: 'business-outline', label: 'Business Details', action: () => { setMenuVisible(false); router.push(`/customer/${customer_id}/business-profile`); } },
     { icon: 'settings-outline', label: 'Set reminder rules', action: () => { setMenuVisible(false); } },
     { icon: 'language-outline', label: 'Set language', action: () => { setMenuVisible(false); } },
     { icon: 'options-outline', label: 'Customer preference', action: () => { setMenuVisible(false); } },
