@@ -803,6 +803,11 @@ export default function HomeScreen() {
             <Text style={styles.emptyStateSubtext}>
               Add your first customer to get started
             </Text>
+            <TouchableOpacity onPress={() => router.push('/settings/profile')} activeOpacity={0.7} style={{ marginTop: 8 }}>
+              <Text style={[styles.emptyStateSubtext, { color: '#075E54', textDecorationLine: 'underline' }]}>
+                or set up your Business Profile (Tools {'>'} Business Profile)
+              </Text>
+            </TouchableOpacity>
           </View>
         }
         ListFooterComponent={
@@ -855,7 +860,7 @@ export default function HomeScreen() {
         <Ionicons name={fabExpanded ? 'close' : 'add'} size={28} color="#FFFFFF" />
       </TouchableOpacity>
 
-      <Text style={{ textAlign: "center", fontSize: 10, color: "#CCC", paddingVertical: 2 }}>v1.3.439</Text>
+      <Text style={{ textAlign: "center", fontSize: 10, color: "#CCC", paddingVertical: 2 }}>v1.3.440</Text>
       {/* Bottom Navigation SafeAreaView */}
       <SafeAreaView style={styles.bottomNavSafeArea} edges={['bottom']}>
         <View style={styles.bottomNav}>
