@@ -334,7 +334,7 @@ export default function NewInvoiceScreen() {
       <ScrollView style={s.scroll} contentContainerStyle={s.scrollContent}>
         {/* Business Name - NO MARGIN, clickable */}
         <Text style={[s.sectionLabel, { marginTop: 0 }]}>MY BUSINESS NAME</Text>
-        <TouchableOpacity style={s.fieldRow} onPress={() => Alert.alert('Business', orgName || 'Not set')} activeOpacity={0.7}>
+        <TouchableOpacity style={s.fieldRow} onPress={() => router.push('/settings/profile')} activeOpacity={0.7}>
           <Text style={s.fieldValue}>{orgName}</Text>
           <Ionicons name="pencil" size={18} color="#075E54" />
         </TouchableOpacity>
