@@ -6531,7 +6531,13 @@ app.post('/api/invoices', async (c) => {
     const customer = await validateCustomer(customer_id, organisationId);
     if (!customer) return c.json({ error: 'customer_not_found' }, 404);
 
-    // Generate unique invoice number by finding the max existing number
+    // Generate unique invoice number by finding the max existing number.
+    // Internal invoices (invoice_type === 'Internal') get their own INT-
+    // prefix and fully independent counter -- naturally excluded from the
+    // INV- regex scan below, so the real GST-reportable INV- sequence
+    // stays gapless even though Internal invoices never enter that report.
+    // Design: owner marks intent at creation time (Aug 2026, ATT GST report).
+    const numberPrefix = invoice_type === 'Internal' ? 'INT-' : 'INV-';
     const { data: existingInvoices } = await supabase
       .from('invoices')
       .select('invoice_number')
@@ -6541,8 +6547,9 @@ app.post('/api/invoices', async (c) => {
     
     let maxNum = 0;
     if (existingInvoices && existingInvoices.length > 0) {
+      const prefixRegex = new RegExp('^' + numberPrefix + '(\\d+)');
       existingInvoices.forEach(inv => {
-        const match = inv.invoice_number.match(/INV-(\d+)/);
+        const match = inv.invoice_number.match(prefixRegex);
         if (match) {
           const num = parseInt(match[1]);
           if (num > maxNum) maxNum = num;
@@ -6551,8 +6558,8 @@ app.post('/api/invoices', async (c) => {
     }
     
     const seqNum = maxNum + 1;
-    const invoiceNumber = 'INV-' + seqNum.toString().padStart(3, '0');
-    console.log(`📝 [INVOICE] Generated number: ${invoiceNumber} (max was ${maxNum})`);
+    const invoiceNumber = numberPrefix + seqNum.toString().padStart(3, '0');
+    console.log(`📝 [INVOICE] Generated number: ${invoiceNumber} (max was ${maxNum}, prefix=${numberPrefix})`);
 
     // Backend recomputes all financials
     let subtotal = 0;
