@@ -6158,7 +6158,7 @@ app.get('/api/invoice/new', async (c) => {
     const customerId = c.req.query('customer_id');
 
     // Q1: Organisation
-    const { data: org } = await supabase.from('organisations').select('id, name, logo_url').eq('id', organisationId).single();
+    const { data: org } = await supabase.from('organisations').select('id, name, logo_url, settings').eq('id', organisationId).single();
 
     // Q2: Customer (validate org)
     let customerData = null;
@@ -6191,7 +6191,7 @@ app.get('/api/invoice/new', async (c) => {
       .eq('organisation_id', organisationId).eq('is_active', true).order('name');
 
     return c.json({
-      organisation: { id: org?.id, name: org?.name, logo_url: org?.logo_url || null },
+      organisation: { id: org?.id, name: org?.name, logo_url: org?.logo_url || null, gstin_state: org?.settings?.gstin_state || null },
       customer: customerData,
       all_customers: (allCustomers || []).map(c => ({ id: c.id, name: c.name, phone: c.phone })),
       billing_address: billingAddress,

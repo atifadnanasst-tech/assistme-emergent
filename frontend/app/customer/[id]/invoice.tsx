@@ -23,6 +23,7 @@ export default function NewInvoiceScreen() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState<string | null>(null);
   const [orgName, setOrgName] = useState('');
+  const [orgGstinState, setOrgGstinState] = useState('');
   const [businessModalVisible, setBusinessModalVisible] = useState(false);
   const [allCustomers, setAllCustomers] = useState<Customer[]>([]);
   const [customerName, setCustomerName] = useState('');
@@ -66,6 +67,7 @@ export default function NewInvoiceScreen() {
       if (res.status === 401) { await authService.clearSession(); await supabase.auth.signOut(); setIsAuthenticated(false); router.replace('/login'); return; }
       const data = await res.json();
       setOrgName(data.organisation?.name || '');
+      setOrgGstinState(data.organisation?.gstin_state || '');
       setCustomerName(data.customer?.name || '');
       setCustomerId(data.customer?.id || id || '');
       setAllCustomers(data.all_customers || []);
@@ -112,6 +114,16 @@ export default function NewInvoiceScreen() {
   const total = subtotal + gstAmount + packingHandling;
   const gstRates = [...new Set(items.map(i => i.tax_rate))];
   const gstLabel = gstRates.length === 0 ? 'GST' : gstRates.length === 1 ? `GST ${gstRates[0]}%` : 'GST (mixed)';
+  // CGST/SGST/IGST split -- mirrors calculateInvoiceTotals's exact math
+  // (backend/src/index.js) so the preview never drifts from what actually
+  // gets saved. Same-state-or-unknown = CGST+SGST (half each); different
+  // known states = IGST (full amount). Root-caused Aug 2026 (ATT list #6).
+  const isInterstate = !!(orgGstinState && billingAddress?.state &&
+    orgGstinState.toLowerCase() !== billingAddress.state.toLowerCase());
+  const cgstAmount = isInterstate ? 0 : Math.round(gstAmount / 2 * 100) / 100;
+  const sgstAmount = isInterstate ? 0 : Math.round(gstAmount / 2 * 100) / 100;
+  const igstAmount = isInterstate ? Math.round(gstAmount * 100) / 100 : 0;
+  const gstRateSuffix = gstRates.length === 1 ? ` ${gstRates[0]}%` : '';
 
   const handleAddItem = () => {
     if (!selectedProductId) { Alert.alert('Error', 'Select a product'); return; }
@@ -410,7 +422,14 @@ export default function NewInvoiceScreen() {
         {/* Totals */}
         <View style={s.totalsCard}>
           <View style={s.totalRow}><Text style={s.totalLabel}>Subtotal</Text><Text style={s.totalValue}>{fmt(subtotal)}</Text></View>
-          <View style={s.totalRow}><Text style={s.totalLabel}>{gstLabel}</Text><Text style={s.totalValue}>+{fmt(gstAmount)}</Text></View>
+          {isInterstate ? (
+            <View style={s.totalRow}><Text style={s.totalLabel}>{`IGST${gstRateSuffix}`}</Text><Text style={s.totalValue}>+{fmt(igstAmount)}</Text></View>
+          ) : (
+            <>
+              <View style={s.totalRow}><Text style={s.totalLabel}>{`CGST${gstRateSuffix ? ` ${gstRates[0]/2}%` : ''}`}</Text><Text style={s.totalValue}>+{fmt(cgstAmount)}</Text></View>
+              <View style={s.totalRow}><Text style={s.totalLabel}>{`SGST${gstRateSuffix ? ` ${gstRates[0]/2}%` : ''}`}</Text><Text style={s.totalValue}>+{fmt(sgstAmount)}</Text></View>
+            </>
+          )}
           <View style={s.totalRow}>
             <Text style={s.totalLabel}>Packing & Handling</Text>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
