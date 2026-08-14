@@ -6177,7 +6177,13 @@ app.get('/api/invoice/new', async (c) => {
     const customerId = c.req.query('customer_id');
 
     // Q1: Organisation
-    const { data: org } = await supabase.from('organisations').select('id, name, logo_url, settings').eq('id', organisationId).single();
+    // Q1: Organisation -- use business_profiles (the actual source of truth
+    // for GSTIN/state/name/logo, same table the Business Profile screen
+    // reads/writes). BUG FOUND AND FIXED Aug 2026: was previously reading
+    // organisations.settings.gstin_state, which nothing ever writes to --
+    // silently always null, meaning the CGST/SGST/IGST split always
+    // defaulted to same-state regardless of the real configured state.
+    const businessProfile = await getBusinessProfile(organisationId, supabase);
 
     // Q2: Customer (validate org)
     let customerData = null;
@@ -6210,7 +6216,7 @@ app.get('/api/invoice/new', async (c) => {
       .eq('organisation_id', organisationId).eq('is_active', true).order('name');
 
     return c.json({
-      organisation: { id: org?.id, name: org?.name, logo_url: org?.logo_url || null, gstin_state: org?.settings?.gstin_state || null },
+      organisation: { id: organisationId, name: businessProfile?.business_name || null, logo_url: businessProfile?.logo_url || null, gstin_state: businessProfile?.state || null },
       customer: customerData,
       all_customers: (allCustomers || []).map(c => ({ id: c.id, name: c.name, phone: c.phone })),
       billing_address: billingAddress,
