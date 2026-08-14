@@ -23,7 +23,7 @@
 // storage PATH is persisted as metadata; an actual download link is a
 // short-lived signed URL minted on demand (see index.js /api/export/download).
 
-function csvEscape(value) {
+export function csvEscape(value) {
   if (value === null || value === undefined) return '';
   const str = String(value);
   if (str.includes(',') || str.includes('"') || str.includes('\n')) {
@@ -32,7 +32,7 @@ function csvEscape(value) {
   return str;
 }
 
-function rowsToCSV(headers, rows) {
+export function rowsToCSV(headers, rows) {
   const lines = [headers.map(csvEscape).join(',')];
   for (const row of rows) {
     lines.push(headers.map(h => csvEscape(row[h])).join(','));
