@@ -725,6 +725,28 @@ export default function CustomerChatScreen() {
   // ── Load conversation ──────────────────────────────────────
   useEffect(() => { loadChat(); }, [customer_id]);
 
+  // ── GST context for Spark preview sheet -- reuses the already-built
+  // /api/invoice/new endpoint rather than touching the large main chat
+  // loader -- lower blast radius. Added Aug 2026, ATT list item 6/Spark.
+  const [gstOrgState, setGstOrgState] = useState('');
+  const [gstCustomerState, setGstCustomerState] = useState('');
+  useEffect(() => {
+    (async () => {
+      try {
+        const token = await getToken();
+        if (!token) return;
+        const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+        const res = await fetch(`${backendUrl}/api/invoice/new?customer_id=${customer_id}`, {
+          headers: { 'Authorization': `Bearer ${token}` },
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        setGstOrgState(data.organisation?.gstin_state || '');
+        setGstCustomerState(data.billing_address?.state || '');
+      } catch {}
+    })();
+  }, [customer_id]);
+
   // ── Supabase Realtime subscription ─────────────────────────
   useEffect(() => {
     if (!conversationId) return;
@@ -3101,12 +3123,32 @@ export default function CustomerChatScreen() {
                                 <Text style={{ fontSize: 13, color: '#666' }}>₹{freight.toLocaleString('en-IN')}</Text>
                               </View>
                             )}
-                            {totalGst > 0 && (
-                              <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 4 }}>
-                                <Text style={{ fontSize: 12, color: '#888' }}>GST{freightTaxable && freight > 0 ? ` (max ${maxTaxRate}%)` : ''}</Text>
-                                <Text style={{ fontSize: 12, color: '#888' }}>₹{Math.round(totalGst).toLocaleString('en-IN')}</Text>
-                              </View>
-                            )}
+                            {(() => {
+                              const isInterstate = !!(gstOrgState && gstCustomerState &&
+                                gstOrgState.toLowerCase() !== gstCustomerState.toLowerCase());
+                              const cgstAmt = isInterstate ? 0 : totalGst / 2;
+                              const sgstAmt = isInterstate ? 0 : totalGst / 2;
+                              const igstAmt = isInterstate ? totalGst : 0;
+                              const rateSuffix = freightTaxable && freight > 0 ? ` (max ${maxTaxRate}%)` : '';
+                              if (totalGst <= 0) return null;
+                              return isInterstate ? (
+                                <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 4 }}>
+                                  <Text style={{ fontSize: 12, color: '#888' }}>IGST{rateSuffix}</Text>
+                                  <Text style={{ fontSize: 12, color: '#888' }}>₹{Math.round(igstAmt).toLocaleString('en-IN')}</Text>
+                                </View>
+                              ) : (
+                                <>
+                                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 4 }}>
+                                    <Text style={{ fontSize: 12, color: '#888' }}>CGST{rateSuffix}</Text>
+                                    <Text style={{ fontSize: 12, color: '#888' }}>₹{Math.round(cgstAmt).toLocaleString('en-IN')}</Text>
+                                  </View>
+                                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 4 }}>
+                                    <Text style={{ fontSize: 12, color: '#888' }}>SGST{rateSuffix}</Text>
+                                    <Text style={{ fontSize: 12, color: '#888' }}>₹{Math.round(sgstAmt).toLocaleString('en-IN')}</Text>
+                                  </View>
+                                </>
+                              );
+                            })()}
                             <View style={{ borderTopWidth: 1, borderTopColor: '#E0E0E0', marginTop: 4, paddingTop: 6 }}>
                               <Text style={styles.invoiceTotalText}>Total: ₹{Math.round(grandTotal).toLocaleString('en-IN')}</Text>
                             </View>

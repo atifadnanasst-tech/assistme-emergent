@@ -3109,14 +3109,33 @@ async function generateDocumentPDF({ documentId, organisationId, documentType, d
     doc2.text('Subtotal:', totalsX, doc2.y, { width: 70 });
     doc2.text(`₹${(doc.subtotal || 0).toFixed(2)}`, 450, doc2.y - 12, { width: 95, align: 'right' });
     doc2.moveDown(0.3);
-    if (doc.tax_amount > 0) {
+    // CGST/SGST/IGST split -- both creation paths store these in
+    // custom_fields (see calculateInvoiceTotals + manual /api/invoices).
+    // Falls back to flat 'GST:' for older invoices created before this
+    // split existed. Added Aug 2026 (ATT list #6/PDF).
+    const cgstAmt = doc.custom_fields?.cgst_amount || 0;
+    const sgstAmt = doc.custom_fields?.sgst_amount || 0;
+    const igstAmt = doc.custom_fields?.igst_amount || 0;
+    if (igstAmt > 0) {
+      doc2.text('IGST:', totalsX, doc2.y, { width: 70 });
+      doc2.text(`₹${igstAmt.toFixed(2)}`, 450, doc2.y - 12, { width: 95, align: 'right' });
+      doc2.moveDown(0.3);
+    } else if (cgstAmt > 0 || sgstAmt > 0) {
+      doc2.text('CGST:', totalsX, doc2.y, { width: 70 });
+      doc2.text(`₹${cgstAmt.toFixed(2)}`, 450, doc2.y - 12, { width: 95, align: 'right' });
+      doc2.moveDown(0.3);
+      doc2.text('SGST:', totalsX, doc2.y, { width: 70 });
+      doc2.text(`₹${sgstAmt.toFixed(2)}`, 450, doc2.y - 12, { width: 95, align: 'right' });
+      doc2.moveDown(0.3);
+    } else if (doc.tax_amount > 0) {
       doc2.text('GST:', totalsX, doc2.y, { width: 70 });
       doc2.text(`₹${(doc.tax_amount || 0).toFixed(2)}`, 450, doc2.y - 12, { width: 95, align: 'right' });
       doc2.moveDown(0.3);
     }
-    if (doc.custom_fields?.freight_amount > 0) {
+    if (doc.custom_fields?.freight_amount > 0 || doc.custom_fields?.packing_handling > 0) {
+      const freightDisplay = doc.custom_fields?.freight_amount || doc.custom_fields?.packing_handling || 0;
       doc2.text('Freight:', totalsX, doc2.y, { width: 70 });
-      doc2.text(`₹${doc.custom_fields.freight_amount.toFixed(2)}`, 450, doc2.y - 12, { width: 95, align: 'right' });
+      doc2.text(`₹${freightDisplay.toFixed(2)}`, 450, doc2.y - 12, { width: 95, align: 'right' });
       doc2.moveDown(0.3);
     }
     doc2.moveDown(0.2);
@@ -6487,6 +6506,21 @@ app.post('/api/invoices', async (c) => {
     }
 
     const packingHandling = Math.round((packing_handling || 0) * 100) / 100;
+    // Packing/freight GST -- mirrors calculateInvoiceTotals's freight_taxable
+    // logic (18% default rate, same CGST/SGST/IGST split as items). Added
+    // Aug 2026 (ATT list item -- packaging GST). Only applies when a
+    // packing charge is actually present.
+    let freightTax = 0;
+    if (packingHandling > 0) {
+      freightTax = Math.round(packingHandling * 18 / 100 * 100) / 100;
+      totalTax += freightTax;
+      if (isIntraState || (!supplierState || !customerState)) {
+        cgstTotal += Math.round(freightTax / 2 * 100) / 100;
+        sgstTotal += Math.round(freightTax / 2 * 100) / 100;
+      } else {
+        igstTotal += freightTax;
+      }
+    }
     const totalAmount = Math.round((subtotal + totalTax + packingHandling) * 100) / 100;
 
     // Compute due_date
@@ -6507,7 +6541,7 @@ app.post('/api/invoices', async (c) => {
       amount_due: totalAmount, amount_paid: 0,
       custom_fields: {
         invoice_type: invoice_type || 'Tax Invoice', po_number: po_number || null,
-        packing_handling: packingHandling,
+        packing_handling: packingHandling, freight_tax: freightTax,
         cgst_amount: cgstTotal, sgst_amount: sgstTotal, igst_amount: igstTotal,
       },
     }).select('id').single();
