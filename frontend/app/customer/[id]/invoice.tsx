@@ -14,6 +14,9 @@ interface Product { id: string; name: string; sku: string; selling_price: number
 interface LineItem { product_id: string; product_name: string; hsn_code: string | null; quantity: number; unit_price: number; tax_rate: number; line_total: number; }
 interface Customer { id: string; name: string; phone: string; }
 
+const PAYMENT_TERMS_OPTIONS = ['Due on Receipt', 'Net 15', 'Net 30', 'Net 45'];
+const DELIVERY_PREF_OPTIONS = ['Standard Delivery', 'Express Delivery', 'Customer Pickup'];
+
 export default function NewInvoiceScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ id: string; items?: string; amount?: string; due_date?: string; draft_id?: string; action_id?: string }>();
@@ -40,6 +43,7 @@ export default function NewInvoiceScreen() {
   const [paymentTerms, setPaymentTerms] = useState('');
   const [deliveryPref, setDeliveryPref] = useState('');
   const [poNumber, setPoNumber] = useState('');
+  const [setAsDefault, setSetAsDefault] = useState(false);
   const [invoiceType, setInvoiceType] = useState('Tax Invoice');
   const [products, setProducts] = useState<Product[]>([]);
   const [items, setItems] = useState<LineItem[]>([]);
@@ -197,6 +201,17 @@ export default function NewInvoiceScreen() {
       const inv = await r1.json();
       console.log('[INVOICE] Created:', inv.invoice_id, inv.invoice_number);
       if (!inv.invoice_id) { Alert.alert('Error', 'Failed to create invoice'); return; }
+
+      // "Set as default" (Amazon-style) -- fire-and-forget, non-blocking.
+      // Only persists customer-level defaults after the invoice itself
+      // was created successfully; a failure here never breaks invoice
+      // creation/sending. Added Aug 2026, ATT list #8.
+      if (setAsDefault) {
+        fetch(`${backendUrl}/api/customer/${customerId}/defaults`, {
+          method: 'PATCH', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ payment_terms: paymentTerms, delivery_preference: deliveryPref, default_invoice_type: invoiceType }),
+        }).catch(() => {});
+      }
 
       // Generate PDF
       console.log('[INVOICE] Generating PDF...');
@@ -369,12 +384,28 @@ export default function NewInvoiceScreen() {
             </View>
             <View style={s.twoCol}>
               <View style={s.col}><Text style={s.miniLabel}>GST</Text><Text style={s.miniValue}>{taxId || '—'}</Text></View>
-              <View style={s.col}><Text style={s.miniLabel}>PAYMENT TERMS</Text><Text style={s.miniValue}>{paymentTerms || '—'}</Text></View>
-            </View>
-            <View style={s.twoCol}>
-              <View style={s.col}><Text style={s.miniLabel}>DELIVERY PREFERENCE</Text><Text style={s.miniValue}>{deliveryPref || '—'}</Text></View>
               <View style={s.col}><Text style={s.miniLabel}>PO NUMBER</Text><TextInput style={s.miniInput} value={poNumber} onChangeText={setPoNumber} placeholder="— (optional)" /></View>
             </View>
+            <Text style={s.miniLabel}>PAYMENT TERMS</Text>
+            <View style={s.toggleRow}>
+              {PAYMENT_TERMS_OPTIONS.map(opt => (
+                <TouchableOpacity key={opt} style={[s.toggleBtn, paymentTerms === opt && s.toggleActive]} onPress={() => setPaymentTerms(opt)}>
+                  <Text style={[s.toggleText, paymentTerms === opt && s.toggleTextActive]}>{opt}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <Text style={s.miniLabel}>DELIVERY PREFERENCE</Text>
+            <View style={s.toggleRow}>
+              {DELIVERY_PREF_OPTIONS.map(opt => (
+                <TouchableOpacity key={opt} style={[s.toggleBtn, deliveryPref === opt && s.toggleActive]} onPress={() => setDeliveryPref(opt)}>
+                  <Text style={[s.toggleText, deliveryPref === opt && s.toggleTextActive]}>{opt}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <TouchableOpacity style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }} onPress={() => setSetAsDefault(!setAsDefault)}>
+              <Ionicons name={setAsDefault ? 'checkbox' : 'square-outline'} size={20} color="#075E54" />
+              <Text style={{ marginLeft: 8, fontSize: 13, color: '#333' }}>Set as default for {customerName}</Text>
+            </TouchableOpacity>
           </View>
         )}
 
@@ -540,7 +571,7 @@ const s = StyleSheet.create({
   changeLink: { color: '#075E54', fontSize: 13, fontWeight: '600', marginTop: 4 },
   twoCol: { flexDirection: 'row', gap: 16 },
   col: { flex: 1 },
-  toggleRow: { flexDirection: 'row', gap: 8, marginBottom: 12 },
+  toggleRow: { flexDirection: 'row', gap: 8, marginBottom: 12, flexWrap: 'wrap' },
   toggleBtn: { paddingVertical: 8, paddingHorizontal: 16, borderRadius: 20, backgroundColor: '#F0F0F0' },
   toggleActive: { backgroundColor: '#075E54' },
   toggleText: { fontSize: 13, fontWeight: '600', color: '#666' },
