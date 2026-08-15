@@ -537,7 +537,7 @@ export default function NewInvoiceScreen() {
       <SafeAreaView style={s.bottomSafe} edges={['bottom']}>
         <View style={s.bottomBar}>
           <TouchableOpacity style={s.pdfBtn} onPress={() => handleSubmit('pdf')} disabled={!!submitting || items.length === 0}>
-            {submitting === 'pdf' ? <ActivityIndicator size="small" color="#333" /> : <><Ionicons name="document" size={16} color="#333" /><Text style={s.pdfBtnText}>PDF</Text></>}
+            {submitting === 'pdf' ? <ActivityIndicator size="small" color="#333" /> : <><Ionicons name="document" size={16} color="#333" /><Text style={s.pdfBtnText}>Create Invoice</Text></>}
           </TouchableOpacity>
           <TouchableOpacity style={s.shareBtn} onPress={() => handleSubmit('share')} disabled={!!submitting || items.length === 0}>
             {submitting === 'share' ? <ActivityIndicator size="small" color="#FFF" /> : <><Ionicons name="share-social" size={16} color="#FFF" /><Text style={s.shareBtnText}>Share Here</Text></>}
@@ -565,9 +565,6 @@ export default function NewInvoiceScreen() {
               onChangeText={setCustomerSearchQuery}
               autoFocus
             />
-            <Text style={{ padding: 8, backgroundColor: '#FFF9C4', color: '#333', fontSize: 12 }}>
-              [DEBUG] allCustomers: {allCustomers.length} | filteredCustomers: {filteredCustomers.length} | query: "{customerSearchQuery}"
-            </Text>
             <ScrollView style={s.customerList}>
               {filteredCustomers.map(customer => (
                 <TouchableOpacity key={customer.id} style={s.customerItem} onPress={() => handleSelectCustomer(customer)}>
@@ -680,7 +677,7 @@ const s = StyleSheet.create({
   waBtn: { flex: 1.2, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 14, borderRadius: 10, backgroundColor: '#25D366' },
   waBtnText: { fontSize: 14, fontWeight: '600', color: '#FFF' },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
-  modalContent: { backgroundColor: '#FFF', borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingTop: 16, maxHeight: '80%' },
+  modalContent: { backgroundColor: '#FFF', borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingTop: 16, height: '80%' },
   modalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: '#E0E0E0' },
   modalTitle: { fontSize: 18, fontWeight: '700', color: '#1A1A1A' },
   searchInput: { marginHorizontal: 16, marginTop: 12, paddingVertical: 10, paddingHorizontal: 14, backgroundColor: '#F5F5F5', borderRadius: 10, fontSize: 15 },
