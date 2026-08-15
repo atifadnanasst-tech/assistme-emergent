@@ -502,7 +502,7 @@ export default function NewInvoiceScreen() {
                 </TouchableOpacity>
               )}
             </View>
-            <View style={s.productSearchResults}>
+            <ScrollView style={s.productSearchResults} nestedScrollEnabled>
               {filteredProducts.map(p => (
                 <TouchableOpacity key={p.id} style={s.productSearchRow} onPress={() => handleSelectProduct(p.id)}>
                   <Text style={s.productSearchName}>{p.name}</Text>
@@ -512,7 +512,7 @@ export default function NewInvoiceScreen() {
                   </View>
                 </TouchableOpacity>
               ))}
-            </View>
+            </ScrollView>
             <View style={s.twoCol}>
               <View style={s.col}><Text style={s.miniLabel}>QUANTITY</Text><TextInput ref={quantityInputRef} style={s.numInput} value={newQty} onChangeText={setNewQty} keyboardType="numeric" placeholder="0" /></View>
               <View style={s.col}><Text style={s.miniLabel}>PRICE</Text><TextInput style={s.numInput} value={newPrice} onChangeText={setNewPrice} keyboardType="numeric" placeholder="₹ 0.00" /></View>
@@ -685,7 +685,7 @@ const s = StyleSheet.create({
   searchIcon: { marginRight: 8 },
   searchInputField: { flex: 1, fontSize: 15, color: '#1A1A1A', paddingVertical: 4 },
   clearBtn: { padding: 4 },
-  productSearchResults: { maxHeight: 200, marginBottom: 12 },
+  productSearchResults: { maxHeight: 200, marginBottom: 12, overflow: 'hidden' },
   productSearchRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#F0F0F0' },
   productSearchName: { fontSize: 14, color: '#333', flex: 1 },
   productSearchPrice: { fontSize: 13, color: '#666' },
