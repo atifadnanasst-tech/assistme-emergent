@@ -550,7 +550,7 @@ export default function NewInvoiceScreen() {
 
       {/* Customer Search Modal */}
       <Modal visible={customerSearchVisible} animationType="slide" transparent={true} onRequestClose={() => setCustomerSearchVisible(false)}>
-        <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
           <SafeAreaView style={s.modalContent} edges={['bottom']}>
             <View style={s.modalHeader}>
               <Text style={s.modalTitle}>Select Customer</Text>
