@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView, TextInput,
   ActivityIndicator, Alert, Linking, KeyboardAvoidingView, Platform, Modal,
@@ -55,6 +55,8 @@ export default function NewInvoiceScreen() {
   const [packingHandling, setPackingHandling] = useState(0);
   const [addingItem, setAddingItem] = useState(false);
   const [selectedProductId, setSelectedProductId] = useState('');
+  const [productSearchQuery, setProductSearchQuery] = useState('');
+  const quantityInputRef = useRef<TextInput>(null);
   const [newQty, setNewQty] = useState('');
   const [newPrice, setNewPrice] = useState('');
   const [aiSuggestion, setAiSuggestion] = useState<string | null>(null);
@@ -155,6 +157,8 @@ export default function NewInvoiceScreen() {
     const product = products.find(p => p.id === productId);
     if (product) setNewPrice(product.selling_price.toString());
     setAiSuggestion(null);
+    setProductSearchQuery('');
+    setTimeout(() => quantityInputRef.current?.focus(), 100);
   };
 
   const handleAiSuggestion = async () => {
@@ -380,6 +384,10 @@ export default function NewInvoiceScreen() {
     c.name.toLowerCase().includes(customerSearchQuery.toLowerCase())
   );
 
+  const filteredProducts = products.filter(p =>
+    p.name.toLowerCase().includes(productSearchQuery.toLowerCase())
+  );
+
   const fmt = (n: number) => '₹' + n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   if (loading) return (
@@ -479,15 +487,34 @@ export default function NewInvoiceScreen() {
         {addingItem && (
           <View style={s.selectorPanel}>
             <Text style={s.selectorTitle}>ITEM SELECTOR</Text>
-            <View style={s.productList}>
-              {products.map(p => (
-                <TouchableOpacity key={p.id} style={[s.productChip, selectedProductId === p.id && s.productChipActive]} onPress={() => handleSelectProduct(p.id)}>
-                  <Text style={[s.productChipText, selectedProductId === p.id && { color: '#FFF' }]}>{p.name}</Text>
+            <View style={s.searchContainer}>
+              <Ionicons name="search" size={20} color="#999" style={s.searchIcon} />
+              <TextInput
+                style={s.searchInputField}
+                placeholder="Search products..."
+                placeholderTextColor="#999"
+                value={productSearchQuery}
+                onChangeText={setProductSearchQuery}
+              />
+              {productSearchQuery.length > 0 && (
+                <TouchableOpacity onPress={() => setProductSearchQuery('')} style={s.clearBtn}>
+                  <Ionicons name="close-circle" size={20} color="#999" />
+                </TouchableOpacity>
+              )}
+            </View>
+            <View style={s.productSearchResults}>
+              {filteredProducts.map(p => (
+                <TouchableOpacity key={p.id} style={s.productSearchRow} onPress={() => handleSelectProduct(p.id)}>
+                  <Text style={s.productSearchName}>{p.name}</Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <Text style={s.productSearchPrice}>₹{p.selling_price}</Text>
+                    {selectedProductId === p.id && <Ionicons name="checkmark-circle" size={20} color="#075E54" />}
+                  </View>
                 </TouchableOpacity>
               ))}
             </View>
             <View style={s.twoCol}>
-              <View style={s.col}><Text style={s.miniLabel}>QUANTITY</Text><TextInput style={s.numInput} value={newQty} onChangeText={setNewQty} keyboardType="numeric" placeholder="0" /></View>
+              <View style={s.col}><Text style={s.miniLabel}>QUANTITY</Text><TextInput ref={quantityInputRef} style={s.numInput} value={newQty} onChangeText={setNewQty} keyboardType="numeric" placeholder="0" /></View>
               <View style={s.col}><Text style={s.miniLabel}>PRICE</Text><TextInput style={s.numInput} value={newPrice} onChangeText={setNewPrice} keyboardType="numeric" placeholder="₹ 0.00" /></View>
             </View>
             <TouchableOpacity onPress={handleAiSuggestion}><Text style={s.aiSuggestLink}>✦ See AI Suggestion</Text></TouchableOpacity>
@@ -654,6 +681,14 @@ const s = StyleSheet.create({
   productChip: { paddingVertical: 6, paddingHorizontal: 12, borderRadius: 16, backgroundColor: '#F0F0F0' },
   productChipActive: { backgroundColor: '#075E54' },
   productChipText: { fontSize: 13, color: '#333' },
+  searchContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: '#E5E5E5', marginBottom: 8 },
+  searchIcon: { marginRight: 8 },
+  searchInputField: { flex: 1, fontSize: 15, color: '#1A1A1A', paddingVertical: 4 },
+  clearBtn: { padding: 4 },
+  productSearchResults: { maxHeight: 200, marginBottom: 12 },
+  productSearchRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#F0F0F0' },
+  productSearchName: { fontSize: 14, color: '#333', flex: 1 },
+  productSearchPrice: { fontSize: 13, color: '#666' },
   numInput: { borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 8, padding: 10, fontSize: 15 },
   aiSuggestLink: { color: '#075E54', fontSize: 13, fontWeight: '600', marginTop: 8 },
   aiSuggestText: { color: '#666', fontSize: 12, fontStyle: 'italic', marginTop: 4 },
