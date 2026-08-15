@@ -524,6 +524,14 @@ export default function NewInvoiceScreen() {
                 ))}
               </ScrollView>
             )}
+            {selectedProductId && (
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+                <Ionicons name="checkmark-circle" size={16} color="#075E54" />
+                <Text style={{ fontSize: 13, color: '#075E54', fontWeight: '600' }}>
+                  Selected: {products.find(p => p.id === selectedProductId)?.name}
+                </Text>
+              </View>
+            )}
             <View style={s.twoCol}>
               <View style={s.col}><Text style={s.miniLabel}>QUANTITY <Text style={{ color: 'red' }}>*</Text></Text><TextInput ref={quantityInputRef} style={s.numInput} value={newQty} onChangeText={setNewQty} keyboardType="numeric" placeholder="0" /></View>
               <View style={s.col}><Text style={s.miniLabel}>PRICE</Text><TextInput style={s.numInput} value={newPrice} onChangeText={setNewPrice} keyboardType="numeric" placeholder="₹ 0.00" /></View>
