@@ -565,6 +565,9 @@ export default function NewInvoiceScreen() {
               onChangeText={setCustomerSearchQuery}
               autoFocus
             />
+            <Text style={{ padding: 8, backgroundColor: '#FFF9C4', color: '#333', fontSize: 12 }}>
+              [DEBUG] allCustomers: {allCustomers.length} | filteredCustomers: {filteredCustomers.length} | query: "{customerSearchQuery}"
+            </Text>
             <ScrollView style={s.customerList}>
               {filteredCustomers.map(customer => (
                 <TouchableOpacity key={customer.id} style={s.customerItem} onPress={() => handleSelectCustomer(customer)}>
