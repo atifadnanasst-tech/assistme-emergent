@@ -485,8 +485,9 @@ export default function NewInvoiceScreen() {
         {items.map((item, i) => (
           <View key={i} style={s.itemRow}>
             <View style={{ flex: 1 }}>
-              <Text style={s.itemName}>{item.product_name}{item.hsn_code ? ` (HSN ${item.hsn_code})` : ''}</Text>
+              <Text style={s.itemName}>{item.product_name}</Text>
               <Text style={s.itemDetail}>{item.quantity} × {fmt(item.unit_price)}</Text>
+              <Text style={{ fontSize: 11, color: '#999', marginTop: 2 }}>HSN: {item.hsn_code || '—'}  ·  Discount: {item.discount_pct || 0}%</Text>
             </View>
             <Text style={s.itemTotal}>{fmt(item.line_total)}</Text>
             <TouchableOpacity onPress={() => handleRemoveItem(i)}><Text style={s.removeBtn}>×</Text></TouchableOpacity>
