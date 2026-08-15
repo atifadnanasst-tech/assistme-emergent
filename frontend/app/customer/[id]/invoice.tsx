@@ -9,6 +9,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../../contexts/AuthContext';
 import { supabase } from '../../../lib/supabase';
 import { authService } from '../../../lib/auth';
+import AddressPickerSheet from '../../../components/primitives/AddressPickerSheet';
 
 interface Product { id: string; name: string; sku: string; selling_price: number; tax_rate: number; unit: string; hsn_code: string | null; image_url: string | null; }
 interface LineItem { product_id: string; product_name: string; hsn_code: string | null; quantity: number; unit_price: number; tax_rate: number; line_total: number; }
@@ -39,6 +40,10 @@ export default function NewInvoiceScreen() {
   const [customerDefaults, setCustomerDefaults] = useState<any>({});
   const [billingAddress, setBillingAddress] = useState<any>(null);
   const [shippingAddress, setShippingAddress] = useState<any>(null);
+  const [addressPickerVisible, setAddressPickerVisible] = useState(false);
+  const [shippingAddresses, setShippingAddresses] = useState<any[]>([]);
+  const [addressesLoading, setAddressesLoading] = useState(false);
+  const [addressSaving, setAddressSaving] = useState(false);
   const [taxId, setTaxId] = useState('');
   const [paymentTerms, setPaymentTerms] = useState('');
   const [deliveryPref, setDeliveryPref] = useState('');
@@ -309,6 +314,56 @@ export default function NewInvoiceScreen() {
     setCustomerSearchQuery('');
   };
 
+  // Amazon-style shipping address picker (Aug 2026, ATT list #2).
+  const openAddressPicker = async () => {
+    setAddressPickerVisible(true);
+    setAddressesLoading(true);
+    try {
+      const token = await getToken();
+      if (!token) return;
+      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+      const res = await fetch(`${backendUrl}/api/customer/${customerId}/addresses?type=shipping`, {
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setShippingAddresses(data.addresses || []);
+      }
+    } catch {
+    } finally {
+      setAddressesLoading(false);
+    }
+  };
+
+  const handleSelectAddress = (address: any) => {
+    setShippingAddress(address);
+    setAddressPickerVisible(false);
+  };
+
+  const handleAddNewAddress = async (data: any) => {
+    setAddressSaving(true);
+    try {
+      const token = await getToken();
+      if (!token) return;
+      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+      const res = await fetch(`${backendUrl}/api/customer/${customerId}/addresses`, {
+        method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'shipping', ...data }),
+      });
+      if (res.ok) {
+        const result = await res.json();
+        setShippingAddress(result.address);
+        setAddressPickerVisible(false);
+      } else {
+        Alert.alert('Error', 'Could not save address. Please try again.');
+      }
+    } catch {
+      Alert.alert('Error', 'Could not save address. Please try again.');
+    } finally {
+      setAddressSaving(false);
+    }
+  };
+
   const handleEditPackingHandling = () => {
     setPackingInput(packingHandling.toString());
     setPackingModalVisible(true);
@@ -379,7 +434,7 @@ export default function NewInvoiceScreen() {
             </View>
             <View style={s.twoCol}>
               <View style={s.col}><Text style={s.miniLabel}>BILL TO</Text><Text style={s.miniValue}>{billingAddress ? `${billingAddress.line1}, ${billingAddress.city}` : '—'}</Text></View>
-              <View style={s.col}><Text style={s.miniLabel}>SHIP TO</Text><Text style={s.miniValue}>{shippingAddress ? shippingAddress.line1 : 'Same as billing'}</Text><Text style={s.changeLink}>Change ›</Text></View>
+              <View style={s.col}><Text style={s.miniLabel}>SHIP TO</Text><Text style={s.miniValue}>{shippingAddress ? shippingAddress.line1 : 'Same as billing'}</Text><TouchableOpacity onPress={openAddressPicker}><Text style={s.changeLink}>Change ›</Text></TouchableOpacity></View>
             </View>
             <View style={s.twoCol}>
               <View style={s.col}><Text style={s.miniLabel}>GST</Text><Text style={s.miniValue}>{taxId || '—'}</Text></View>
@@ -496,7 +551,7 @@ export default function NewInvoiceScreen() {
       {/* Customer Search Modal */}
       <Modal visible={customerSearchVisible} animationType="slide" transparent={true} onRequestClose={() => setCustomerSearchVisible(false)}>
         <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-          <View style={s.modalContent}>
+          <SafeAreaView style={s.modalContent} edges={['bottom']}>
             <View style={s.modalHeader}>
               <Text style={s.modalTitle}>Select Customer</Text>
               <TouchableOpacity onPress={() => setCustomerSearchVisible(false)}>
@@ -518,9 +573,19 @@ export default function NewInvoiceScreen() {
                 </TouchableOpacity>
               ))}
             </ScrollView>
-          </View>
+          </SafeAreaView>
         </KeyboardAvoidingView>
       </Modal>
+
+      <AddressPickerSheet
+        visible={addressPickerVisible}
+        addresses={shippingAddresses}
+        loading={addressesLoading}
+        saving={addressSaving}
+        onSelect={handleSelectAddress}
+        onAddNew={handleAddNewAddress}
+        onDismiss={() => setAddressPickerVisible(false)}
+      />
 
       {/* Packing & Handling Edit Modal */}
       <Modal visible={packingModalVisible} animationType="fade" transparent={true} onRequestClose={() => setPackingModalVisible(false)}>
