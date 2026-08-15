@@ -61,7 +61,7 @@ export default function NewInvoiceScreen() {
   const [newPrice, setNewPrice] = useState('');
   const [newDiscount, setNewDiscount] = useState('');
   const [newHsn, setNewHsn] = useState('');
-  const [isSearchFocused, setIsSearchFocused] = useState(false);
+
   const [aiSuggestion, setAiSuggestion] = useState<string | null>(null);
 
   const getToken = async () => {
@@ -143,7 +143,7 @@ export default function NewInvoiceScreen() {
     if (!selectedProductId) { Alert.alert('Error', 'Select a product'); return; }
     const qty = parseFloat(newQty) || 0;
     const price = parseFloat(newPrice) || 0;
-    if (qty <= 0 || price <= 0) { Alert.alert('Error', 'Quantity and price must be > 0'); return; }
+    if (qty <= 0) { Alert.alert('Error', 'Quantity is required'); return; }
     const product = products.find(p => p.id === selectedProductId);
     if (!product) return;
     const discount = parseFloat(newDiscount) || 0;
@@ -504,8 +504,6 @@ export default function NewInvoiceScreen() {
                 placeholderTextColor="#999"
                 value={productSearchQuery}
                 onChangeText={setProductSearchQuery}
-                onFocus={() => setIsSearchFocused(true)}
-                onBlur={() => setTimeout(() => setIsSearchFocused(false), 200)}
               />
               {productSearchQuery.length > 0 && (
                 <TouchableOpacity onPress={() => setProductSearchQuery('')} style={s.clearBtn}>
@@ -513,8 +511,8 @@ export default function NewInvoiceScreen() {
                 </TouchableOpacity>
               )}
             </View>
-            {isSearchFocused && (
-              <ScrollView style={s.productSearchResults} nestedScrollEnabled keyboardShouldPersistTaps="handled">
+            {productSearchQuery.length > 0 && (
+              <ScrollView style={s.productSearchResults} nestedScrollEnabled keyboardShouldPersistTaps="always">
                 {filteredProducts.map(p => (
                   <TouchableOpacity key={p.id} style={s.productSearchRow} onPress={() => handleSelectProduct(p.id)}>
                     <Text style={s.productSearchName}>{p.name}</Text>
@@ -527,7 +525,7 @@ export default function NewInvoiceScreen() {
               </ScrollView>
             )}
             <View style={s.twoCol}>
-              <View style={s.col}><Text style={s.miniLabel}>QUANTITY</Text><TextInput ref={quantityInputRef} style={s.numInput} value={newQty} onChangeText={setNewQty} keyboardType="numeric" placeholder="0" /></View>
+              <View style={s.col}><Text style={s.miniLabel}>QUANTITY <Text style={{ color: 'red' }}>*</Text></Text><TextInput ref={quantityInputRef} style={s.numInput} value={newQty} onChangeText={setNewQty} keyboardType="numeric" placeholder="0" /></View>
               <View style={s.col}><Text style={s.miniLabel}>PRICE</Text><TextInput style={s.numInput} value={newPrice} onChangeText={setNewPrice} keyboardType="numeric" placeholder="₹ 0.00" /></View>
             </View>
             <View style={s.twoCol}>
