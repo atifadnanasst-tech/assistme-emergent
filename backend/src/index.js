@@ -3166,6 +3166,12 @@ async function generateDocumentPDF({ documentId, organisationId, documentType, d
       doc2.text(`${item.tax_rate || 0}%`, 405, y, { width: 40, align: 'right' });
       doc2.text(`₹${(item.line_total || 0).toFixed(2)}`, 450, y, { width: 95, align: 'right' });
       doc2.moveDown(0.5);
+      // HSN + Discount sub-line -- always shown (placeholder if none), matching
+      // the app screen's own always-visible pattern. Added Aug 2026.
+      doc2.font('Helvetica').fontSize(7).fillColor('#666');
+      doc2.text(`HSN: ${item.hsn_code || '-'}   Discount: ${item.discount_pct || 0}%`, 75, doc2.y, { width: 300 });
+      doc2.font('Helvetica').fontSize(9).fillColor('#000');
+      doc2.moveDown(0.4);
     });
 
     doc2.moveDown(0.3);
