@@ -6589,6 +6589,68 @@ app.patch('/api/customer/:customer_id/business-profile', async (c) => {
   }
 });
 
+// ─── GET /api/customer/:customer_id/addresses ────────────────
+// Amazon-style multi-address picker (Aug 2026, ATT list #2). Lists ALL
+// saved addresses of a given type, not just the single default one --
+// supports the middleman/affiliate use case where one customer ships
+// to many different locations across different invoices. Sorted by
+// created_at DESC (Option B, recency-based -- decided over frequency
+// ranking to avoid new schema/usage-tracking work for v1).
+app.get('/api/customer/:customer_id/addresses', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const customerId = c.req.param('customer_id');
+    const type = c.req.query('type') || 'shipping';
+    const { data, error } = await supabase
+      .from('customer_addresses')
+      .select('id, line1, line2, city, state, postal_code, country, is_default, created_at')
+      .eq('customer_id', customerId)
+      .eq('organisation_id', auth.organisationId)
+      .eq('type', type)
+      .order('created_at', { ascending: false });
+    if (error) return c.json({ error: 'internal_error' }, 500);
+    return c.json({ addresses: data || [] });
+  } catch (err) {
+    console.error('[GET /api/customer/:customer_id/addresses] Error:', err.message);
+    return c.json({ error: 'internal_error' }, 500);
+  }
+});
+
+// ─── POST /api/customer/:customer_id/addresses ───────────────
+// Adds a NEW address for a customer (in addition to existing ones,
+// does not overwrite) -- companion to the GET above for the inline
+// "add new address" flow in the picker sheet.
+app.post('/api/customer/:customer_id/addresses', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+    const customerId = c.req.param('customer_id');
+    const customer = await validateCustomer(customerId, organisationId);
+    if (!customer) return c.json({ error: 'customer_not_found' }, 404);
+
+    const body = await c.req.json();
+    const { type = 'shipping', line1, line2, city, state, postal_code, country } = body;
+    if (!line1) return c.json({ error: 'missing_line1' }, 400);
+
+    const { data, error } = await supabase
+      .from('customer_addresses')
+      .insert({
+        organisation_id: organisationId, customer_id: customerId, type,
+        line1, line2: line2 || null, city: city || null, state: state || null,
+        postal_code: postal_code || null, country: country || null, is_default: false,
+      })
+      .select('id, line1, line2, city, state, postal_code, country, is_default, created_at')
+      .single();
+    if (error) return c.json({ error: 'internal_error' }, 500);
+    return c.json({ address: data });
+  } catch (err) {
+    console.error('[POST /api/customer/:customer_id/addresses] Error:', err.message);
+    return c.json({ error: 'internal_error' }, 500);
+  }
+});
+
 // ─── POST /api/invoices ─────────────────────────────────────
 app.post('/api/invoices', async (c) => {
   try {
