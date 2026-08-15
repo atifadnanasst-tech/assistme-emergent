@@ -12,7 +12,7 @@ import { authService } from '../../../lib/auth';
 import AddressPickerSheet from '../../../components/primitives/AddressPickerSheet';
 
 interface Product { id: string; name: string; sku: string; selling_price: number; tax_rate: number; unit: string; hsn_code: string | null; image_url: string | null; }
-interface LineItem { product_id: string; product_name: string; hsn_code: string | null; quantity: number; unit_price: number; tax_rate: number; line_total: number; }
+interface LineItem { product_id: string; product_name: string; hsn_code: string | null; quantity: number; unit_price: number; tax_rate: number; discount_pct: number; line_total: number; }
 interface Customer { id: string; name: string; phone: string; }
 
 const PAYMENT_TERMS_OPTIONS = ['Due on Receipt', 'Net 15', 'Net 30', 'Net 45'];
@@ -59,6 +59,9 @@ export default function NewInvoiceScreen() {
   const quantityInputRef = useRef<TextInput>(null);
   const [newQty, setNewQty] = useState('');
   const [newPrice, setNewPrice] = useState('');
+  const [newDiscount, setNewDiscount] = useState('');
+  const [newHsn, setNewHsn] = useState('');
+  const [isSearchFocused, setIsSearchFocused] = useState(false);
   const [aiSuggestion, setAiSuggestion] = useState<string | null>(null);
 
   const getToken = async () => {
@@ -143,11 +146,16 @@ export default function NewInvoiceScreen() {
     if (qty <= 0 || price <= 0) { Alert.alert('Error', 'Quantity and price must be > 0'); return; }
     const product = products.find(p => p.id === selectedProductId);
     if (!product) return;
+    const discount = parseFloat(newDiscount) || 0;
+    const lineSubtotal = qty * price;
+    const lineTotal = Math.round((lineSubtotal - (lineSubtotal * discount / 100)) * 100) / 100;
     setItems(prev => [...prev, {
-      product_id: product.id, product_name: product.name, hsn_code: product.hsn_code,
-      quantity: qty, unit_price: price, tax_rate: product.tax_rate, line_total: Math.round(qty * price * 100) / 100,
+      product_id: product.id, product_name: product.name, hsn_code: newHsn || product.hsn_code,
+      quantity: qty, unit_price: price, tax_rate: product.tax_rate, discount_pct: discount, line_total: lineTotal,
     }]);
-    setAddingItem(false); setSelectedProductId(''); setNewQty(''); setNewPrice(''); setAiSuggestion(null);
+    // Stay open (no setAddingItem(false)) -- ready for the next line immediately,
+    // matching Atif's "no unnecessary click" spec. Reset fields for a fresh entry.
+    setSelectedProductId(''); setNewQty(''); setNewPrice(''); setNewDiscount(''); setNewHsn(''); setAiSuggestion(null);
   };
 
   const handleRemoveItem = (index: number) => { setItems(prev => prev.filter((_, i) => i !== index)); };
@@ -156,6 +164,7 @@ export default function NewInvoiceScreen() {
     setSelectedProductId(productId);
     const product = products.find(p => p.id === productId);
     if (product) setNewPrice(product.selling_price.toString());
+    if (product) setNewHsn(product.hsn_code || '');
     setAiSuggestion(null);
     setProductSearchQuery('');
     setTimeout(() => quantityInputRef.current?.focus(), 100);
@@ -194,7 +203,7 @@ export default function NewInvoiceScreen() {
         method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           customer_id: customerId,
-          items: items.map(i => ({ product_id: i.product_id, quantity: i.quantity, unit_price: i.unit_price })),
+          items: items.map(i => ({ product_id: i.product_id, quantity: i.quantity, unit_price: i.unit_price, discount_pct: i.discount_pct, hsn_code: i.hsn_code })),
           packing_handling: packingHandling, invoice_type: invoiceType, po_number: poNumber || null,
           status: action === 'pdf' ? 'draft' : 'sent',
         }),
@@ -303,7 +312,7 @@ export default function NewInvoiceScreen() {
         method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           customer_id: customerId,
-          items: items.map(i => ({ product_id: i.product_id, quantity: i.quantity, unit_price: i.unit_price })),
+          items: items.map(i => ({ product_id: i.product_id, quantity: i.quantity, unit_price: i.unit_price, discount_pct: i.discount_pct, hsn_code: i.hsn_code })),
           packing_handling: packingHandling, invoice_type: invoiceType, status: 'draft',
         }),
       });
@@ -495,6 +504,8 @@ export default function NewInvoiceScreen() {
                 placeholderTextColor="#999"
                 value={productSearchQuery}
                 onChangeText={setProductSearchQuery}
+                onFocus={() => setIsSearchFocused(true)}
+                onBlur={() => setTimeout(() => setIsSearchFocused(false), 200)}
               />
               {productSearchQuery.length > 0 && (
                 <TouchableOpacity onPress={() => setProductSearchQuery('')} style={s.clearBtn}>
@@ -502,24 +513,29 @@ export default function NewInvoiceScreen() {
                 </TouchableOpacity>
               )}
             </View>
-            <ScrollView style={s.productSearchResults} nestedScrollEnabled>
-              {filteredProducts.map(p => (
-                <TouchableOpacity key={p.id} style={s.productSearchRow} onPress={() => handleSelectProduct(p.id)}>
-                  <Text style={s.productSearchName}>{p.name}</Text>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                    <Text style={s.productSearchPrice}>₹{p.selling_price}</Text>
-                    {selectedProductId === p.id && <Ionicons name="checkmark-circle" size={20} color="#075E54" />}
-                  </View>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
+            {isSearchFocused && (
+              <ScrollView style={s.productSearchResults} nestedScrollEnabled keyboardShouldPersistTaps="handled">
+                {filteredProducts.map(p => (
+                  <TouchableOpacity key={p.id} style={s.productSearchRow} onPress={() => handleSelectProduct(p.id)}>
+                    <Text style={s.productSearchName}>{p.name}</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                      <Text style={s.productSearchPrice}>₹{p.selling_price}</Text>
+                      {selectedProductId === p.id && <Ionicons name="checkmark-circle" size={20} color="#075E54" />}
+                    </View>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            )}
             <View style={s.twoCol}>
               <View style={s.col}><Text style={s.miniLabel}>QUANTITY</Text><TextInput ref={quantityInputRef} style={s.numInput} value={newQty} onChangeText={setNewQty} keyboardType="numeric" placeholder="0" /></View>
               <View style={s.col}><Text style={s.miniLabel}>PRICE</Text><TextInput style={s.numInput} value={newPrice} onChangeText={setNewPrice} keyboardType="numeric" placeholder="₹ 0.00" /></View>
             </View>
+            <View style={s.twoCol}>
+              <View style={s.col}><Text style={s.miniLabel}>DISCOUNT %</Text><TextInput style={s.numInput} value={newDiscount} onChangeText={setNewDiscount} keyboardType="numeric" placeholder="0" /></View>
+              <View style={s.col}><Text style={s.miniLabel}>HSN CODE</Text><TextInput style={s.numInput} value={newHsn} onChangeText={setNewHsn} keyboardType="numeric" placeholder="e.g. 3304" /></View>
+            </View>
             <TouchableOpacity onPress={handleAiSuggestion}><Text style={s.aiSuggestLink}>✦ See AI Suggestion</Text></TouchableOpacity>
             {aiSuggestion && <Text style={s.aiSuggestText}>{aiSuggestion}</Text>}
-            <TouchableOpacity onPress={() => Alert.alert('Coming Soon', 'Product creation will be available soon')}><Text style={s.newItemLink}>+ NEW ITEM</Text></TouchableOpacity>
             <View style={s.selectorBtns}>
               <TouchableOpacity onPress={() => { setAddingItem(false); setAiSuggestion(null); }}><Text style={s.cancelText}>Cancel</Text></TouchableOpacity>
               <TouchableOpacity style={s.addToListBtn} onPress={handleAddItem}><Text style={s.addToListText}>Add to List</Text></TouchableOpacity>
