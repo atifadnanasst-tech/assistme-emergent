@@ -325,6 +325,7 @@ export default function ProductsCatalogScreen() {
         tax_rate: data.taxRate,
         category: data.category || null,
         cost_price: Number(data.costPrice) || 0,
+        hsn_code: data.hsnCode || null,
       };
       const res = formMode === 'add'
         ? await fetch(`${backendUrl}/api/products`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) })

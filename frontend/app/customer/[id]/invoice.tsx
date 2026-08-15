@@ -537,7 +537,7 @@ export default function NewInvoiceScreen() {
       <SafeAreaView style={s.bottomSafe} edges={['bottom']}>
         <View style={s.bottomBar}>
           <TouchableOpacity style={s.pdfBtn} onPress={() => handleSubmit('pdf')} disabled={!!submitting || items.length === 0}>
-            {submitting === 'pdf' ? <ActivityIndicator size="small" color="#333" /> : <><Ionicons name="document" size={16} color="#333" /><Text style={s.pdfBtnText}>Create Invoice</Text></>}
+            {submitting === 'pdf' ? <ActivityIndicator size="small" color="#333" /> : <><Ionicons name="document" size={16} color="#333" /><Text style={s.pdfBtnText}>Create</Text></>}
           </TouchableOpacity>
           <TouchableOpacity style={s.shareBtn} onPress={() => handleSubmit('share')} disabled={!!submitting || items.length === 0}>
             {submitting === 'share' ? <ActivityIndicator size="small" color="#FFF" /> : <><Ionicons name="share-social" size={16} color="#FFF" /><Text style={s.shareBtnText}>Share Here</Text></>}

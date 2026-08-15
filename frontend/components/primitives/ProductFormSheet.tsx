@@ -28,6 +28,7 @@ export interface ProductFormData {
   sellingPrice: string;
   taxRate: number;
   costPrice: string;
+  hsnCode: string;
   imageUri?: string;
 }
 
@@ -49,6 +50,7 @@ export default function ProductFormSheet({
   const [sellingPrice, setSellingPrice] = useState('');
   const [taxRate, setTaxRate] = useState(0);
   const [costPrice, setCostPrice] = useState('');
+  const [hsnCode, setHsnCode] = useState('');
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [imageUri, setImageUri] = useState<string | null>(null);
 
@@ -59,11 +61,12 @@ export default function ProductFormSheet({
       setSellingPrice(initialValues.sellingPrice || '');
       setTaxRate(initialValues.taxRate ?? 0);
       setCostPrice(initialValues.costPrice || '');
+      setHsnCode(initialValues.hsnCode || '');
       setImageUri(initialValues.imageUri || null);
     }
     if (!visible) {
       setName(''); setCategory(''); setSellingPrice('');
-      setTaxRate(0); setCostPrice(''); setShowSuggestions(false); setImageUri(null);
+      setTaxRate(0); setCostPrice(''); setHsnCode(''); setShowSuggestions(false); setImageUri(null);
     }
   }, [visible]);
 
@@ -90,7 +93,7 @@ export default function ProductFormSheet({
 
   const handleSubmit = () => {
     if (!canSubmit) return;
-    onSubmit({ name: name.trim(), category: category.trim(), sellingPrice, taxRate, costPrice, imageUri: imageUri || undefined });
+    onSubmit({ name: name.trim(), category: category.trim(), sellingPrice, taxRate, costPrice, hsnCode: hsnCode.trim(), imageUri: imageUri || undefined });
   };
 
   return (
@@ -153,6 +156,12 @@ export default function ProductFormSheet({
       <TextInput
         style={styles.input} placeholder="What you pay the supplier" placeholderTextColor="#999"
         keyboardType="numeric" value={costPrice} onChangeText={setCostPrice}
+      />
+
+      <Text style={styles.label}>HSN Code <Text style={styles.optional}>(optional)</Text></Text>
+      <TextInput
+        style={styles.input} placeholder="e.g. 3304" placeholderTextColor="#999"
+        keyboardType="numeric" value={hsnCode} onChangeText={setHsnCode}
       />
 
       <View style={styles.actions}>
