@@ -344,9 +344,8 @@ export default function NewInvoiceScreen() {
             {submitting === 'draft' ? <ActivityIndicator size="small" color="#A5D6A7" /> : <Text style={s.saveDraftText}>Save Draft</Text>}
           </TouchableOpacity>
         </View>
-      </SafeAreaView>
 
-      <ScrollView style={s.scroll} contentContainerStyle={s.scrollContent}>
+        <ScrollView style={s.scroll} contentContainerStyle={s.scrollContent}>
         {/* Business Name - NO MARGIN, clickable */}
         <Text style={[s.sectionLabel, { marginTop: 0 }]}>MY BUSINESS NAME</Text>
         <TouchableOpacity style={s.fieldRow} onPress={() => router.push('/settings/profile')} activeOpacity={0.7}>
@@ -476,7 +475,8 @@ export default function NewInvoiceScreen() {
         </View>
 
         <View style={{ height: 100 }} />
-      </ScrollView>
+        </ScrollView>
+      </SafeAreaView>
 
       {/* Bottom Action Bar */}
       <SafeAreaView style={s.bottomSafe} edges={['bottom']}>
