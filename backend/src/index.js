@@ -6721,10 +6721,25 @@ app.post('/api/invoices', async (c) => {
       if (!product) continue;
 
       const qty = item.quantity || 1;
-      const unitPrice = product.selling_price || 0;
-      const lineTotal = Math.round(qty * unitPrice * 100) / 100;
+      // Real bug fixed Aug 2026: previously ALWAYS used product.selling_price,
+      // silently ignoring the trader's own per-invoice price edit even though
+      // the frontend Price field is genuinely editable and sent it. Now
+      // respects item.unit_price when provided (falls back to product default
+      // only when absent/zero, e.g. Spark-created invoices with no manual edit).
+      const unitPrice = (item.unit_price != null && item.unit_price > 0) ? item.unit_price : (product.selling_price || 0);
+      // discount_pct: real per-line discount, previously never computed at
+      // all despite the DB column already existing. Applied before tax,
+      // matching standard Indian invoicing convention (Zoho/Tally tax the
+      // post-discount taxable value, not the pre-discount gross).
+      const discountPct = item.discount_pct || 0;
+      const grossLineTotal = Math.round(qty * unitPrice * 100) / 100;
+      const lineTotal = Math.round((grossLineTotal - (grossLineTotal * discountPct / 100)) * 100) / 100;
       const taxRate = product.tax_rate || 0;
       const itemTax = Math.round(lineTotal * taxRate / 100 * 100) / 100;
+      // hsn_code: was computed but silently dropped before the DB insert --
+      // real bug found and fixed same session. Now also respects a per-line
+      // override from the request, falling back to the product's own value.
+      const hsnCode = item.hsn_code || product.custom_fields?.hsn_code || null;
 
       subtotal += lineTotal;
       totalTax += itemTax;
@@ -6738,8 +6753,8 @@ app.post('/api/invoices', async (c) => {
 
       computedItems.push({
         product_id: product.id, description: product.name, quantity: qty,
-        unit_price: unitPrice, tax_rate: taxRate, line_total: lineTotal, sort_order: computedItems.length + 1,
-        hsn_code: product.custom_fields?.hsn_code || null,
+        unit_price: unitPrice, tax_rate: taxRate, discount_pct: discountPct,
+        line_total: lineTotal, sort_order: computedItems.length + 1, hsn_code: hsnCode,
       });
     }
 
@@ -6792,7 +6807,8 @@ app.post('/api/invoices', async (c) => {
         organisation_id: organisationId, invoice_id: newInvoice.id,
         product_id: item.product_id, description: item.description,
         quantity: item.quantity, unit_price: item.unit_price,
-        tax_rate: item.tax_rate, line_total: item.line_total, sort_order: item.sort_order,
+        tax_rate: item.tax_rate, discount_pct: item.discount_pct, hsn_code: item.hsn_code,
+        line_total: item.line_total, sort_order: item.sort_order,
       });
     }
 
