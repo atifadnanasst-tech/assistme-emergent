@@ -6982,6 +6982,7 @@ app.post('/api/products', async (c) => {
       category: body.category || null,
       costPrice: body.cost_price || 0,
       unit: body.unit || 'pcs',
+      customFields: body.hsn_code ? { hsn_code: body.hsn_code } : undefined,
     });
     if (result.status === 'failed') return c.json({ error: result.error, message: result.message }, 400);
     return c.json(result.product, 201);
@@ -7019,6 +7020,7 @@ app.patch('/api/products/:id', async (c) => {
       taxRate: body.tax_rate,
       category: body.category,
       unit: body.unit,
+      customFields: body.hsn_code !== undefined ? { hsn_code: body.hsn_code } : undefined,
     });
     if (result.status === 'failed') return c.json({ error: result.error, message: result.message }, 400);
     return c.json(result.product);
