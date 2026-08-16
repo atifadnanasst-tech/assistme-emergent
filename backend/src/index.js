@@ -6937,7 +6937,11 @@ app.post('/api/invoices/:invoice_id/pdf', async (c) => {
     let body = {};
     try { body = await c.req.json(); } catch {}
     if (body.generate_challan) {
-      let goodsDescription = (body.goods_description || '').trim();
+      // Track whether this was explicitly typed by the owner (tier 1) vs
+      // derived (tier 2/3) -- only explicit values get saved to the reuse
+      // history below, so it doesn't fill up with auto-derived noise.
+      const explicitGoodsDescription = (body.goods_description || '').trim();
+      let goodsDescription = explicitGoodsDescription;
       if (!goodsDescription) {
         const { data: invItems } = await supabase.from('invoice_items')
           .select('product_id').eq('invoice_id', invoiceId);
@@ -6970,6 +6974,15 @@ app.post('/api/invoices/:invoice_id/pdf', async (c) => {
       if (!challanPdfUrl) {
         console.error('[PDF] Challan generation failed for invoice:', invoiceId);
       }
+
+      // Save to reuse history (Aug 2026) -- fire-and-forget, non-blocking.
+      // UNIQUE(organisation_id, name) means this is safe to call every time
+      // without a separate existence check.
+      if (explicitGoodsDescription) {
+        supabase.from('org_goods_categories')
+          .upsert({ organisation_id: organisationId, name: explicitGoodsDescription }, { onConflict: 'organisation_id,name', ignoreDuplicates: true })
+          .then(() => {}).catch(() => {});
+      }
     }
 
     // Response shape kept identical to the pre-existing contract --
@@ -6979,6 +6992,48 @@ app.post('/api/invoices/:invoice_id/pdf', async (c) => {
   } catch (error) {
     console.error('POST /api/invoices/pdf error:', error);
     return c.json({ error: 'server_error' }, 500);
+  }
+});
+
+// ─── Delivery Challan goods-category reuse history (Aug 2026) ────
+// Org-wide (not per-customer, unlike transport) -- the owner's line of
+// business doesn't vary by who they're shipping to. Simple list, tap to
+// reuse, always overridable by typing something new.
+app.get('/api/organisation/goods-categories', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { data, error } = await supabase
+      .from('org_goods_categories')
+      .select('id, name, created_at')
+      .eq('organisation_id', auth.organisationId)
+      .order('created_at', { ascending: false })
+      .limit(50);
+    if (error) return c.json({ error: 'internal_error' }, 500);
+    return c.json({ categories: data || [] });
+  } catch (err) {
+    console.error('[GET /api/organisation/goods-categories] Error:', err.message);
+    return c.json({ error: 'internal_error' }, 500);
+  }
+});
+
+app.post('/api/organisation/goods-categories', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const body = await c.req.json();
+    const name = (body.name || '').trim();
+    if (!name) return c.json({ error: 'missing_name' }, 400);
+    const { data, error } = await supabase
+      .from('org_goods_categories')
+      .upsert({ organisation_id: auth.organisationId, name }, { onConflict: 'organisation_id,name' })
+      .select('id, name, created_at')
+      .single();
+    if (error) return c.json({ error: 'internal_error' }, 500);
+    return c.json({ category: data });
+  } catch (err) {
+    console.error('[POST /api/organisation/goods-categories] Error:', err.message);
+    return c.json({ error: 'internal_error' }, 500);
   }
 });
 
