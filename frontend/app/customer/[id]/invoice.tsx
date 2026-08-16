@@ -52,6 +52,7 @@ export default function NewInvoiceScreen() {
   const [poNumber, setPoNumber] = useState('');
   const [setAsDefault, setSetAsDefault] = useState(false);
   const [generateChallan, setGenerateChallan] = useState(false);
+  const [categoryOptions, setCategoryOptions] = useState<{ id: string; name: string }[]>([]);
   const [transportName, setTransportName] = useState('');
   const [bundleCount, setBundleCount] = useState('');
   const [goodsDescription, setGoodsDescription] = useState('');
@@ -81,6 +82,27 @@ export default function NewInvoiceScreen() {
   };
 
   useEffect(() => { loadForm(); }, [id]);
+
+  // Delivery Challan goods-category reuse history (Aug 2026) -- fetch once
+  // when the checkbox is first checked, not on every screen load, since
+  // most invoices won't need a challan at all.
+  useEffect(() => {
+    if (!generateChallan || categoryOptions.length > 0) return;
+    (async () => {
+      try {
+        const token2 = await getToken();
+        if (!token2) return;
+        const backendUrl2 = process.env.EXPO_PUBLIC_BACKEND_URL;
+        const res = await fetch(`${backendUrl2}/api/organisation/goods-categories`, {
+          headers: { 'Authorization': `Bearer ${token2}` },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setCategoryOptions(data.categories || []);
+        }
+      } catch {}
+    })();
+  }, [generateChallan]);
 
   const loadForm = async () => {
     try {
@@ -669,6 +691,15 @@ export default function NewInvoiceScreen() {
 
               <Text style={[s.miniLabel, { marginTop: 12 }]}>GOODS DESCRIPTION <Text style={{ color: '#999', fontWeight: '400' }}>(optional, auto-filled if blank)</Text></Text>
               <TextInput style={s.numInput} value={goodsDescription} onChangeText={setGoodsDescription} placeholder="e.g. Printed Books" />
+              {categoryOptions.length > 0 && (
+                <View style={[s.productList, { marginTop: 8 }]}>
+                  {categoryOptions.map(opt => (
+                    <TouchableOpacity key={opt.id} style={s.productChip} onPress={() => setGoodsDescription(opt.name)}>
+                      <Text style={s.productChipText}>{opt.name}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
             </View>
           )}
         </View>
