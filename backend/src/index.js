@@ -6922,9 +6922,57 @@ app.post('/api/invoices/:invoice_id/pdf', async (c) => {
       return c.json({ error: 'pdf_generation_failed' }, 500);
     }
 
+    // Delivery Challan (Aug 2026) -- optional, generated alongside the
+    // invoice in the same action when requested. Reuses the SAME invoice
+    // number (Atif's spec), same generateDocumentPDF function via the
+    // 'challan' pdfVariant. Three-tier goods description resolution:
+    // (1) explicit per-challan override, (2) the invoice's own product
+    // categories (single if uniform, joined list if mixed), (3) the org's
+    // default_goods_category. Never falls through to individual product
+    // names -- that tier deliberately does not exist.
+    let challanPdfUrl = null;
+    let body = {};
+    try { body = await c.req.json(); } catch {}
+    if (body.generate_challan) {
+      let goodsDescription = (body.goods_description || '').trim();
+      if (!goodsDescription) {
+        const { data: invItems } = await supabase.from('invoice_items')
+          .select('product_id').eq('invoice_id', invoiceId);
+        const productIds = [...new Set((invItems || []).map(i => i.product_id).filter(Boolean))];
+        if (productIds.length > 0) {
+          const { data: prods } = await supabase.from('products')
+            .select('category').in('id', productIds);
+          const categories = [...new Set((prods || []).map(p => p.category).filter(Boolean))];
+          if (categories.length > 0) goodsDescription = categories.join(', ');
+        }
+      }
+      if (!goodsDescription) {
+        const orgProfile = await getBusinessProfile(organisationId, supabase);
+        goodsDescription = orgProfile?.default_goods_category || '';
+      }
+
+      challanPdfUrl = await generateDocumentPDF({
+        documentId: invoiceId,
+        organisationId,
+        documentType: 'invoice',
+        documentNumber: invoice.invoice_number,
+        title: 'DELIVERY CHALLAN',
+        storageBucket: 'invoices',
+        entityType: 'invoice',
+        pdfVariant: 'challan',
+        transportName: body.transport_name || null,
+        bundleCount: body.bundle_count || null,
+        goodsDescription,
+      });
+      if (!challanPdfUrl) {
+        console.error('[PDF] Challan generation failed for invoice:', invoiceId);
+      }
+    }
+
     // Response shape kept identical to the pre-existing contract --
     // frontend reads pdf.pdf_url only, confirmed via grep before this change.
-    return c.json({ pdf_url: pdfUrl, attachment_id: null });
+    // challan_pdf_url is purely additive, existing consumers unaffected.
+    return c.json({ pdf_url: pdfUrl, attachment_id: null, challan_pdf_url: challanPdfUrl });
   } catch (error) {
     console.error('POST /api/invoices/pdf error:', error);
     return c.json({ error: 'server_error' }, 500);
