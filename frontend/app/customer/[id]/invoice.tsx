@@ -10,6 +10,7 @@ import { useAuth } from '../../../contexts/AuthContext';
 import { supabase } from '../../../lib/supabase';
 import { authService } from '../../../lib/auth';
 import AddressPickerSheet from '../../../components/primitives/AddressPickerSheet';
+import TransportPickerSheet from '../../../components/primitives/TransportPickerSheet';
 
 interface Product { id: string; name: string; sku: string; selling_price: number; tax_rate: number; unit: string; hsn_code: string | null; image_url: string | null; }
 interface LineItem { product_id: string; product_name: string; hsn_code: string | null; quantity: number; unit_price: number; tax_rate: number; discount_pct: number; line_total: number; }
@@ -49,6 +50,14 @@ export default function NewInvoiceScreen() {
   const [deliveryPref, setDeliveryPref] = useState('');
   const [poNumber, setPoNumber] = useState('');
   const [setAsDefault, setSetAsDefault] = useState(false);
+  const [generateChallan, setGenerateChallan] = useState(false);
+  const [transportName, setTransportName] = useState('');
+  const [bundleCount, setBundleCount] = useState('');
+  const [goodsDescription, setGoodsDescription] = useState('');
+  const [transportPickerVisible, setTransportPickerVisible] = useState(false);
+  const [transportOptions, setTransportOptions] = useState<any[]>([]);
+  const [transportLoading, setTransportLoading] = useState(false);
+  const [transportSaving, setTransportSaving] = useState(false);
   const [invoiceType, setInvoiceType] = useState('Tax Invoice');
   const [products, setProducts] = useState<Product[]>([]);
   const [items, setItems] = useState<LineItem[]>([]);
@@ -233,8 +242,17 @@ export default function NewInvoiceScreen() {
 
       // Generate PDF
       console.log('[INVOICE] Generating PDF...');
+      // Delivery Challan (Aug 2026, ATT list): optional, generated alongside
+      // the invoice in this SAME call when the checkbox is checked -- reuses
+      // the same invoice number, no separate creation flow needed.
       const r2 = await fetch(`${backendUrl}/api/invoices/${inv.invoice_id}/pdf`, {
-        method: 'POST', headers: { 'Authorization': `Bearer ${token}` },
+        method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(generateChallan ? {
+          generate_challan: true,
+          transport_name: transportName || null,
+          bundle_count: bundleCount ? parseInt(bundleCount) : null,
+          goods_description: goodsDescription || null,
+        } : {}),
       });
       
       if (!r2.ok) {
@@ -248,7 +266,8 @@ export default function NewInvoiceScreen() {
       console.log('[INVOICE] PDF URL:', pdf.pdf_url);
 
       if (action === 'pdf') {
-        Alert.alert('PDF Generated', `Invoice ${inv.invoice_number} saved.\nPDF URL: ${pdf.pdf_url || 'Not available'}`);
+        const challanNote = pdf.challan_pdf_url ? `\n\nDelivery Challan also created:\n${pdf.challan_pdf_url}` : '';
+        Alert.alert('PDF Generated', `Invoice ${inv.invoice_number} saved.\nPDF URL: ${pdf.pdf_url || 'Not available'}${challanNote}`);
       } else if (action === 'share') {
         console.log('[INVOICE] Sharing to app...');
         const r3 = await fetch(`${backendUrl}/api/invoices/${inv.invoice_id}/share`, {
@@ -578,6 +597,81 @@ export default function NewInvoiceScreen() {
             <Text style={s.grandTotalLabel}>TOTAL</Text><Text style={s.grandTotalValue}>{fmt(total)}</Text>
           </View>
         </View>
+
+        <View style={{ paddingHorizontal: 16, marginTop: 16 }}>
+          <TouchableOpacity style={{ flexDirection: 'row', alignItems: 'center' }} onPress={() => setGenerateChallan(!generateChallan)}>
+            <Ionicons name={generateChallan ? 'checkbox' : 'square-outline'} size={20} color="#075E54" />
+            <Text style={{ marginLeft: 8, fontSize: 14, color: '#333', fontWeight: '600' }}>Also create Delivery Challan</Text>
+          </TouchableOpacity>
+
+          {generateChallan && (
+            <View style={{ marginTop: 12 }}>
+              <Text style={s.miniLabel}>TRANSPORT</Text>
+              <TouchableOpacity
+                style={[s.numInput, { justifyContent: 'center' }]}
+                onPress={async () => {
+                  setTransportPickerVisible(true);
+                  setTransportLoading(true);
+                  try {
+                    const token2 = await getToken();
+                    if (!token2) return;
+                    const backendUrl2 = process.env.EXPO_PUBLIC_BACKEND_URL;
+                    const res = await fetch(`${backendUrl2}/api/customer/${customerId}/addresses?type=transport`, {
+                      headers: { 'Authorization': `Bearer ${token2}` },
+                    });
+                    if (res.ok) {
+                      const data = await res.json();
+                      setTransportOptions(data.addresses || []);
+                    }
+                  } catch {} finally {
+                    setTransportLoading(false);
+                  }
+                }}
+              >
+                <Text style={{ fontSize: 14, color: transportName ? '#1A1A1A' : '#999' }}>
+                  {transportName || 'Select transport...'}
+                </Text>
+              </TouchableOpacity>
+
+              <Text style={[s.miniLabel, { marginTop: 12 }]}>BUNDLES</Text>
+              <TextInput style={s.numInput} value={bundleCount} onChangeText={setBundleCount} keyboardType="numeric" placeholder="e.g. 3" />
+
+              <Text style={[s.miniLabel, { marginTop: 12 }]}>GOODS DESCRIPTION <Text style={{ color: '#999', fontWeight: '400' }}>(optional, auto-filled if blank)</Text></Text>
+              <TextInput style={s.numInput} value={goodsDescription} onChangeText={setGoodsDescription} placeholder="e.g. Printed Books" />
+            </View>
+          )}
+        </View>
+
+        <TransportPickerSheet
+          visible={transportPickerVisible}
+          options={transportOptions}
+          loading={transportLoading}
+          saving={transportSaving}
+          onSelect={(opt) => { setTransportName(opt.line1); setTransportPickerVisible(false); }}
+          onAddNew={async (name) => {
+            setTransportSaving(true);
+            try {
+              const token2 = await getToken();
+              if (!token2) return;
+              const backendUrl2 = process.env.EXPO_PUBLIC_BACKEND_URL;
+              const res = await fetch(`${backendUrl2}/api/customer/${customerId}/addresses`, {
+                method: 'POST', headers: { 'Authorization': `Bearer ${token2}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ type: 'transport', line1: name }),
+              });
+              if (res.ok) {
+                setTransportName(name);
+                setTransportPickerVisible(false);
+              } else {
+                Alert.alert('Error', 'Could not save transport. Please try again.');
+              }
+            } catch {
+              Alert.alert('Error', 'Could not save transport. Please try again.');
+            } finally {
+              setTransportSaving(false);
+            }
+          }}
+          onDismiss={() => setTransportPickerVisible(false)}
+        />
 
         <View style={{ height: 100 }} />
         </ScrollView>
