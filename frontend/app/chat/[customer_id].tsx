@@ -1880,6 +1880,11 @@ export default function CustomerChatScreen() {
     const displayContent = isUsageLimitAlert
       ? (msg.content || '').replace(/\s*·\s*Get more usage\s*$/, '')
       : msg.content;
+    // Delivery Challan (Aug 2026): the strip itself stays a simple owner_only
+    // system_alert, per Atif's explicit preference (not a full card) -- just
+    // needs to be tappable, opening the PDF directly. Same pattern already
+    // used for the usage-limit alert's "Get more usage" link.
+    const challanUrl = msg.card_data?.challan_pdf_url;
     return (
       <View style={styles.systemAlertContainer}>
         <View style={styles.systemAlertStrip}>
@@ -1893,6 +1898,16 @@ export default function CustomerChatScreen() {
           >
             <Text style={{ fontSize: 12, color: '#075E54', fontWeight: '700', textDecorationLine: 'underline' }}>
               Get more usage →
+            </Text>
+          </TouchableOpacity>
+        )}
+        {challanUrl && (
+          <TouchableOpacity
+            style={{ alignSelf: 'flex-start', marginTop: 4, marginLeft: 4 }}
+            onPress={() => Linking.openURL(challanUrl).catch(() => Alert.alert('Error', 'Could not open PDF'))}
+          >
+            <Text style={{ fontSize: 12, color: '#075E54', fontWeight: '700', textDecorationLine: 'underline' }}>
+              View Delivery Challan →
             </Text>
           </TouchableOpacity>
         )}
