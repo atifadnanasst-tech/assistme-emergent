@@ -3303,7 +3303,15 @@ async function generateDocumentPDF({ documentId, organisationId, documentType, d
     await pdfReady;
 
     const pdfBuffer = Buffer.concat(chunks);
-    const fileName = `${documentNumber}_${new Date().toISOString().replace(/[-:T.Z]/g, '').slice(0,15)}.pdf`;
+    // Naming convention (Aug 2026, matches Atif's real business convention):
+    // {documentNumber}_{customerName}_{city}_{Invoice|Quotation}_{date}.pdf
+    // Sanitized for filesystem/URL safety.
+    const sanitizeForFilename = (s) => (s || '').replace(/[^a-zA-Z0-9]+/g, '');
+    const custNamePart = sanitizeForFilename(customer?.name).slice(0, 30) || 'Customer';
+    const cityPart = sanitizeForFilename(customerBillingAddress?.city);
+    const docKindWord = documentType === 'invoice' ? 'Invoice' : 'Quotation';
+    const datePart = new Date().toISOString().split('T')[0].replace(/-/g, '');
+    const fileName = `${documentNumber}_${custNamePart}${cityPart ? '_' + cityPart : ''}_${docKindWord}_${datePart}.pdf`;
     const storagePath = `${organisationId}/${fileName}`;
 
     const { error: uploadErr } = await supabase.storage.from(storageBucket).upload(storagePath, pdfBuffer, {
@@ -3311,8 +3319,19 @@ async function generateDocumentPDF({ documentId, organisationId, documentType, d
     });
     if (uploadErr) { console.error(`[PDF] Upload error:`, uploadErr); return null; }
 
-    const { data: publicUrl } = supabase.storage.from(storageBucket).getPublicUrl(storagePath);
-    const pdfUrl = publicUrl.publicUrl;
+    // SECURITY FIX Aug 2026: was using getPublicUrl() -- a permanently public,
+    // zero-authentication URL. A guessable/leaked path meant full access to
+    // any invoice's customer name/phone/GSTIN/pricing/bank details, for
+    // anyone, forever. Now uses a signed URL with a 90-day expiry -- long
+    // enough that a WhatsApp recipient can open it whenever they get to it,
+    // while still being a real, finite, cryptographically-signed credential
+    // rather than permanently public. (Option A of two considered; Option B,
+    // mint-on-demand via a redirect endpoint, deferred as a future refinement.)
+    const NINETY_DAYS_SECONDS = 90 * 24 * 60 * 60;
+    const { data: signedUrlData, error: signErr } = await supabase.storage.from(storageBucket)
+      .createSignedUrl(storagePath, NINETY_DAYS_SECONDS);
+    if (signErr) { console.error(`[PDF] Sign error:`, signErr); return null; }
+    const pdfUrl = signedUrlData.signedUrl;
 
     // Save to attachments
     try {
