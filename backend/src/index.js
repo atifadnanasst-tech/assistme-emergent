@@ -3283,7 +3283,10 @@ async function generateDocumentPDF({ documentId, organisationId, documentType, d
     // returns, in the order it already locked (default first, then sort_order).
     // Not yet gated by a per-document show/hide toggle -- that's a deferred item
     // (spec Part 7), so today every account on file shows on every document type.
-    if (biz.bank_accounts && biz.bank_accounts.length > 0) {
+    if (pdfVariant !== 'challan' && biz.bank_accounts && biz.bank_accounts.length > 0) {
+      // Bank details deliberately excluded from Delivery Challans -- not
+      // required on that document type, confirmed Aug 2026 (Atif's real
+      // reference sample has no bank details, only invoices do).
       doc2.moveDown(1.5);
       doc2.fontSize(10).font('Helvetica-Bold').text('Bank Details', 50, doc2.y, { width: 495, align: 'left' });
       doc2.moveDown(0.3);
