@@ -6988,6 +6988,7 @@ app.post('/api/invoices/:invoice_id/share', async (c) => {
     const invoiceId = c.req.param('invoice_id');
     const body = await c.req.json();
     const channel = body.channel || 'app';
+    const challanPdfUrl = body.challan_pdf_url || null;
 
     const { data: invoice } = await supabase.from('invoices').select('*').eq('id', invoiceId).eq('organisation_id', organisationId).single();
     if (!invoice) return c.json({ error: 'invoice_not_found' }, 404);
@@ -7048,6 +7049,25 @@ app.post('/api/invoices/:invoice_id/share', async (c) => {
         originalMetadata: msg?.metadata || {},
         originalContent: msg?.content || '',
       });
+
+      // Delivery Challan (Aug 2026): owner_only visibility, deliberately NOT
+      // mirrored to the customer's side and NOT included in WhatsApp shares --
+      // per Atif's real business practice, a challan is an internal/logistics
+      // document (for the owner's own team or freight forwarder), not
+      // something a customer normally needs to see. Reuses the same
+      // owner_only pattern already used extensively elsewhere in this file.
+      if (challanPdfUrl) {
+        await supabase.from('messages').insert({
+          organisation_id: organisationId, conversation_id: conv.id,
+          role: 'tool', content: `Delivery Challan for Invoice #${invoice.invoice_number}`,
+          metadata: {
+            sender_type: 'system', visibility: 'owner_only', message_type: 'system_alert',
+            read_by_owner: true, preview_text: `Delivery Challan #${invoice.invoice_number} ready`,
+            card_data: { invoice_id: invoiceId, invoice_number: invoice.invoice_number, challan_pdf_url: challanPdfUrl },
+          },
+          tokens_input: 0, tokens_output: 0,
+        });
+      }
       
       await broadcastNewMessage(organisationId, { conversation_id: conv.id });
       console.log(`📱 [SHARE] Message created: ${msg?.id}`);
