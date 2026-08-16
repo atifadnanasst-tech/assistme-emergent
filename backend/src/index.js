@@ -3331,7 +3331,15 @@ async function generateDocumentPDF({ documentId, organisationId, documentType, d
     const sanitizeForFilename = (s) => (s || '').replace(/[^a-zA-Z0-9]+/g, '');
     const custNamePart = sanitizeForFilename(customer?.name).slice(0, 30) || 'Customer';
     const cityPart = sanitizeForFilename(customerBillingAddress?.city);
-    const docKindWord = documentType === 'invoice' ? 'Invoice' : 'Quotation';
+    // CRITICAL BUG FIXED Aug 2026: docKindWord previously only checked
+    // documentType ('invoice' vs 'quotation'), never pdfVariant. Since the
+    // Delivery Challan reuses documentType:'invoice' (needed for DB table
+    // selection), the standard invoice and its challan computed the exact
+    // same filename+storage path -- the challan's later upload (upsert:true)
+    // silently overwrote the invoice's own file. Both 'View Invoice' and
+    // 'View Challan' buttons, and the Share Here card, all opened the
+    // challan, because the invoice's file no longer existed at its own path.
+    const docKindWord = pdfVariant === 'challan' ? 'Challan' : (documentType === 'invoice' ? 'Invoice' : 'Quotation');
     const datePart = new Date().toISOString().split('T')[0].replace(/-/g, '');
     const fileName = `${documentNumber}_${custNamePart}${cityPart ? '_' + cityPart : ''}_${docKindWord}_${datePart}.pdf`;
     const storagePath = `${organisationId}/${fileName}`;
