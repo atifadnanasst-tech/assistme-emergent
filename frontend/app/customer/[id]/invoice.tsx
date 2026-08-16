@@ -27,6 +27,7 @@ export default function NewInvoiceScreen() {
 
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState<string | null>(null);
+  const [createdInvoice, setCreatedInvoice] = useState<{ id: string; number: string } | null>(null);
   const [orgName, setOrgName] = useState('');
   const [orgGstinState, setOrgGstinState] = useState('');
   const [businessModalVisible, setBusinessModalVisible] = useState(false);
@@ -207,37 +208,55 @@ export default function NewInvoiceScreen() {
       console.log(`[INVOICE] Customer ID: ${customerId}`);
       console.log(`[INVOICE] Items count: ${items.length}`);
 
-      // Create invoice
-      const r1 = await fetch(`${backendUrl}/api/invoices`, {
-        method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          customer_id: customerId,
-          items: items.map(i => ({ product_id: i.product_id, quantity: i.quantity, unit_price: i.unit_price, discount_pct: i.discount_pct, hsn_code: i.hsn_code })),
-          packing_handling: packingHandling, invoice_type: invoiceType, po_number: poNumber || null,
-          status: action === 'pdf' ? 'draft' : 'sent',
-        }),
-      });
-      
-      if (!r1.ok) {
-        const err = await r1.text();
-        console.error('[INVOICE] Create failed:', err);
-        Alert.alert('Error', 'Failed to create invoice');
-        return;
-      }
-      
-      const inv = await r1.json();
-      console.log('[INVOICE] Created:', inv.invoice_id, inv.invoice_number);
-      if (!inv.invoice_id) { Alert.alert('Error', 'Failed to create invoice'); return; }
+      // Real bug fixed Aug 2026: repeated taps of Create/Share/WhatsApp on the
+      // SAME screen visit were silently generating a brand new invoice (new
+      // number) every time. Now reuses the invoice already created earlier
+      // in this same visit instead of creating a duplicate -- invoices are
+      // treated as immutable once created (matches real accounting-software
+      // practice: Tally/Zoho/QuickBooks/Vyapar all block editing sent
+      // invoices; corrections go through a credit/debit note instead, not
+      // silently rewriting the original).
+      let inv: { invoice_id: string; invoice_number: string };
 
-      // "Set as default" (Amazon-style) -- fire-and-forget, non-blocking.
-      // Only persists customer-level defaults after the invoice itself
-      // was created successfully; a failure here never breaks invoice
-      // creation/sending. Added Aug 2026, ATT list #8.
-      if (setAsDefault) {
-        fetch(`${backendUrl}/api/customer/${customerId}/defaults`, {
-          method: 'PATCH', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ payment_terms: paymentTerms, delivery_preference: deliveryPref, default_invoice_type: invoiceType }),
-        }).catch(() => {});
+      if (createdInvoice) {
+        console.log('[INVOICE] Reusing already-created invoice:', createdInvoice.id);
+        inv = { invoice_id: createdInvoice.id, invoice_number: createdInvoice.number };
+      } else {
+        // Create invoice
+        const r1 = await fetch(`${backendUrl}/api/invoices`, {
+          method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            customer_id: customerId,
+            items: items.map(i => ({ product_id: i.product_id, quantity: i.quantity, unit_price: i.unit_price, discount_pct: i.discount_pct, hsn_code: i.hsn_code })),
+            packing_handling: packingHandling, invoice_type: invoiceType, po_number: poNumber || null,
+            status: action === 'pdf' ? 'draft' : 'sent',
+          }),
+        });
+
+        if (!r1.ok) {
+          const err = await r1.text();
+          console.error('[INVOICE] Create failed:', err);
+          Alert.alert('Error', 'Failed to create invoice');
+          return;
+        }
+
+        const created = await r1.json();
+        console.log('[INVOICE] Created:', created.invoice_id, created.invoice_number);
+        if (!created.invoice_id) { Alert.alert('Error', 'Failed to create invoice'); return; }
+        inv = created;
+        setCreatedInvoice({ id: created.invoice_id, number: created.invoice_number });
+
+        // "Set as default" (Amazon-style) -- fire-and-forget, non-blocking.
+        // Only persists customer-level defaults after the invoice itself
+        // was created successfully; a failure here never breaks invoice
+        // creation/sending. Added Aug 2026, ATT list #8. Only runs on the
+        // FIRST creation, not on reuse.
+        if (setAsDefault) {
+          fetch(`${backendUrl}/api/customer/${customerId}/defaults`, {
+            method: 'PATCH', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ payment_terms: paymentTerms, delivery_preference: deliveryPref, default_invoice_type: invoiceType }),
+          }).catch(() => {});
+        }
       }
 
       // Generate PDF
