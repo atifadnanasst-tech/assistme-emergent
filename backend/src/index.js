@@ -3047,7 +3047,7 @@ async function calculateInvoiceTotals(supabaseClient, organisationId, customerId
 // ─── generateDocumentPDF ─────────────────────────────────────
 // Unified PDF generator for invoices and quotations.
 // documentType: 'invoice' | 'quotation'
-async function generateDocumentPDF({ documentId, organisationId, documentType, documentNumber, title, storageBucket, entityType }) {
+async function generateDocumentPDF({ documentId, organisationId, documentType, documentNumber, title, storageBucket, entityType, pdfVariant = 'standard', transportName, bundleCount, goodsDescription }) {
   try {
     // Fetch document data
     const itemsTable = documentType === 'invoice' ? 'invoice_items' : 'quotation_items';
@@ -3152,81 +3152,100 @@ async function generateDocumentPDF({ documentId, organisationId, documentType, d
     if (customer?.tax_id) doc2.text(`GSTIN: ${customer.tax_id}`);
     doc2.moveDown(1);
 
-    // ── Items table header
-    const tableTop = doc2.y;
-    doc2.font('Helvetica-Bold').fontSize(9);
-    doc2.text('#', 50, tableTop, { width: 20 });
-    doc2.text('Item', 75, tableTop, { width: 200 });
-    doc2.text('Qty', 280, tableTop, { width: 40, align: 'right' });
-    doc2.text('Rate', 330, tableTop, { width: 70, align: 'right' });
-    doc2.text('Tax', 405, tableTop, { width: 40, align: 'right' });
-    doc2.text('Amount', 450, tableTop, { width: 95, align: 'right' });
-    doc2.moveDown(0.3);
-    doc2.moveTo(50, doc2.y).lineTo(545, doc2.y).stroke();
-    doc2.moveDown(0.3);
-
-    // ── Items
-    doc2.font('Helvetica').fontSize(9);
-    (items || []).forEach((item, i) => {
-      const y = doc2.y;
-      doc2.text(`${i + 1}`, 50, y, { width: 20 });
-      doc2.text(item.description || '', 75, y, { width: 200 });
-      doc2.text(`${item.quantity}`, 280, y, { width: 40, align: 'right' });
-      doc2.text(`₹${(item.unit_price || 0).toFixed(2)}`, 330, y, { width: 70, align: 'right' });
-      doc2.text(`${item.tax_rate || 0}%`, 405, y, { width: 40, align: 'right' });
-      doc2.text(`₹${(item.line_total || 0).toFixed(2)}`, 450, y, { width: 95, align: 'right' });
+    if (pdfVariant === 'challan') {
+      // ── Delivery Challan content (Aug 2026). Deliberately NOT a line-item
+      // table -- never exposes individual product names/pricing to whoever
+      // handles this document in transit (driver, receiving clerk). Matches
+      // Atif's real reference format: bundle count, category-level goods
+      // description, transport name. Three-tier goodsDescription resolution
+      // (per-challan override -> invoice's own product categories -> org's
+      // default_goods_category) happens in the CALLER, passed in already-resolved.
+      doc2.font('Helvetica').fontSize(11);
+      doc2.text(`${bundleCount || '-'} Bundles`, { align: 'center' });
       doc2.moveDown(0.5);
-      // HSN + Discount sub-line -- always shown (placeholder if none), matching
-      // the app screen's own always-visible pattern. Added Aug 2026.
-      doc2.font('Helvetica').fontSize(7).fillColor('#666');
-      doc2.text(`HSN: ${item.hsn_code || '-'}   Discount: ${item.discount_pct || 0}%`, 75, doc2.y, { width: 300 });
-      doc2.font('Helvetica').fontSize(9).fillColor('#000');
-      doc2.moveDown(0.4);
-    });
+      doc2.font('Helvetica-Bold').fontSize(16);
+      doc2.text((goodsDescription || '').toUpperCase(), { align: 'center' });
+      doc2.moveDown(1);
+      doc2.font('Helvetica').fontSize(10);
+      doc2.text(`Transport: ${transportName || '-'}`);
+      doc2.moveDown(1);
+    } else {
+      // ── Items table header
+      const tableTop = doc2.y;
+      doc2.font('Helvetica-Bold').fontSize(9);
+      doc2.text('#', 50, tableTop, { width: 20 });
+      doc2.text('Item', 75, tableTop, { width: 200 });
+      doc2.text('Qty', 280, tableTop, { width: 40, align: 'right' });
+      doc2.text('Rate', 330, tableTop, { width: 70, align: 'right' });
+      doc2.text('Tax', 405, tableTop, { width: 40, align: 'right' });
+      doc2.text('Amount', 450, tableTop, { width: 95, align: 'right' });
+      doc2.moveDown(0.3);
+      doc2.moveTo(50, doc2.y).lineTo(545, doc2.y).stroke();
+      doc2.moveDown(0.3);
 
-    doc2.moveDown(0.3);
-    doc2.moveTo(50, doc2.y).lineTo(545, doc2.y).stroke();
-    doc2.moveDown(0.5);
+      // ── Items
+      doc2.font('Helvetica').fontSize(9);
+      (items || []).forEach((item, i) => {
+        const y = doc2.y;
+        doc2.text(`${i + 1}`, 50, y, { width: 20 });
+        doc2.text(item.description || '', 75, y, { width: 200 });
+        doc2.text(`${item.quantity}`, 280, y, { width: 40, align: 'right' });
+        doc2.text(`₹${(item.unit_price || 0).toFixed(2)}`, 330, y, { width: 70, align: 'right' });
+        doc2.text(`${item.tax_rate || 0}%`, 405, y, { width: 40, align: 'right' });
+        doc2.text(`₹${(item.line_total || 0).toFixed(2)}`, 450, y, { width: 95, align: 'right' });
+        doc2.moveDown(0.5);
+        // HSN + Discount sub-line -- always shown (placeholder if none), matching
+        // the app screen's own always-visible pattern. Added Aug 2026.
+        doc2.font('Helvetica').fontSize(7).fillColor('#666');
+        doc2.text(`HSN: ${item.hsn_code || '-'}   Discount: ${item.discount_pct || 0}%`, 75, doc2.y, { width: 300 });
+        doc2.font('Helvetica').fontSize(9).fillColor('#000');
+        doc2.moveDown(0.4);
+      });
 
-    // ── Totals
-    const totalsX = 380;
-    doc2.font('Helvetica').fontSize(10);
-    doc2.text('Subtotal:', totalsX, doc2.y, { width: 70 });
-    doc2.text(`₹${(doc.subtotal || 0).toFixed(2)}`, 450, doc2.y - 12, { width: 95, align: 'right' });
-    doc2.moveDown(0.3);
-    // CGST/SGST/IGST split -- both creation paths store these in
-    // custom_fields (see calculateInvoiceTotals + manual /api/invoices).
-    // Falls back to flat 'GST:' for older invoices created before this
-    // split existed. Added Aug 2026 (ATT list #6/PDF).
-    const cgstAmt = doc.custom_fields?.cgst_amount || 0;
-    const sgstAmt = doc.custom_fields?.sgst_amount || 0;
-    const igstAmt = doc.custom_fields?.igst_amount || 0;
-    if (igstAmt > 0) {
-      doc2.text('IGST:', totalsX, doc2.y, { width: 70 });
-      doc2.text(`₹${igstAmt.toFixed(2)}`, 450, doc2.y - 12, { width: 95, align: 'right' });
       doc2.moveDown(0.3);
-    } else if (cgstAmt > 0 || sgstAmt > 0) {
-      doc2.text('CGST:', totalsX, doc2.y, { width: 70 });
-      doc2.text(`₹${cgstAmt.toFixed(2)}`, 450, doc2.y - 12, { width: 95, align: 'right' });
+      doc2.moveTo(50, doc2.y).lineTo(545, doc2.y).stroke();
+      doc2.moveDown(0.5);
+
+      // ── Totals
+      const totalsX = 380;
+      doc2.font('Helvetica').fontSize(10);
+      doc2.text('Subtotal:', totalsX, doc2.y, { width: 70 });
+      doc2.text(`₹${(doc.subtotal || 0).toFixed(2)}`, 450, doc2.y - 12, { width: 95, align: 'right' });
       doc2.moveDown(0.3);
-      doc2.text('SGST:', totalsX, doc2.y, { width: 70 });
-      doc2.text(`₹${sgstAmt.toFixed(2)}`, 450, doc2.y - 12, { width: 95, align: 'right' });
-      doc2.moveDown(0.3);
-    } else if (doc.tax_amount > 0) {
-      doc2.text('GST:', totalsX, doc2.y, { width: 70 });
-      doc2.text(`₹${(doc.tax_amount || 0).toFixed(2)}`, 450, doc2.y - 12, { width: 95, align: 'right' });
-      doc2.moveDown(0.3);
+      // CGST/SGST/IGST split -- both creation paths store these in
+      // custom_fields (see calculateInvoiceTotals + manual /api/invoices).
+      // Falls back to flat 'GST:' for older invoices created before this
+      // split existed. Added Aug 2026 (ATT list #6/PDF).
+      const cgstAmt = doc.custom_fields?.cgst_amount || 0;
+      const sgstAmt = doc.custom_fields?.sgst_amount || 0;
+      const igstAmt = doc.custom_fields?.igst_amount || 0;
+      if (igstAmt > 0) {
+        doc2.text('IGST:', totalsX, doc2.y, { width: 70 });
+        doc2.text(`₹${igstAmt.toFixed(2)}`, 450, doc2.y - 12, { width: 95, align: 'right' });
+        doc2.moveDown(0.3);
+      } else if (cgstAmt > 0 || sgstAmt > 0) {
+        doc2.text('CGST:', totalsX, doc2.y, { width: 70 });
+        doc2.text(`₹${cgstAmt.toFixed(2)}`, 450, doc2.y - 12, { width: 95, align: 'right' });
+        doc2.moveDown(0.3);
+        doc2.text('SGST:', totalsX, doc2.y, { width: 70 });
+        doc2.text(`₹${sgstAmt.toFixed(2)}`, 450, doc2.y - 12, { width: 95, align: 'right' });
+        doc2.moveDown(0.3);
+      } else if (doc.tax_amount > 0) {
+        doc2.text('GST:', totalsX, doc2.y, { width: 70 });
+        doc2.text(`₹${(doc.tax_amount || 0).toFixed(2)}`, 450, doc2.y - 12, { width: 95, align: 'right' });
+        doc2.moveDown(0.3);
+      }
+      if (doc.custom_fields?.freight_amount > 0 || doc.custom_fields?.packing_handling > 0) {
+        const freightDisplay = doc.custom_fields?.freight_amount || doc.custom_fields?.packing_handling || 0;
+        doc2.text('Freight:', totalsX, doc2.y, { width: 70 });
+        doc2.text(`₹${freightDisplay.toFixed(2)}`, 450, doc2.y - 12, { width: 95, align: 'right' });
+        doc2.moveDown(0.3);
+      }
+      doc2.moveDown(0.2);
+      doc2.font('Helvetica-Bold').fontSize(12);
+      doc2.text('TOTAL:', totalsX, doc2.y, { width: 70 });
+      doc2.text(`₹${(doc.total_amount || 0).toFixed(2)}`, 450, doc2.y - 14, { width: 95, align: 'right' });
     }
-    if (doc.custom_fields?.freight_amount > 0 || doc.custom_fields?.packing_handling > 0) {
-      const freightDisplay = doc.custom_fields?.freight_amount || doc.custom_fields?.packing_handling || 0;
-      doc2.text('Freight:', totalsX, doc2.y, { width: 70 });
-      doc2.text(`₹${freightDisplay.toFixed(2)}`, 450, doc2.y - 12, { width: 95, align: 'right' });
-      doc2.moveDown(0.3);
-    }
-    doc2.moveDown(0.2);
-    doc2.font('Helvetica-Bold').fontSize(12);
-    doc2.text('TOTAL:', totalsX, doc2.y, { width: 70 });
-    doc2.text(`₹${(doc.total_amount || 0).toFixed(2)}`, 450, doc2.y - 14, { width: 95, align: 'right' });
 
     // ── Signature -- placed near totals/footer per spec, same fetch/fit/never-crash
     // pattern as the logo embed (Patch: logo-embed, v1.3.276). Right-margin box,
