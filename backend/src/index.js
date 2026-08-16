@@ -2080,6 +2080,16 @@ app.post('/api/tags', async (c) => {
 // FLOW 3A — CUSTOMER CHAT ROUTES
 // ══════════════════════════════════════════════════════════════
 
+// IST-aware date helper -- real bug fixed Aug 2026: raw new Date().toISOString()
+// always extracts the UTC date, not IST. Since IST is UTC+5:30, any invoice
+// created between 12:00 AM and 5:30 AM IST was silently getting stamped with
+// the PREVIOUS day's date. offsetDays supports "N days from now" (due dates).
+function getISTDateString(offsetDays = 0) {
+  const now = new Date();
+  const istShifted = new Date(now.getTime() + (5.5 * 60 * 60 * 1000) + (offsetDays * 86400000));
+  return istShifted.toISOString().split('T')[0];
+}
+
 // Auth + org helper (reusable for chat routes)
 async function authenticateChat(c) {
   const authHeader = c.req.header('Authorization');
@@ -4207,8 +4217,8 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
                 customer_id: customerId,
                 invoice_number: invoiceNumber,
                 status: 'sent',
-                issue_date: new Date().toISOString().split('T')[0],
-                due_date: params.due_date || new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0],
+                issue_date: getISTDateString(),
+                due_date: params.due_date || getISTDateString(7),
                 currency: 'INR',
                 subtotal: totals.subtotal,
                 tax_amount: totals.total_tax,
@@ -4628,8 +4638,8 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
                 customer_id: customerId,
                 quote_number: quoteNumber,
                 status: 'sent',
-                issue_date: new Date().toISOString().split('T')[0],
-                expiry_date: params.due_date || new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
+                issue_date: getISTDateString(),
+                expiry_date: params.due_date || getISTDateString(30),
                 currency: 'INR',
                 subtotal: totals.subtotal,
                 discount_amount: totals.total_discount,
@@ -4753,8 +4763,8 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
                 quotation_id: quoteId,
                 invoice_number: invoiceNumber,
                 status: 'sent',
-                issue_date: new Date().toISOString().split('T')[0],
-                due_date: params.due_date || new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0],
+                issue_date: getISTDateString(),
+                due_date: params.due_date || getISTDateString(7),
                 currency: 'INR',
                 subtotal: quote.subtotal,
                 discount_amount: quote.discount_amount,
@@ -6788,14 +6798,14 @@ app.post('/api/invoices', async (c) => {
       const paymentTerms = customer.custom_fields?.payment_terms || '';
       const match = paymentTerms.match(/(\d+)/);
       const days = match ? parseInt(match[1]) : 7;
-      computedDueDate = new Date(Date.now() + days * 86400000).toISOString().split('T')[0];
+      computedDueDate = getISTDateString(days);
     }
 
     // Create invoice
     const status = body.status || 'sent';
     const { data: newInvoice, error: invErr } = await supabase.from('invoices').insert({
       organisation_id: organisationId, customer_id, invoice_number: invoiceNumber,
-      status, issue_date: new Date().toISOString().split('T')[0], due_date: computedDueDate,
+      status, issue_date: getISTDateString(), due_date: computedDueDate,
       currency: 'INR', subtotal, tax_amount: totalTax, total_amount: totalAmount,
       amount_due: totalAmount, amount_paid: 0,
       custom_fields: {
