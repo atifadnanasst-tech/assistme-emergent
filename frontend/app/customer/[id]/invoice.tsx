@@ -266,13 +266,22 @@ export default function NewInvoiceScreen() {
       console.log('[INVOICE] PDF URL:', pdf.pdf_url);
 
       if (action === 'pdf') {
-        const challanNote = pdf.challan_pdf_url ? `\n\nDelivery Challan also created:\n${pdf.challan_pdf_url}` : '';
-        Alert.alert('PDF Generated', `Invoice ${inv.invoice_number} saved.\nPDF URL: ${pdf.pdf_url || 'Not available'}${challanNote}`);
+        // Real tappable buttons instead of an unclickable raw URL block --
+        // fixed Aug 2026 after Atif caught the popup being unusable.
+        const alertButtons: any[] = [];
+        if (pdf.pdf_url) {
+          alertButtons.push({ text: 'View Invoice', onPress: () => Linking.openURL(pdf.pdf_url) });
+        }
+        if (pdf.challan_pdf_url) {
+          alertButtons.push({ text: 'View Challan', onPress: () => Linking.openURL(pdf.challan_pdf_url) });
+        }
+        alertButtons.push({ text: 'OK' });
+        Alert.alert('PDF Generated', `Invoice ${inv.invoice_number} saved.`, alertButtons);
       } else if (action === 'share') {
         console.log('[INVOICE] Sharing to app...');
         const r3 = await fetch(`${backendUrl}/api/invoices/${inv.invoice_id}/share`, {
           method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ channel: 'app' }),
+          body: JSON.stringify({ channel: 'app', challan_pdf_url: pdf.challan_pdf_url || null }),
         });
         
         if (!r3.ok) {
@@ -292,6 +301,9 @@ export default function NewInvoiceScreen() {
           method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({ channel: 'whatsapp' }),
         });
+        // Note: challan_pdf_url deliberately NOT sent for WhatsApp -- that
+        // channel goes straight to the customer's number, and the backend's
+        // /share endpoint only ever acts on it for channel:'app' anyway.
         
         if (!r3.ok) {
           const err = await r3.text();
