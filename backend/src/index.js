@@ -6840,6 +6840,12 @@ app.post('/api/invoices', async (c) => {
       if (existingInvoices && existingInvoices.length > 0) {
         const prefixRegex = new RegExp('^' + numberPrefix + '(\\d+)');
         existingInvoices.forEach(inv => {
+          // REGRESSION FIXED Aug 2026: introduced by deferred numbering --
+          // a draft's invoice_number is now null, and this scan previously
+          // called .match() on it unconditionally, crashing every single
+          // invoice creation the moment any draft existed in the org's
+          // history. Skip nulls; they never contribute to "max used number".
+          if (!inv.invoice_number) return;
           const match = inv.invoice_number.match(prefixRegex);
           if (match) {
             const num = parseInt(match[1]);
