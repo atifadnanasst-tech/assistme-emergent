@@ -25,7 +25,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator,
-  Linking, Alert, TextInput,
+  Linking, Alert, TextInput, ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams, useFocusEffect } from 'expo-router';
@@ -78,6 +78,12 @@ export default function DocumentsScreen() {
   const [allCustomers, setAllCustomers] = useState<{ id: string; name: string }[]>([]);
   const [selectedCustomerIds, setSelectedCustomerIds] = useState<Set<string>>(new Set());
   const [customerFilterVisible, setCustomerFilterVisible] = useState(false);
+
+  // Sort toggle (Aug 2026, honest fix -- this was planned as part of the
+  // filter follow-up but never actually built when the filter itself
+  // shipped). Newest-first by default, matching the backend's own order;
+  // client-side reverse when toggled, no re-fetch needed.
+  const [sortAscending, setSortAscending] = useState(false);
 
   const getToken = async () => {
     const token = await authService.getAccessToken();
@@ -251,6 +257,9 @@ export default function DocumentsScreen() {
 
   const emptyLabel = { invoice: 'No invoices yet', challan: 'No invoices yet', quote: 'No quotes yet', draft: 'No drafts' }[activeTab];
 
+  const currentData = activeTab === 'invoice' ? invoices : activeTab === 'challan' ? invoices : activeTab === 'quote' ? quotes : drafts;
+  const sortedData = sortAscending ? [...currentData].reverse() : currentData;
+
   return (
     <SafeAreaView style={s.container} edges={['top']}>
       <View style={s.header}>
@@ -269,32 +278,37 @@ export default function DocumentsScreen() {
       </View>
 
       {!isCustomerScoped && (
-        <BottomSheet visible={customerFilterVisible} onDismiss={() => setCustomerFilterVisible(false)} scrollable>
+        <BottomSheet visible={customerFilterVisible} onDismiss={() => setCustomerFilterVisible(false)} scrollable={false}>
           <Text style={{ fontSize: 18, fontWeight: '700', color: '#1A1A1A', marginBottom: 4 }}>Filter by Customer</Text>
-          <Text style={{ fontSize: 13, color: '#999', marginBottom: 16 }}>Select one, several, or none for all customers.</Text>
+          <Text style={{ fontSize: 13, color: '#999', marginBottom: 12 }}>Select one, several, or none for all customers.</Text>
+          {/* Apply pinned above the scrollable list (Aug 2026, Atif's
+              feedback) -- with hundreds of customers, a bottom-anchored
+              button would sit behind a very long scroll. */}
           <TouchableOpacity
-            style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 10 }}
-            onPress={() => setSelectedCustomerIds(new Set())}
-          >
-            <Ionicons name={selectedCustomerIds.size === 0 ? 'checkbox' : 'square-outline'} size={20} color="#075E54" />
-            <Text style={{ marginLeft: 10, fontSize: 14, fontWeight: '700', color: '#075E54' }}>All Customers</Text>
-          </TouchableOpacity>
-          {allCustomers.map(cust => (
-            <TouchableOpacity
-              key={cust.id}
-              style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 10 }}
-              onPress={() => toggleCustomerFilter(cust.id)}
-            >
-              <Ionicons name={selectedCustomerIds.has(cust.id) ? 'checkbox' : 'square-outline'} size={20} color="#075E54" />
-              <Text style={{ marginLeft: 10, fontSize: 14, color: '#1A1A1A' }}>{cust.name}</Text>
-            </TouchableOpacity>
-          ))}
-          <TouchableOpacity
-            style={{ marginTop: 16, backgroundColor: '#075E54', paddingVertical: 12, borderRadius: 10, alignItems: 'center' }}
+            style={{ marginBottom: 12, backgroundColor: '#075E54', paddingVertical: 12, borderRadius: 10, alignItems: 'center' }}
             onPress={() => setCustomerFilterVisible(false)}
           >
             <Text style={{ color: '#FFFFFF', fontWeight: '700', fontSize: 14 }}>Apply</Text>
           </TouchableOpacity>
+          <ScrollView style={{ maxHeight: 400 }} showsVerticalScrollIndicator={false}>
+            <TouchableOpacity
+              style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 10 }}
+              onPress={() => setSelectedCustomerIds(new Set())}
+            >
+              <Ionicons name={selectedCustomerIds.size === 0 ? 'checkbox' : 'square-outline'} size={20} color="#075E54" />
+              <Text style={{ marginLeft: 10, fontSize: 14, fontWeight: '700', color: '#075E54' }}>All Customers</Text>
+            </TouchableOpacity>
+            {allCustomers.map(cust => (
+              <TouchableOpacity
+                key={cust.id}
+                style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 10 }}
+                onPress={() => toggleCustomerFilter(cust.id)}
+              >
+                <Ionicons name={selectedCustomerIds.has(cust.id) ? 'checkbox' : 'square-outline'} size={20} color="#075E54" />
+                <Text style={{ marginLeft: 10, fontSize: 14, color: '#1A1A1A' }}>{cust.name}</Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
         </BottomSheet>
       )}
 
@@ -304,13 +318,16 @@ export default function DocumentsScreen() {
             <Text style={[s.tabText, activeTab === t.key && s.tabTextActive]}>{t.label}{t.count > 0 ? ` (${t.count})` : ''}</Text>
           </TouchableOpacity>
         ))}
+        <TouchableOpacity style={{ paddingHorizontal: 12, justifyContent: 'center' }} onPress={() => setSortAscending(!sortAscending)}>
+          <Ionicons name={sortAscending ? 'arrow-up' : 'arrow-down'} size={18} color="#075E54" />
+        </TouchableOpacity>
       </View>
 
       {loading ? (
         <ActivityIndicator style={{ marginTop: 40 }} color="#075E54" />
       ) : (
         <FlatList
-          data={activeTab === 'invoice' ? invoices : activeTab === 'challan' ? invoices : activeTab === 'quote' ? quotes : drafts}
+          data={sortedData}
           keyExtractor={(item: any) => item.id}
           renderItem={activeTab === 'invoice' ? renderInvoiceRow : activeTab === 'challan' ? renderChallanRow : activeTab === 'quote' ? renderQuoteRow : renderDraftRow}
           ListEmptyComponent={<Text style={s.emptyText}>{emptyLabel}</Text>}
