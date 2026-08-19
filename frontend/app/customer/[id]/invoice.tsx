@@ -70,6 +70,9 @@ export default function NewInvoiceScreen() {
   const [items, setItems] = useState<LineItem[]>([]);
   const [packingHandling, setPackingHandling] = useState(0);
   const [addingItem, setAddingItem] = useState(false);
+  // Editable line items (Aug 2026, Atif's feedback) -- null means adding a
+  // NEW item; a number means editing the item at that index instead.
+  const [editingItemIndex, setEditingItemIndex] = useState<number | null>(null);
   const [selectedProductId, setSelectedProductId] = useState('');
   const [productSearchQuery, setProductSearchQuery] = useState('');
   const quantityInputRef = useRef<TextInput>(null);
@@ -249,12 +252,22 @@ export default function NewInvoiceScreen() {
     const discount = parseFloat(newDiscount) || 0;
     const lineSubtotal = qty * price;
     const lineTotal = Math.round((lineSubtotal - (lineSubtotal * discount / 100)) * 100) / 100;
-    setItems(prev => [...prev, {
+    const newLine = {
       product_id: product.id, product_name: product.name, hsn_code: newHsn || product.hsn_code,
       quantity: qty, unit_price: price, tax_rate: product.tax_rate, discount_pct: discount, line_total: lineTotal,
-    }]);
-    // Stay open (no setAddingItem(false)) -- ready for the next line immediately,
-    // matching Atif's "no unnecessary click" spec. Reset fields for a fresh entry.
+    };
+    if (editingItemIndex !== null) {
+      // Editing an existing line (Aug 2026) -- replace in place instead of
+      // appending. Real friction point Atif found resuming a draft: no way
+      // to change an existing line's quantity/price without delete+re-add.
+      setItems(prev => prev.map((it, idx) => idx === editingItemIndex ? newLine : it));
+      setEditingItemIndex(null);
+      setAddingItem(false);
+    } else {
+      setItems(prev => [...prev, newLine]);
+      // Stay open (no setAddingItem(false)) -- ready for the next line immediately,
+      // matching Atif's "no unnecessary click" spec.
+    }
     setSelectedProductId(''); setNewQty(''); setNewPrice(''); setNewDiscount(''); setNewHsn(''); setAiSuggestion(null);
   };
 
@@ -630,7 +643,18 @@ export default function NewInvoiceScreen() {
         {/* Items */}
         <Text style={s.sectionLabel}>ITEMS</Text>
         {items.map((item, i) => (
-          <View key={i} style={s.itemRow}>
+          <TouchableOpacity
+            key={i} style={s.itemRow}
+            onPress={() => {
+              setEditingItemIndex(i);
+              setSelectedProductId(item.product_id);
+              setNewQty(item.quantity.toString());
+              setNewPrice(item.unit_price.toString());
+              setNewDiscount((item.discount_pct || 0).toString());
+              setNewHsn(item.hsn_code || '');
+              setAddingItem(true);
+            }}
+          >
             <View style={{ flex: 1 }}>
               <Text style={s.itemName}>{item.product_name}</Text>
               <Text style={s.itemDetail}>{item.quantity} × {fmt(item.unit_price)}</Text>
@@ -638,7 +662,7 @@ export default function NewInvoiceScreen() {
             </View>
             <Text style={s.itemTotal}>{fmt(item.line_total)}</Text>
             <TouchableOpacity onPress={() => handleRemoveItem(i)}><Text style={s.removeBtn}>×</Text></TouchableOpacity>
-          </View>
+          </TouchableOpacity>
         ))}
 
         {addingItem && (
@@ -691,8 +715,8 @@ export default function NewInvoiceScreen() {
             <TouchableOpacity onPress={handleAiSuggestion}><Text style={s.aiSuggestLink}>✦ See AI Suggestion</Text></TouchableOpacity>
             {aiSuggestion && <Text style={s.aiSuggestText}>{aiSuggestion}</Text>}
             <View style={s.selectorBtns}>
-              <TouchableOpacity onPress={() => { setAddingItem(false); setAiSuggestion(null); }}><Text style={s.cancelText}>Cancel</Text></TouchableOpacity>
-              <TouchableOpacity style={s.addToListBtn} onPress={handleAddItem}><Text style={s.addToListText}>Add to List</Text></TouchableOpacity>
+              <TouchableOpacity onPress={() => { setAddingItem(false); setEditingItemIndex(null); setAiSuggestion(null); setSelectedProductId(''); setNewQty(''); setNewPrice(''); setNewDiscount(''); setNewHsn(''); }}><Text style={s.cancelText}>Cancel</Text></TouchableOpacity>
+              <TouchableOpacity style={s.addToListBtn} onPress={handleAddItem}><Text style={s.addToListText}>{editingItemIndex !== null ? 'Update' : 'Add to List'}</Text></TouchableOpacity>
             </View>
           </View>
         )}

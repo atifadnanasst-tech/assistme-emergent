@@ -22,13 +22,13 @@
  * logic (confirmed reusable as-is, subtask B).
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator,
   Linking, Alert, TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter, useLocalSearchParams } from 'expo-router';
+import { useRouter, useLocalSearchParams, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { authService } from '../lib/auth';
 
@@ -95,7 +95,11 @@ export default function DocumentsScreen() {
     } catch {} finally { setLoading(false); }
   };
 
-  useEffect(() => { loadDocuments(); }, [params.customer_id]);
+  // Fixed Aug 2026 (Atif's feedback): plain useEffect only ran once on
+  // mount, so returning here after resuming+editing a draft elsewhere
+  // showed stale data (old amounts, old counts) until a manual reload.
+  // useFocusEffect re-runs this every time the screen regains focus.
+  useFocusEffect(useCallback(() => { loadDocuments(); }, [params.customer_id]));
 
   const openPdf = (url: string | null) => {
     if (!url) return;

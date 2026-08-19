@@ -2260,6 +2260,9 @@ export default function CustomerChatScreen() {
     { divider: true },
     { icon: 'document-text-outline', label: 'Create quote', action: () => { setMenuVisible(false); router.push(`/customer/${customer_id}/quote`); } },
     { icon: 'receipt-outline', label: 'Create invoice', action: () => { setMenuVisible(false); router.push(`/customer/${customer_id}/invoice`); } },
+    // Unified Documents surface subtask I (Aug 2026): moved here per
+    // Atif's feedback -- logically belongs right next to Create invoice.
+    { icon: 'document-text-outline', label: 'Documents', action: () => { setMenuVisible(false); router.push(`/documents?customer_id=${customer_id}`); } },
     { icon: 'alarm-outline', label: 'Set payment reminder', action: () => { setMenuVisible(false); } },
     { icon: 'cash-outline', label: 'Record payment', action: () => { setMenuVisible(false); } },
     { divider: true },
@@ -2299,9 +2302,6 @@ export default function CustomerChatScreen() {
     // ===== TEMP SESSION 6C END =====
     { divider: true },
     { icon: 'business-outline', label: 'Business Details', action: () => { setMenuVisible(false); router.push(`/customer/${customer_id}/business-profile`); } },
-    // Unified Documents surface subtask I (Aug 2026): real entry point,
-    // replacing the temporary test link. Customer-scoped -- filter locked.
-    { icon: 'document-text-outline', label: 'Documents', action: () => { setMenuVisible(false); router.push(`/documents?customer_id=${customer_id}`); } },
     { icon: 'settings-outline', label: 'Set reminder rules', action: () => { setMenuVisible(false); } },
     { icon: 'language-outline', label: 'Set language', action: () => { setMenuVisible(false); } },
     { icon: 'options-outline', label: 'Customer preference', action: () => { setMenuVisible(false); } },
