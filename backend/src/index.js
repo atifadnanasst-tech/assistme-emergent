@@ -6966,6 +6966,17 @@ app.post('/api/invoices/:invoice_id/pdf', async (c) => {
         goodsDescription = orgProfile?.default_goods_category || '';
       }
 
+      // SECOND-LAYER BUG FIXED Aug 2026: the earlier filename-collision fix
+      // solved the file-overwrite issue, but the invoice card's "View PDF"
+      // was STILL showing the challan -- root cause: both the invoice's own
+      // attachment row and the challan's attachment row shared the identical
+      // entity_type:'invoice' + entity_id:invoiceId, so the share flow's
+      // "most recent attachment for this invoice" query picked up the
+      // challan's row instead, since it's inserted chronologically after.
+      // Giving the challan its own distinct entity_type excludes it from
+      // that query entirely -- confirmed safe, nothing else reads the
+      // challan's attachment row via this table (its URL is already tracked
+      // separately via challan_pdf_url and the owner_only chat card_data).
       challanPdfUrl = await generateDocumentPDF({
         documentId: invoiceId,
         organisationId,
@@ -6973,7 +6984,7 @@ app.post('/api/invoices/:invoice_id/pdf', async (c) => {
         documentNumber: invoice.invoice_number,
         title: 'DELIVERY CHALLAN',
         storageBucket: 'invoices',
-        entityType: 'invoice',
+        entityType: 'delivery_challan',
         pdfVariant: 'challan',
         transportName: body.transport_name || null,
         bundleCount: body.bundle_count || null,
