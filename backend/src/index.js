@@ -6801,6 +6801,106 @@ app.post('/api/customer/:customer_id/addresses', async (c) => {
   }
 });
 
+// ─── GET /api/documents (Aug 2026) ──────────────────────────
+// Unified documents surface, subtask A. Backs the customer-scoped
+// "Documents" screen (customer_id query param, filter pre-locked) AND the
+// org-wide Home version (no customer_id, optional customer_ids for
+// multi-select filtering) -- same endpoint, same shape, scope is the only
+// difference. Returns four groups: invoices (finalized only, each flagged
+// with has_challan/challan_pdf_url so the SAME array backs both the
+// Invoice tab and the Challan tab client-side), quotes, and drafts.
+app.get('/api/documents', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+
+    const customerId = c.req.query('customer_id');
+    const customerIdsParam = c.req.query('customer_ids');
+    const customerIds = customerIdsParam ? customerIdsParam.split(',').filter(Boolean) : null;
+
+    const applyScope = (query) => {
+      if (customerId) return query.eq('customer_id', customerId);
+      if (customerIds && customerIds.length > 0) return query.in('customer_id', customerIds);
+      return query;
+    };
+
+    // Finalized invoices
+    let invQuery = supabase.from('invoices')
+      .select('id, invoice_number, customer_id, total_amount, issue_date, status, customers(name)')
+      .eq('organisation_id', organisationId)
+      .neq('status', 'draft')
+      .order('issue_date', { ascending: false })
+      .limit(200);
+    const { data: invoiceRows } = await applyScope(invQuery);
+
+    // Challan attachments for these invoices -- distinct entity_type,
+    // confirmed safe from the earlier filename-collision + entity_type fix.
+    const invoiceIds = (invoiceRows || []).map(i => i.id);
+    let challanMap = {};
+    if (invoiceIds.length > 0) {
+      const { data: challanAttachments } = await supabase
+        .from('attachments')
+        .select('entity_id, public_url, created_at')
+        .eq('organisation_id', organisationId)
+        .eq('entity_type', 'delivery_challan')
+        .in('entity_id', invoiceIds)
+        .order('created_at', { ascending: false });
+      (challanAttachments || []).forEach(a => {
+        if (!challanMap[a.entity_id]) challanMap[a.entity_id] = a.public_url;
+      });
+    }
+
+    const invoices = (invoiceRows || []).map(i => ({
+      id: i.id,
+      invoice_number: i.invoice_number,
+      customer_id: i.customer_id,
+      customer_name: i.customers?.name || 'Customer',
+      total_amount: i.total_amount,
+      issue_date: i.issue_date,
+      has_challan: !!challanMap[i.id],
+      challan_pdf_url: challanMap[i.id] || null,
+    }));
+
+    // Quotes -- own path, no create-from-here action per Atif's spec.
+    let quoteQuery = supabase.from('quotations')
+      .select('id, quote_number, customer_id, total_amount, issue_date, customers(name)')
+      .eq('organisation_id', organisationId)
+      .order('issue_date', { ascending: false })
+      .limit(200);
+    const { data: quoteRows } = await applyScope(quoteQuery);
+    const quotes = (quoteRows || []).map(q => ({
+      id: q.id,
+      quote_number: q.quote_number,
+      customer_id: q.customer_id,
+      customer_name: q.customers?.name || 'Customer',
+      total_amount: q.total_amount,
+      issue_date: q.issue_date,
+    }));
+
+    // Drafts -- never have a real invoice_number (deferred numbering).
+    let draftQuery = supabase.from('invoices')
+      .select('id, customer_id, total_amount, created_at, customers(name)')
+      .eq('organisation_id', organisationId)
+      .eq('status', 'draft')
+      .order('created_at', { ascending: false })
+      .limit(200);
+    const { data: draftRows } = await applyScope(draftQuery);
+    const drafts = (draftRows || []).map(d => ({
+      id: d.id,
+      customer_id: d.customer_id,
+      customer_name: d.customers?.name || 'Customer',
+      total_amount: d.total_amount,
+      created_at: d.created_at,
+    }));
+
+    return c.json({ invoices, quotes, drafts });
+  } catch (err) {
+    console.error('[GET /api/documents] Error:', err.message);
+    return c.json({ error: 'internal_error' }, 500);
+  }
+});
+
 // ─── POST /api/invoices ─────────────────────────────────────
 app.post('/api/invoices', async (c) => {
   try {
