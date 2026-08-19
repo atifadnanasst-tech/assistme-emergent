@@ -4,7 +4,7 @@ import {
   ActivityIndicator, Alert, Linking, KeyboardAvoidingView, Platform, Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter, useLocalSearchParams } from 'expo-router';
+import { useRouter, useLocalSearchParams, useNavigation } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../../contexts/AuthContext';
 import { supabase } from '../../../lib/supabase';
@@ -82,6 +82,35 @@ export default function NewInvoiceScreen() {
   };
 
   useEffect(() => { loadForm(); }, [id]);
+
+  // "Save as draft?" prompt on back-navigation (Aug 2026, #13/14 subtask 4).
+  // Nothing to prompt for if the screen is untouched (no items yet) or if
+  // the invoice has already been finalized/saved this visit (createdInvoice
+  // set) -- reuses the exact same state the Create-button-disable fix
+  // already tracks, no new tracking needed.
+  const navigation = useNavigation();
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('beforeRemove', (e: any) => {
+      if (items.length === 0 || createdInvoice) return;
+      e.preventDefault();
+      Alert.alert(
+        'Save as draft?',
+        'You have unsaved changes on this invoice. Do you want to save it as a draft before leaving?',
+        [
+          { text: "Don't Save", style: 'destructive', onPress: () => navigation.dispatch(e.data.action) },
+          { text: 'Cancel', style: 'cancel', onPress: () => {} },
+          {
+            text: 'Save Draft',
+            onPress: async () => {
+              await handleSaveDraft();
+              navigation.dispatch(e.data.action);
+            },
+          },
+        ]
+      );
+    });
+    return unsubscribe;
+  }, [navigation, items, createdInvoice]);
 
   // Delivery Challan goods-category reuse history (Aug 2026) -- fetch once
   // when the checkbox is first checked, not on every screen load, since
