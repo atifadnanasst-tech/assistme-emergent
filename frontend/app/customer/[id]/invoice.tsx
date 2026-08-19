@@ -21,13 +21,18 @@ const DELIVERY_PREF_OPTIONS = ['Standard Delivery', 'Express Delivery', 'Custome
 
 export default function NewInvoiceScreen() {
   const router = useRouter();
-  const params = useLocalSearchParams<{ id: string; items?: string; amount?: string; due_date?: string; draft_id?: string; action_id?: string }>();
+  const params = useLocalSearchParams<{ id: string; items?: string; amount?: string; due_date?: string; draft_id?: string; action_id?: string; resume_draft_id?: string }>();
   const id = params.id;
   const { setIsAuthenticated } = useAuth();
 
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState<string | null>(null);
   const [createdInvoice, setCreatedInvoice] = useState<{ id: string; number: string } | null>(null);
+  // Unified Documents surface subtask H (Aug 2026): resuming a draft.
+  // Distinct from createdInvoice -- this tracks "editing an EXISTING,
+  // still-unfinished draft" (Create button stays enabled), not "already
+  // finalized this visit" (Create button disables).
+  const [resumeDraftId, setResumeDraftId] = useState<string | null>(null);
   const [orgName, setOrgName] = useState('');
   const [orgGstinState, setOrgGstinState] = useState('');
   const [businessModalVisible, setBusinessModalVisible] = useState(false);
@@ -156,6 +161,40 @@ export default function NewInvoiceScreen() {
       setProducts(data.products || []);
       if (data.prefilled_items?.length > 0) setItems(data.prefilled_items);
 
+      // Resume a draft (Aug 2026, Unified Documents subtask H). Runs
+      // AFTER base data + products load, same ordering as the Spark-items
+      // block below, since matching tax_rate needs the products list.
+      if (params.resume_draft_id) {
+        try {
+          const draftRes = await fetch(`${backendUrl}/api/invoices/${params.resume_draft_id}/draft`, {
+            headers: { 'Authorization': `Bearer ${token}` },
+          });
+          if (draftRes.ok) {
+            const draft = await draftRes.json();
+            setResumeDraftId(draft.invoice_id);
+            const resumedItems: LineItem[] = (draft.items || []).map((di: any) => {
+              const match = (data.products || []).find((p: Product) => p.id === di.product_id);
+              return {
+                product_id: di.product_id,
+                product_name: di.product_name,
+                hsn_code: di.hsn_code,
+                quantity: di.quantity,
+                unit_price: di.unit_price,
+                tax_rate: match?.tax_rate || 0,
+                discount_pct: di.discount_pct || 0,
+                line_total: di.quantity * di.unit_price,
+              };
+            });
+            setItems(resumedItems);
+            setPackingHandling(draft.packing_handling || 0);
+            setInvoiceType(draft.invoice_type || 'Tax Invoice');
+            setPoNumber(draft.po_number || '');
+          } else {
+            Alert.alert('Error', 'Could not load this draft. It may have already been finalized.');
+          }
+        } catch (e) { console.warn('Failed to load draft:', e); }
+      }
+
       // Populate from Spark params if passed via URL
       if (params.items) {
         try {
@@ -280,6 +319,7 @@ export default function NewInvoiceScreen() {
             customer_id: customerId,
             items: items.map(i => ({ product_id: i.product_id, quantity: i.quantity, unit_price: i.unit_price, discount_pct: i.discount_pct, hsn_code: i.hsn_code })),
             packing_handling: packingHandling, invoice_type: invoiceType, po_number: poNumber || null,
+            existing_invoice_id: resumeDraftId || undefined,
             // Fixed Aug 2026 (#13/14 subtask 3): Create/Share/WhatsApp all
             // finalize immediately by design -- Save Draft (a separate
             // function entirely) is the ONLY path that ever sends 'draft'.
@@ -420,6 +460,7 @@ export default function NewInvoiceScreen() {
           customer_id: customerId,
           items: items.map(i => ({ product_id: i.product_id, quantity: i.quantity, unit_price: i.unit_price, discount_pct: i.discount_pct, hsn_code: i.hsn_code })),
           packing_handling: packingHandling, invoice_type: invoiceType, status: 'draft',
+          existing_invoice_id: resumeDraftId || undefined,
         }),
       });
       Alert.alert('Saved', 'Draft saved ✓');
