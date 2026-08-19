@@ -251,7 +251,12 @@ export default function NewInvoiceScreen() {
             customer_id: customerId,
             items: items.map(i => ({ product_id: i.product_id, quantity: i.quantity, unit_price: i.unit_price, discount_pct: i.discount_pct, hsn_code: i.hsn_code })),
             packing_handling: packingHandling, invoice_type: invoiceType, po_number: poNumber || null,
-            status: action === 'pdf' ? 'draft' : 'sent',
+            // Fixed Aug 2026 (#13/14 subtask 3): Create/Share/WhatsApp all
+            // finalize immediately by design -- Save Draft (a separate
+            // function entirely) is the ONLY path that ever sends 'draft'.
+            // This was previously sending 'draft' for the 'pdf' (Create)
+            // action, silently contradicting what the button promised.
+            status: 'sent',
           }),
         });
 
