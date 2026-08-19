@@ -3081,6 +3081,12 @@ async function generateDocumentPDF({ documentId, organisationId, documentType, d
 
     const PDFDocument = (await import('pdfkit')).default;
     const doc2 = new PDFDocument({ size: 'A4', margin: 50 });
+    // Real ₹ symbol fix (Aug 2026) -- PDFKit's built-in Helvetica lacks the
+    // Indian Rupee glyph (U+20B9, added to Unicode in 2010, after the
+    // classic base-14 PDF fonts were defined). Verified via actual PDF
+    // text-extraction round-trip before shipping, not assumed to work.
+    doc2.registerFont('NotoSans', __dirname + '/assets/fonts/NotoSans-Regular.ttf');
+    doc2.registerFont('NotoSans-Bold', __dirname + '/assets/fonts/NotoSans-Bold.ttf');
     const chunks = [];
     doc2.on('data', chunk => chunks.push(chunk));
     const pdfReady = new Promise((resolve) => doc2.on('end', resolve));
@@ -3116,8 +3122,8 @@ async function generateDocumentPDF({ documentId, organisationId, documentType, d
     }
 
     const businessName = biz.business_name || org?.name || 'Business';
-    doc2.fontSize(18).font('Helvetica-Bold').text(businessName, { align: 'center' });
-    if (biz.gstin) doc2.fontSize(9).font('Helvetica').text(`GSTIN: ${biz.gstin}`, { align: 'center' });
+    doc2.fontSize(18).font('NotoSans-Bold').text(businessName, { align: 'center' });
+    if (biz.gstin) doc2.fontSize(9).font('NotoSans').text(`GSTIN: ${biz.gstin}`, { align: 'center' });
     const addressParts = [biz.address_line1, biz.address_line2, biz.city, biz.state, biz.postal_code].filter(Boolean);
     if (addressParts.length > 0) doc2.fontSize(9).text(addressParts.join(', '), { align: 'center' });
     if (biz.phone) doc2.fontSize(9).text(`Phone: ${biz.phone}`, { align: 'center' });
@@ -3126,9 +3132,9 @@ async function generateDocumentPDF({ documentId, organisationId, documentType, d
     doc2.moveDown(0.3);
 
     // ── Document title and number
-    doc2.fontSize(14).font('Helvetica-Bold').text(title, { align: 'center' });
+    doc2.fontSize(14).font('NotoSans-Bold').text(title, { align: 'center' });
     doc2.moveDown(0.3);
-    doc2.fontSize(10).font('Helvetica').text(`${documentType === 'invoice' ? 'Invoice' : 'Quote'} #: ${documentNumber}`, { align: 'right' });
+    doc2.fontSize(10).font('NotoSans').text(`${documentType === 'invoice' ? 'Invoice' : 'Quote'} #: ${documentNumber}`, { align: 'right' });
     doc2.text(`Date: ${doc.issue_date}`, { align: 'right' });
     if (doc.due_date) doc2.text(`${documentType === 'invoice' ? 'Due' : 'Valid Until'}: ${doc.due_date || doc.expiry_date}`, { align: 'right' });
     doc2.moveDown(0.5);
@@ -3136,9 +3142,9 @@ async function generateDocumentPDF({ documentId, organisationId, documentType, d
     // ── Bill To -- customer.company falls back to customer.name only when
     // the official business name has never been set (spec Part 2/5 rule).
     // Order: name, then address, then GSTIN (GSTIN moved below address Jun 19).
-    doc2.fontSize(11).font('Helvetica-Bold').text('BILL TO:');
+    doc2.fontSize(11).font('NotoSans-Bold').text('BILL TO:');
     const customerDisplayName = (customer?.company && customer.company.trim()) || customer?.name || '';
-    doc2.font('Helvetica').fontSize(10).text(customerDisplayName);
+    doc2.font('NotoSans').fontSize(10).text(customerDisplayName);
     if (customerBillingAddress) {
       const addrParts = [
         customerBillingAddress.line1,
@@ -3160,19 +3166,19 @@ async function generateDocumentPDF({ documentId, organisationId, documentType, d
       // description, transport name. Three-tier goodsDescription resolution
       // (per-challan override -> invoice's own product categories -> org's
       // default_goods_category) happens in the CALLER, passed in already-resolved.
-      doc2.font('Helvetica').fontSize(11);
+      doc2.font('NotoSans').fontSize(11);
       doc2.text(`${bundleCount || '-'} Bundles`, { align: 'center' });
       doc2.moveDown(0.5);
-      doc2.font('Helvetica-Bold').fontSize(16);
+      doc2.font('NotoSans-Bold').fontSize(16);
       doc2.text((goodsDescription || '').toUpperCase(), { align: 'center' });
       doc2.moveDown(1);
-      doc2.font('Helvetica').fontSize(10);
+      doc2.font('NotoSans').fontSize(10);
       doc2.text(`Transport: ${transportName || '-'}`);
       doc2.moveDown(1);
     } else {
       // ── Items table header
       const tableTop = doc2.y;
-      doc2.font('Helvetica-Bold').fontSize(9);
+      doc2.font('NotoSans-Bold').fontSize(9);
       doc2.text('#', 50, tableTop, { width: 20 });
       doc2.text('Item', 75, tableTop, { width: 200 });
       doc2.text('Qty', 280, tableTop, { width: 40, align: 'right' });
@@ -3184,7 +3190,7 @@ async function generateDocumentPDF({ documentId, organisationId, documentType, d
       doc2.moveDown(0.3);
 
       // ── Items
-      doc2.font('Helvetica').fontSize(9);
+      doc2.font('NotoSans').fontSize(9);
       (items || []).forEach((item, i) => {
         const y = doc2.y;
         doc2.text(`${i + 1}`, 50, y, { width: 20 });
@@ -3196,9 +3202,9 @@ async function generateDocumentPDF({ documentId, organisationId, documentType, d
         doc2.moveDown(0.5);
         // HSN + Discount sub-line -- always shown (placeholder if none), matching
         // the app screen's own always-visible pattern. Added Aug 2026.
-        doc2.font('Helvetica').fontSize(7).fillColor('#666');
+        doc2.font('NotoSans').fontSize(7).fillColor('#666');
         doc2.text(`HSN: ${item.hsn_code || '-'}   Discount: ${item.discount_pct || 0}%`, 75, doc2.y, { width: 300 });
-        doc2.font('Helvetica').fontSize(9).fillColor('#000');
+        doc2.font('NotoSans').fontSize(9).fillColor('#000');
         doc2.moveDown(0.4);
       });
 
@@ -3208,7 +3214,7 @@ async function generateDocumentPDF({ documentId, organisationId, documentType, d
 
       // ── Totals
       const totalsX = 380;
-      doc2.font('Helvetica').fontSize(10);
+      doc2.font('NotoSans').fontSize(10);
       doc2.text('Subtotal:', totalsX, doc2.y, { width: 70 });
       doc2.text(`₹${(doc.subtotal || 0).toFixed(2)}`, 450, doc2.y - 12, { width: 95, align: 'right' });
       doc2.moveDown(0.3);
@@ -3242,7 +3248,7 @@ async function generateDocumentPDF({ documentId, organisationId, documentType, d
         doc2.moveDown(0.3);
       }
       doc2.moveDown(0.2);
-      doc2.font('Helvetica-Bold').fontSize(12);
+      doc2.font('NotoSans-Bold').fontSize(12);
       doc2.text('TOTAL:', totalsX, doc2.y, { width: 70 });
       doc2.text(`₹${(doc.total_amount || 0).toFixed(2)}`, 450, doc2.y - 14, { width: 95, align: 'right' });
     }
@@ -3267,7 +3273,7 @@ async function generateDocumentPDF({ documentId, organisationId, documentType, d
               doc2.moveDown(1);
               doc2.image(sigBuffer, sigX, doc2.y, { fit: [sigWidth, sigHeight], align: 'center', valign: 'center' });
               doc2.y += sigHeight + 4;
-              doc2.fontSize(8).font('Helvetica').text('Authorized Signatory', sigX, doc2.y, { width: sigWidth, align: 'center' });
+              doc2.fontSize(8).font('NotoSans').text('Authorized Signatory', sigX, doc2.y, { width: sigWidth, align: 'center' });
               doc2.moveDown(0.5);
             }
           }
@@ -3288,11 +3294,11 @@ async function generateDocumentPDF({ documentId, organisationId, documentType, d
       // required on that document type, confirmed Aug 2026 (Atif's real
       // reference sample has no bank details, only invoices do).
       doc2.moveDown(1.5);
-      doc2.fontSize(10).font('Helvetica-Bold').text('Bank Details', 50, doc2.y, { width: 495, align: 'left' });
+      doc2.fontSize(10).font('NotoSans-Bold').text('Bank Details', 50, doc2.y, { width: 495, align: 'left' });
       doc2.moveDown(0.3);
       biz.bank_accounts.forEach((acct) => {
         const bankLineTitle = acct.account_holder_name || acct.name;
-        doc2.fontSize(8).font('Helvetica-Bold').text(
+        doc2.fontSize(8).font('NotoSans-Bold').text(
           `${bankLineTitle}${acct.bank_name ? ' — ' + acct.bank_name : ''}`, 50, doc2.y, { width: 495, align: 'left' }
         );
         const lineParts = [];
@@ -3300,7 +3306,7 @@ async function generateDocumentPDF({ documentId, organisationId, documentType, d
         if (acct.ifsc_code) lineParts.push(`IFSC: ${acct.ifsc_code}`);
         if (acct.branch_name) lineParts.push(`Branch: ${acct.branch_name}`);
         if (lineParts.length > 0) {
-          doc2.fontSize(8).font('Helvetica').text(lineParts.join('   '), 50, doc2.y, { width: 495, align: 'left' });
+          doc2.fontSize(8).font('NotoSans').text(lineParts.join('   '), 50, doc2.y, { width: 495, align: 'left' });
         }
         doc2.moveDown(0.3);
       });
@@ -3312,11 +3318,11 @@ async function generateDocumentPDF({ documentId, organisationId, documentType, d
       doc2.moveTo(50, doc2.y).lineTo(545, doc2.y).stroke();
       doc2.moveDown(0.3);
       if (biz.terms_text) {
-        doc2.fontSize(8).font('Helvetica').text(biz.terms_text, 50, doc2.y, { width: 495, align: 'left' });
+        doc2.fontSize(8).font('NotoSans').text(biz.terms_text, 50, doc2.y, { width: 495, align: 'left' });
         doc2.moveDown(0.3);
       }
       if (biz.assistme_strip_text) {
-        doc2.fontSize(8).font('Helvetica').fillColor('#888888').text(biz.assistme_strip_text, 50, doc2.y, { width: 495, align: 'left' });
+        doc2.fontSize(8).font('NotoSans').fillColor('#888888').text(biz.assistme_strip_text, 50, doc2.y, { width: 495, align: 'left' });
         doc2.fillColor('#000000');
       }
     }
