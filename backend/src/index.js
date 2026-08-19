@@ -6902,6 +6902,53 @@ app.get('/api/documents', async (c) => {
 });
 
 // ─── POST /api/invoices ─────────────────────────────────────
+// ─── GET /api/invoices/:invoice_id/draft (Aug 2026) ─────────
+// Unified Documents surface subtask C. Fetches a draft's full data to
+// pre-fill the New Invoice screen for resuming. Returns exactly the same
+// field shape POST /api/invoices accepts, plus display-only extras
+// (customer_name, product_name per item) the form needs to render before
+// its own downstream lookups run.
+app.get('/api/invoices/:invoice_id/draft', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+    const invoiceId = c.req.param('invoice_id');
+
+    const { data: invoice } = await supabase.from('invoices')
+      .select('id, customer_id, status, custom_fields, customers(name)')
+      .eq('id', invoiceId).eq('organisation_id', organisationId).single();
+    if (!invoice) return c.json({ error: 'invoice_not_found' }, 404);
+    if (invoice.status !== 'draft') return c.json({ error: 'not_a_draft' }, 400);
+
+    const { data: itemRows } = await supabase.from('invoice_items')
+      .select('product_id, quantity, unit_price, discount_pct, hsn_code, products(name)')
+      .eq('invoice_id', invoiceId);
+
+    const items = (itemRows || []).map(i => ({
+      product_id: i.product_id,
+      product_name: i.products?.name || 'Product',
+      quantity: i.quantity,
+      unit_price: i.unit_price,
+      discount_pct: i.discount_pct,
+      hsn_code: i.hsn_code,
+    }));
+
+    return c.json({
+      invoice_id: invoice.id,
+      customer_id: invoice.customer_id,
+      customer_name: invoice.customers?.name || 'Customer',
+      items,
+      packing_handling: invoice.custom_fields?.packing_handling ?? null,
+      invoice_type: invoice.custom_fields?.invoice_type || 'Tax Invoice',
+      po_number: invoice.custom_fields?.po_number || null,
+    });
+  } catch (err) {
+    console.error('[GET /api/invoices/:invoice_id/draft] Error:', err.message);
+    return c.json({ error: 'internal_error' }, 500);
+  }
+});
+
 app.post('/api/invoices', async (c) => {
   try {
     const auth = await authenticateChat(c);
