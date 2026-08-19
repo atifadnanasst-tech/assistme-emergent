@@ -6850,8 +6850,17 @@ app.post('/api/invoices', async (c) => {
       return numberPrefix + (maxNum + 1).toString().padStart(3, '0');
     };
 
-    let invoiceNumber = await generateInvoiceNumber();
-    console.log(`📝 [INVOICE] Generated number: ${invoiceNumber} (prefix=${numberPrefix})`);
+    // Deferred numbering (Aug 2026, #13/14): a draft never gets a real
+    // number -- only a finalized invoice (Create/Share Here/WhatsApp, all
+    // of which finalize immediately) does. This is what stops abandoned
+    // drafts from leaving permanent gaps in the real invoice sequence.
+    const isDraftSave = body.status === 'draft';
+    let invoiceNumber = isDraftSave ? null : await generateInvoiceNumber();
+    if (invoiceNumber) {
+      console.log(`📝 [INVOICE] Generated number: ${invoiceNumber} (prefix=${numberPrefix})`);
+    } else {
+      console.log(`📝 [INVOICE] Saved as draft, no number assigned yet.`);
+    }
 
     // Backend recomputes all financials
     let subtotal = 0;
