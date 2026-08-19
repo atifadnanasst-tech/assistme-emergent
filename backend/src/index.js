@@ -6834,20 +6834,26 @@ app.get('/api/documents', async (c) => {
       .limit(200);
     const { data: invoiceRows } = await applyScope(invQuery);
 
-    // Challan attachments for these invoices -- distinct entity_type,
-    // confirmed safe from the earlier filename-collision + entity_type fix.
+    // Attachments -- both the invoice's OWN pdf_url and its challan's,
+    // distinguished by entity_type ('invoice' vs 'delivery_challan').
+    // GAP FIXED Aug 2026: this endpoint originally only fetched
+    // challan_pdf_url, never the invoice's own pdf_url -- meaning tapping
+    // an Invoice-tab row had nothing to open. Found before shipping, not
+    // after, while building the actual screen that consumes this data.
     const invoiceIds = (invoiceRows || []).map(i => i.id);
     let challanMap = {};
+    let invoicePdfMap = {};
     if (invoiceIds.length > 0) {
-      const { data: challanAttachments } = await supabase
+      const { data: invoiceAttachments } = await supabase
         .from('attachments')
-        .select('entity_id, public_url, created_at')
+        .select('entity_id, entity_type, public_url, created_at')
         .eq('organisation_id', organisationId)
-        .eq('entity_type', 'delivery_challan')
+        .in('entity_type', ['delivery_challan', 'invoice'])
         .in('entity_id', invoiceIds)
         .order('created_at', { ascending: false });
-      (challanAttachments || []).forEach(a => {
-        if (!challanMap[a.entity_id]) challanMap[a.entity_id] = a.public_url;
+      (invoiceAttachments || []).forEach(a => {
+        if (a.entity_type === 'delivery_challan' && !challanMap[a.entity_id]) challanMap[a.entity_id] = a.public_url;
+        if (a.entity_type === 'invoice' && !invoicePdfMap[a.entity_id]) invoicePdfMap[a.entity_id] = a.public_url;
       });
     }
 
@@ -6858,6 +6864,7 @@ app.get('/api/documents', async (c) => {
       customer_name: i.customers?.name || 'Customer',
       total_amount: i.total_amount,
       issue_date: i.issue_date,
+      pdf_url: invoicePdfMap[i.id] || null,
       has_challan: !!challanMap[i.id],
       challan_pdf_url: challanMap[i.id] || null,
     }));
@@ -6869,6 +6876,20 @@ app.get('/api/documents', async (c) => {
       .order('issue_date', { ascending: false })
       .limit(200);
     const { data: quoteRows } = await applyScope(quoteQuery);
+    const quoteIds = (quoteRows || []).map(q => q.id);
+    let quotePdfMap = {};
+    if (quoteIds.length > 0) {
+      const { data: quoteAttachments } = await supabase
+        .from('attachments')
+        .select('entity_id, public_url, created_at')
+        .eq('organisation_id', organisationId)
+        .eq('entity_type', 'quotation')
+        .in('entity_id', quoteIds)
+        .order('created_at', { ascending: false });
+      (quoteAttachments || []).forEach(a => {
+        if (!quotePdfMap[a.entity_id]) quotePdfMap[a.entity_id] = a.public_url;
+      });
+    }
     const quotes = (quoteRows || []).map(q => ({
       id: q.id,
       quote_number: q.quote_number,
@@ -6876,6 +6897,7 @@ app.get('/api/documents', async (c) => {
       customer_name: q.customers?.name || 'Customer',
       total_amount: q.total_amount,
       issue_date: q.issue_date,
+      pdf_url: quotePdfMap[q.id] || null,
     }));
 
     // Drafts -- never have a real invoice_number (deferred numbering).
