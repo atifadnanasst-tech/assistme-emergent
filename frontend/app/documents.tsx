@@ -1,0 +1,268 @@
+/**
+ * AssistMe - Unified Documents Screen
+ * Location: /frontend/app/documents.tsx
+ * Created: Aug 2026 (Unified Documents surface, subtasks E/F/G)
+ *
+ * PURPOSE: Single screen reused in two contexts, scope is the only
+ * difference:
+ * - Customer-scoped: /documents?customer_id=xxx (filter pre-locked, no picker)
+ * - Org-wide: /documents (all customers; multi-select filter to follow as
+ *   an immediate follow-up, per agreed sequencing -- not in this first pass)
+ *
+ * Four tabs: Invoice, Challan, Quote, Draft. Tap behavior:
+ * - Invoice/Quote row -> opens the PDF directly (Linking.openURL)
+ * - Challan row -> "View Challan" if one exists, else an inline "Create
+ *   Challan" expand-in-place mini-form (transport/bundles/description),
+ *   matching Atif's explicit spec: no navigation away, no separate screen.
+ * - Draft row -> navigates into the New Invoice screen with resume_draft_id,
+ *   reusing the resume capability already built and tested (subtask H).
+ *
+ * Backed entirely by GET /api/documents (subtask A, fixed for pdf_url gap)
+ * and the existing POST /api/invoices/:invoice_id/pdf challan-generation
+ * logic (confirmed reusable as-is, subtask B).
+ */
+
+import React, { useState, useEffect } from 'react';
+import {
+  View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator,
+  Linking, Alert, TextInput,
+} from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { useRouter, useLocalSearchParams } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
+import { authService } from '../lib/auth';
+
+type TabType = 'invoice' | 'challan' | 'quote' | 'draft';
+
+interface InvoiceDoc {
+  id: string; invoice_number: string; customer_id: string; customer_name: string;
+  total_amount: number; issue_date: string; pdf_url: string | null;
+  has_challan: boolean; challan_pdf_url: string | null;
+}
+interface QuoteDoc {
+  id: string; quote_number: string; customer_id: string; customer_name: string;
+  total_amount: number; issue_date: string; pdf_url: string | null;
+}
+interface DraftDoc {
+  id: string; customer_id: string; customer_name: string;
+  total_amount: number; created_at: string;
+}
+
+const fmt = (n: number) => `₹${(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const fmtDate = (d: string) => d ? new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
+
+export default function DocumentsScreen() {
+  const router = useRouter();
+  const params = useLocalSearchParams<{ customer_id?: string }>();
+  const isCustomerScoped = !!params.customer_id;
+
+  const [activeTab, setActiveTab] = useState<TabType>('invoice');
+  const [loading, setLoading] = useState(true);
+  const [invoices, setInvoices] = useState<InvoiceDoc[]>([]);
+  const [quotes, setQuotes] = useState<QuoteDoc[]>([]);
+  const [drafts, setDrafts] = useState<DraftDoc[]>([]);
+
+  // Inline "Create Challan" mini-form state (Atif's spec: expand in place,
+  // no navigation, no separate screen).
+  const [challanFormFor, setChallanFormFor] = useState<string | null>(null);
+  const [transportName, setTransportName] = useState('');
+  const [bundleCount, setBundleCount] = useState('');
+  const [goodsDescription, setGoodsDescription] = useState('');
+  const [creatingChallan, setCreatingChallan] = useState(false);
+
+  const getToken = async () => {
+    const token = await authService.getAccessToken();
+    if (!token) { router.replace('/login'); return null; }
+    return token;
+  };
+
+  const loadDocuments = async () => {
+    setLoading(true);
+    try {
+      const token = await getToken();
+      if (!token) return;
+      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+      const qs = params.customer_id ? `?customer_id=${params.customer_id}` : '';
+      const res = await fetch(`${backendUrl}/api/documents${qs}`, {
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setInvoices(data.invoices || []);
+        setQuotes(data.quotes || []);
+        setDrafts(data.drafts || []);
+      }
+    } catch {} finally { setLoading(false); }
+  };
+
+  useEffect(() => { loadDocuments(); }, [params.customer_id]);
+
+  const openPdf = (url: string | null) => {
+    if (!url) return;
+    Linking.openURL(url).catch(() => Alert.alert('Error', 'Could not open PDF'));
+  };
+
+  const handleCreateChallan = async (invoiceId: string) => {
+    setCreatingChallan(true);
+    try {
+      const token = await getToken();
+      if (!token) return;
+      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+      const res = await fetch(`${backendUrl}/api/invoices/${invoiceId}/pdf`, {
+        method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          generate_challan: true,
+          transport_name: transportName || null,
+          bundle_count: bundleCount ? parseInt(bundleCount) : null,
+          goods_description: goodsDescription || null,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setChallanFormFor(null);
+        setTransportName(''); setBundleCount(''); setGoodsDescription('');
+        await loadDocuments();
+        if (data.challan_pdf_url) openPdf(data.challan_pdf_url);
+      } else {
+        Alert.alert('Error', 'Could not create challan. Please try again.');
+      }
+    } catch {
+      Alert.alert('Error', 'Could not create challan. Please try again.');
+    } finally { setCreatingChallan(false); }
+  };
+
+  const tabs: { key: TabType; label: string; count: number }[] = [
+    { key: 'invoice', label: 'Invoice', count: invoices.length },
+    { key: 'challan', label: 'Challan', count: invoices.filter(i => i.has_challan).length },
+    { key: 'quote', label: 'Quote', count: quotes.length },
+    { key: 'draft', label: 'Draft', count: drafts.length },
+  ];
+
+  const renderInvoiceRow = ({ item }: { item: InvoiceDoc }) => (
+    <TouchableOpacity style={s.row} onPress={() => openPdf(item.pdf_url)}>
+      <View style={{ flex: 1 }}>
+        <Text style={s.rowTitle}>{item.invoice_number}</Text>
+        {!isCustomerScoped && <Text style={s.rowSubtitle}>{item.customer_name}</Text>}
+        <Text style={s.rowDate}>{fmtDate(item.issue_date)}</Text>
+      </View>
+      <Text style={s.rowAmount}>{fmt(item.total_amount)}</Text>
+    </TouchableOpacity>
+  );
+
+  const renderChallanRow = ({ item }: { item: InvoiceDoc }) => (
+    <View style={s.row}>
+      <View style={{ flex: 1 }}>
+        <Text style={s.rowTitle}>{item.invoice_number}</Text>
+        {!isCustomerScoped && <Text style={s.rowSubtitle}>{item.customer_name}</Text>}
+        <Text style={s.rowDate}>{fmtDate(item.issue_date)}</Text>
+        {challanFormFor === item.id && (
+          <View style={s.inlineForm}>
+            <TextInput style={s.inlineInput} placeholder="Transport name" placeholderTextColor="#999" value={transportName} onChangeText={setTransportName} />
+            <TextInput style={s.inlineInput} placeholder="Bundles" placeholderTextColor="#999" value={bundleCount} onChangeText={setBundleCount} keyboardType="numeric" />
+            <TextInput style={s.inlineInput} placeholder="Goods description (optional)" placeholderTextColor="#999" value={goodsDescription} onChangeText={setGoodsDescription} />
+            <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
+              <TouchableOpacity style={s.inlineCancelBtn} onPress={() => setChallanFormFor(null)} disabled={creatingChallan}>
+                <Text style={s.inlineCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={s.inlineSubmitBtn} onPress={() => handleCreateChallan(item.id)} disabled={creatingChallan}>
+                {creatingChallan ? <ActivityIndicator size="small" color="#FFF" /> : <Text style={s.inlineSubmitText}>Submit</Text>}
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+      </View>
+      {item.has_challan ? (
+        <TouchableOpacity style={s.actionBtn} onPress={() => openPdf(item.challan_pdf_url)}>
+          <Text style={s.actionBtnText}>View Challan</Text>
+        </TouchableOpacity>
+      ) : challanFormFor !== item.id ? (
+        <TouchableOpacity style={s.actionBtnOutline} onPress={() => setChallanFormFor(item.id)}>
+          <Text style={s.actionBtnOutlineText}>Create Challan</Text>
+        </TouchableOpacity>
+      ) : null}
+    </View>
+  );
+
+  const renderQuoteRow = ({ item }: { item: QuoteDoc }) => (
+    <TouchableOpacity style={s.row} onPress={() => openPdf(item.pdf_url)}>
+      <View style={{ flex: 1 }}>
+        <Text style={s.rowTitle}>{item.quote_number}</Text>
+        {!isCustomerScoped && <Text style={s.rowSubtitle}>{item.customer_name}</Text>}
+        <Text style={s.rowDate}>{fmtDate(item.issue_date)}</Text>
+      </View>
+      <Text style={s.rowAmount}>{fmt(item.total_amount)}</Text>
+    </TouchableOpacity>
+  );
+
+  const renderDraftRow = ({ item }: { item: DraftDoc }) => (
+    <TouchableOpacity style={s.row} onPress={() => router.push(`/customer/${item.customer_id}/invoice?resume_draft_id=${item.id}`)}>
+      <View style={{ flex: 1 }}>
+        <Text style={s.rowTitle}>{!isCustomerScoped ? item.customer_name : 'Draft'}</Text>
+        <Text style={s.rowDate}>{fmtDate(item.created_at)}</Text>
+      </View>
+      <Text style={s.rowAmount}>{fmt(item.total_amount)}</Text>
+      <Ionicons name="chevron-forward" size={18} color="#999" style={{ marginLeft: 8 }} />
+    </TouchableOpacity>
+  );
+
+  const emptyLabel = { invoice: 'No invoices yet', challan: 'No invoices yet', quote: 'No quotes yet', draft: 'No drafts' }[activeTab];
+
+  return (
+    <SafeAreaView style={s.container} edges={['top']}>
+      <View style={s.header}>
+        <TouchableOpacity onPress={() => router.back()}>
+          <Ionicons name="arrow-back" size={24} color="#FFFFFF" />
+        </TouchableOpacity>
+        <Text style={s.headerTitle}>Documents</Text>
+        <View style={{ width: 24 }} />
+      </View>
+
+      <View style={s.tabBar}>
+        {tabs.map(t => (
+          <TouchableOpacity key={t.key} style={[s.tab, activeTab === t.key && s.tabActive]} onPress={() => setActiveTab(t.key)}>
+            <Text style={[s.tabText, activeTab === t.key && s.tabTextActive]}>{t.label}{t.count > 0 ? ` (${t.count})` : ''}</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      {loading ? (
+        <ActivityIndicator style={{ marginTop: 40 }} color="#075E54" />
+      ) : (
+        <FlatList
+          data={activeTab === 'invoice' ? invoices : activeTab === 'challan' ? invoices : activeTab === 'quote' ? quotes : drafts}
+          keyExtractor={(item: any) => item.id}
+          renderItem={activeTab === 'invoice' ? renderInvoiceRow : activeTab === 'challan' ? renderChallanRow : activeTab === 'quote' ? renderQuoteRow : renderDraftRow}
+          ListEmptyComponent={<Text style={s.emptyText}>{emptyLabel}</Text>}
+          contentContainerStyle={{ paddingBottom: 20 }}
+        />
+      )}
+    </SafeAreaView>
+  );
+}
+
+const s = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#F5F5F5' },
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#075E54', paddingHorizontal: 16, paddingVertical: 14 },
+  headerTitle: { fontSize: 18, fontWeight: '700', color: '#FFFFFF' },
+  tabBar: { flexDirection: 'row', backgroundColor: '#FFFFFF', borderBottomWidth: 1, borderBottomColor: '#E0E0E0' },
+  tab: { flex: 1, paddingVertical: 12, alignItems: 'center', borderBottomWidth: 2, borderBottomColor: 'transparent' },
+  tabActive: { borderBottomColor: '#075E54' },
+  tabText: { fontSize: 13, fontWeight: '600', color: '#999' },
+  tabTextActive: { color: '#075E54' },
+  row: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFFFFF', paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#F0F0F0' },
+  rowTitle: { fontSize: 15, fontWeight: '700', color: '#1A1A1A' },
+  rowSubtitle: { fontSize: 13, color: '#555', marginTop: 2 },
+  rowDate: { fontSize: 12, color: '#999', marginTop: 2 },
+  rowAmount: { fontSize: 15, fontWeight: '700', color: '#1A1A1A' },
+  actionBtn: { backgroundColor: '#E8F5E9', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8 },
+  actionBtnText: { fontSize: 12, fontWeight: '700', color: '#075E54' },
+  actionBtnOutline: { borderWidth: 1, borderColor: '#075E54', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8 },
+  actionBtnOutlineText: { fontSize: 12, fontWeight: '700', color: '#075E54' },
+  emptyText: { textAlign: 'center', color: '#999', marginTop: 40, fontSize: 14 },
+  inlineForm: { marginTop: 10, gap: 8 },
+  inlineInput: { borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8, fontSize: 13, color: '#1A1A1A', backgroundColor: '#FAFAFA' },
+  inlineCancelBtn: { flex: 1, paddingVertical: 10, borderRadius: 8, borderWidth: 1, borderColor: '#E0E0E0', alignItems: 'center' },
+  inlineCancelText: { fontSize: 13, fontWeight: '600', color: '#666' },
+  inlineSubmitBtn: { flex: 1, paddingVertical: 10, borderRadius: 8, backgroundColor: '#075E54', alignItems: 'center' },
+  inlineSubmitText: { fontSize: 13, fontWeight: '700', color: '#FFFFFF' },
+});

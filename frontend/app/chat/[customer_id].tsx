@@ -2299,29 +2299,9 @@ export default function CustomerChatScreen() {
     // ===== TEMP SESSION 6C END =====
     { divider: true },
     { icon: 'business-outline', label: 'Business Details', action: () => { setMenuVisible(false); router.push(`/customer/${customer_id}/business-profile`); } },
-    // TEMPORARY test entry point (Aug 2026) -- resumes this customer's
-    // most recent draft directly, to close the test loop on subtask H
-    // before the real Unified Documents screen (subtask E/F/G/I) exists.
-    // To be REMOVED and replaced once that screen is built.
-    { icon: 'document-outline', label: 'Resume Draft (test)', action: async () => {
-      setMenuVisible(false);
-      try {
-        const token = await getToken();
-        if (!token) return;
-        const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
-        const res = await fetch(`${backendUrl}/api/documents?customer_id=${customer_id}`, {
-          headers: { 'Authorization': `Bearer ${token}` },
-        });
-        if (res.ok) {
-          const data = await res.json();
-          if (data.drafts && data.drafts.length > 0) {
-            router.push(`/customer/${customer_id}/invoice?resume_draft_id=${data.drafts[0].id}`);
-          } else {
-            Alert.alert('No Drafts', 'This customer has no saved drafts.');
-          }
-        }
-      } catch {}
-    } },
+    // Unified Documents surface subtask I (Aug 2026): real entry point,
+    // replacing the temporary test link. Customer-scoped -- filter locked.
+    { icon: 'document-text-outline', label: 'Documents', action: () => { setMenuVisible(false); router.push(`/documents?customer_id=${customer_id}`); } },
     { icon: 'settings-outline', label: 'Set reminder rules', action: () => { setMenuVisible(false); } },
     { icon: 'language-outline', label: 'Set language', action: () => { setMenuVisible(false); } },
     { icon: 'options-outline', label: 'Customer preference', action: () => { setMenuVisible(false); } },

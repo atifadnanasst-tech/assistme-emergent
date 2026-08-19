@@ -927,7 +927,7 @@ export default function HomeScreen() {
         <Ionicons name={fabExpanded ? 'close' : 'add'} size={28} color="#FFFFFF" />
       </TouchableOpacity>
 
-      <Text style={{ textAlign: "center", fontSize: 10, color: "#CCC", paddingVertical: 2 }}>v1.3.467</Text>
+      <Text style={{ textAlign: "center", fontSize: 10, color: "#CCC", paddingVertical: 2 }}>v1.3.468</Text>
       {/* Bottom Navigation SafeAreaView */}
       <SafeAreaView style={styles.bottomNavSafeArea} edges={['bottom']}>
         <View style={styles.bottomNav}>
@@ -998,6 +998,19 @@ export default function HomeScreen() {
             >
               <Ionicons name="stats-chart-outline" size={20} color="#667781" />
               <Text style={styles.menuItemText}>Dashboard</Text>
+            </TouchableOpacity>
+            {/* Unified Documents surface subtask I (Aug 2026): org-wide
+                entry point. No customer_id -- shows all customers, multi-
+                select filter to follow as an immediate follow-up. */}
+            <TouchableOpacity
+              style={styles.menuItem}
+              onPress={() => {
+                setShowThreeDotMenu(false);
+                router.push('/documents');
+              }}
+            >
+              <Ionicons name="document-text-outline" size={20} color="#667781" />
+              <Text style={styles.menuItemText}>Documents</Text>
             </TouchableOpacity>
             <View style={[styles.menuItem, styles.comingSoonRow]}>
               <Ionicons name="megaphone-outline" size={20} color="#B0B0B0" />
