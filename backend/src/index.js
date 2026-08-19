@@ -1949,6 +1949,17 @@ app.post('/api/customers', async (c) => {
 
     if (existing) {
       console.log('[ADD CUSTOMER] Duplicate found:', existing.id);
+      // "Unhide" mechanism (Aug 2026, ATT list): re-adding an existing
+      // contact's phone number already correctly routes into their same
+      // conversation (frontend treats 201/409 identically). This makes
+      // that same action also un-hide it, by resetting status back to
+      // 'active' -- reusing the existing status='active' filter already
+      // enforced on /api/home, no new unhide UI/endpoint needed at all.
+      await supabase.from('conversations')
+        .update({ status: 'active' })
+        .eq('organisation_id', organisationId)
+        .eq('entity_type', 'customer')
+        .eq('entity_id', existing.id);
       return c.json({ error: 'duplicate', customer_id: existing.id }, 409);
     }
 
@@ -1992,6 +2003,39 @@ app.post('/api/customers', async (c) => {
   } catch (err) {
     console.error('[ADD CUSTOMER] Error:', err);
     return c.json({ error: 'server_error' }, 500);
+  }
+});
+
+// ─── Hide conversations from Home (Aug 2026) ─────────────────
+// Deliberately "hide", not delete -- sets conversation status to
+// 'archived', reusing the already-documented rule that /api/home only
+// ever returns status='active' conversations. Nothing about the
+// customer/invoices/balance is touched; fully reversible by re-adding
+// the same contact (see the duplicate-detection branch above).
+app.patch('/api/customers/hide', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+    const body = await c.req.json();
+    const customerIds = body.customer_ids;
+    if (!Array.isArray(customerIds) || customerIds.length === 0) {
+      return c.json({ error: 'missing_customer_ids' }, 400);
+    }
+    const { error } = await supabase
+      .from('conversations')
+      .update({ status: 'archived' })
+      .eq('organisation_id', organisationId)
+      .eq('entity_type', 'customer')
+      .in('entity_id', customerIds);
+    if (error) {
+      console.error('[PATCH /api/customers/hide] Error:', error.message);
+      return c.json({ error: 'internal_error' }, 500);
+    }
+    return c.json({ hidden: customerIds.length });
+  } catch (err) {
+    console.error('[PATCH /api/customers/hide] Error:', err.message);
+    return c.json({ error: 'internal_error' }, 500);
   }
 });
 
