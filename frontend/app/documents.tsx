@@ -31,6 +31,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { authService } from '../lib/auth';
+import BottomSheet from '../components/primitives/BottomSheet';
 
 type TabType = 'invoice' | 'challan' | 'quote' | 'draft';
 
@@ -70,6 +71,14 @@ export default function DocumentsScreen() {
   const [goodsDescription, setGoodsDescription] = useState('');
   const [creatingChallan, setCreatingChallan] = useState(false);
 
+  // Org-wide multi-select customer filter (Aug 2026, immediate follow-up
+  // per agreed sequencing). Empty set = "All" -- matches Atif's own spec
+  // ("or don't select at all, it is for all"). Only relevant when NOT
+  // customer-scoped; the customer-scoped view has nothing to filter.
+  const [allCustomers, setAllCustomers] = useState<{ id: string; name: string }[]>([]);
+  const [selectedCustomerIds, setSelectedCustomerIds] = useState<Set<string>>(new Set());
+  const [customerFilterVisible, setCustomerFilterVisible] = useState(false);
+
   const getToken = async () => {
     const token = await authService.getAccessToken();
     if (!token) { router.replace('/login'); return null; }
@@ -82,7 +91,12 @@ export default function DocumentsScreen() {
       const token = await getToken();
       if (!token) return;
       const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
-      const qs = params.customer_id ? `?customer_id=${params.customer_id}` : '';
+      let qs = '';
+      if (params.customer_id) {
+        qs = `?customer_id=${params.customer_id}`;
+      } else if (selectedCustomerIds.size > 0) {
+        qs = `?customer_ids=${Array.from(selectedCustomerIds).join(',')}`;
+      }
       const res = await fetch(`${backendUrl}/api/documents${qs}`, {
         headers: { 'Authorization': `Bearer ${token}` },
       });
@@ -99,7 +113,33 @@ export default function DocumentsScreen() {
   // mount, so returning here after resuming+editing a draft elsewhere
   // showed stale data (old amounts, old counts) until a manual reload.
   // useFocusEffect re-runs this every time the screen regains focus.
-  useFocusEffect(useCallback(() => { loadDocuments(); }, [params.customer_id]));
+  useFocusEffect(useCallback(() => { loadDocuments(); }, [params.customer_id, selectedCustomerIds]));
+
+  // Fetch the customer list once for the filter picker -- only needed in
+  // org-wide mode, no point fetching it when the scope is already locked.
+  useEffect(() => {
+    if (isCustomerScoped) return;
+    (async () => {
+      try {
+        const token = await getToken();
+        if (!token) return;
+        const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+        const res = await fetch(`${backendUrl}/api/customers`, { headers: { 'Authorization': `Bearer ${token}` } });
+        if (res.ok) {
+          const data = await res.json();
+          setAllCustomers(data.customers || []);
+        }
+      } catch {}
+    })();
+  }, []);
+
+  const toggleCustomerFilter = (id: string) => {
+    setSelectedCustomerIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
 
   const openPdf = (url: string | null) => {
     if (!url) return;
@@ -218,8 +258,45 @@ export default function DocumentsScreen() {
           <Ionicons name="arrow-back" size={24} color="#FFFFFF" />
         </TouchableOpacity>
         <Text style={s.headerTitle}>Documents</Text>
-        <View style={{ width: 24 }} />
+        {isCustomerScoped ? (
+          <View style={{ width: 24 }} />
+        ) : (
+          <TouchableOpacity onPress={() => setCustomerFilterVisible(true)} style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+            <Ionicons name="filter" size={20} color="#FFFFFF" />
+            {selectedCustomerIds.size > 0 && <Text style={{ color: '#FFFFFF', fontSize: 12, fontWeight: '700' }}>{selectedCustomerIds.size}</Text>}
+          </TouchableOpacity>
+        )}
       </View>
+
+      {!isCustomerScoped && (
+        <BottomSheet visible={customerFilterVisible} onDismiss={() => setCustomerFilterVisible(false)} scrollable>
+          <Text style={{ fontSize: 18, fontWeight: '700', color: '#1A1A1A', marginBottom: 4 }}>Filter by Customer</Text>
+          <Text style={{ fontSize: 13, color: '#999', marginBottom: 16 }}>Select one, several, or none for all customers.</Text>
+          <TouchableOpacity
+            style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 10 }}
+            onPress={() => setSelectedCustomerIds(new Set())}
+          >
+            <Ionicons name={selectedCustomerIds.size === 0 ? 'checkbox' : 'square-outline'} size={20} color="#075E54" />
+            <Text style={{ marginLeft: 10, fontSize: 14, fontWeight: '700', color: '#075E54' }}>All Customers</Text>
+          </TouchableOpacity>
+          {allCustomers.map(cust => (
+            <TouchableOpacity
+              key={cust.id}
+              style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 10 }}
+              onPress={() => toggleCustomerFilter(cust.id)}
+            >
+              <Ionicons name={selectedCustomerIds.has(cust.id) ? 'checkbox' : 'square-outline'} size={20} color="#075E54" />
+              <Text style={{ marginLeft: 10, fontSize: 14, color: '#1A1A1A' }}>{cust.name}</Text>
+            </TouchableOpacity>
+          ))}
+          <TouchableOpacity
+            style={{ marginTop: 16, backgroundColor: '#075E54', paddingVertical: 12, borderRadius: 10, alignItems: 'center' }}
+            onPress={() => setCustomerFilterVisible(false)}
+          >
+            <Text style={{ color: '#FFFFFF', fontWeight: '700', fontSize: 14 }}>Apply</Text>
+          </TouchableOpacity>
+        </BottomSheet>
+      )}
 
       <View style={s.tabBar}>
         {tabs.map(t => (
