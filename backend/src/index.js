@@ -6821,28 +6821,37 @@ app.post('/api/invoices', async (c) => {
     // stays gapless even though Internal invoices never enter that report.
     // Design: owner marks intent at creation time (Aug 2026, ATT GST report).
     const numberPrefix = invoice_type === 'Internal' ? 'INT-' : 'INV-';
-    const { data: existingInvoices } = await supabase
-      .from('invoices')
-      .select('invoice_number')
-      .eq('organisation_id', organisationId)
-      .order('created_at', { ascending: false })
-      .limit(100);
-    
-    let maxNum = 0;
-    if (existingInvoices && existingInvoices.length > 0) {
-      const prefixRegex = new RegExp('^' + numberPrefix + '(\\d+)');
-      existingInvoices.forEach(inv => {
-        const match = inv.invoice_number.match(prefixRegex);
-        if (match) {
-          const num = parseInt(match[1]);
-          if (num > maxNum) maxNum = num;
-        }
-      });
-    }
-    
-    const seqNum = maxNum + 1;
-    const invoiceNumber = numberPrefix + seqNum.toString().padStart(3, '0');
-    console.log(`📝 [INVOICE] Generated number: ${invoiceNumber} (max was ${maxNum}, prefix=${numberPrefix})`);
+
+    // Extracted into a reusable function (Aug 2026) -- called again by the
+    // retry-on-conflict loop below if a collision occurs. The scan itself
+    // is still not perfectly atomic in isolation, but the real correctness
+    // guarantee now comes from the DB-level UNIQUE(organisation_id,
+    // invoice_number) constraint -- this retry is what makes a rare
+    // collision recover gracefully instead of surfacing a raw DB error.
+    const generateInvoiceNumber = async () => {
+      const { data: existingInvoices } = await supabase
+        .from('invoices')
+        .select('invoice_number')
+        .eq('organisation_id', organisationId)
+        .order('created_at', { ascending: false })
+        .limit(100);
+
+      let maxNum = 0;
+      if (existingInvoices && existingInvoices.length > 0) {
+        const prefixRegex = new RegExp('^' + numberPrefix + '(\\d+)');
+        existingInvoices.forEach(inv => {
+          const match = inv.invoice_number.match(prefixRegex);
+          if (match) {
+            const num = parseInt(match[1]);
+            if (num > maxNum) maxNum = num;
+          }
+        });
+      }
+      return numberPrefix + (maxNum + 1).toString().padStart(3, '0');
+    };
+
+    let invoiceNumber = await generateInvoiceNumber();
+    console.log(`📝 [INVOICE] Generated number: ${invoiceNumber} (prefix=${numberPrefix})`);
 
     // Backend recomputes all financials
     let subtotal = 0;
@@ -6935,19 +6944,36 @@ app.post('/api/invoices', async (c) => {
       computedDueDate = getISTDateString(days);
     }
 
-    // Create invoice
+    // Create invoice -- retry on invoice_number collision (real race
+    // condition fix, Aug 2026). The UNIQUE(organisation_id, invoice_number)
+    // DB constraint is what actually GUARANTEES no duplicate ever gets
+    // saved; this loop is what makes a rare collision recover gracefully
+    // (regenerate + retry) instead of surfacing a raw DB error to the user.
     const status = body.status || 'sent';
-    const { data: newInvoice, error: invErr } = await supabase.from('invoices').insert({
-      organisation_id: organisationId, customer_id, invoice_number: invoiceNumber,
-      status, issue_date: getISTDateString(), due_date: computedDueDate,
-      currency: 'INR', subtotal, tax_amount: totalTax, total_amount: totalAmount,
-      amount_due: totalAmount, amount_paid: 0,
-      custom_fields: {
-        invoice_type: invoice_type || 'Tax Invoice', po_number: po_number || null,
-        packing_handling: packingHandling, freight_tax: freightTax,
-        cgst_amount: cgstTotal, sgst_amount: sgstTotal, igst_amount: igstTotal,
-      },
-    }).select('id').single();
+    let newInvoice, invErr;
+    const MAX_INVOICE_NUMBER_RETRIES = 5;
+    for (let attempt = 0; attempt < MAX_INVOICE_NUMBER_RETRIES; attempt++) {
+      const result = await supabase.from('invoices').insert({
+        organisation_id: organisationId, customer_id, invoice_number: invoiceNumber,
+        status, issue_date: getISTDateString(), due_date: computedDueDate,
+        currency: 'INR', subtotal, tax_amount: totalTax, total_amount: totalAmount,
+        amount_due: totalAmount, amount_paid: 0,
+        custom_fields: {
+          invoice_type: invoice_type || 'Tax Invoice', po_number: po_number || null,
+          packing_handling: packingHandling, freight_tax: freightTax,
+          cgst_amount: cgstTotal, sgst_amount: sgstTotal, igst_amount: igstTotal,
+        },
+      }).select('id').single();
+      newInvoice = result.data;
+      invErr = result.error;
+      if (!invErr) break;
+      if (invErr.code === '23505') {
+        console.warn(`[INVOICE] Number collision on ${invoiceNumber}, retrying (attempt ${attempt + 1}/${MAX_INVOICE_NUMBER_RETRIES})`);
+        invoiceNumber = await generateInvoiceNumber();
+        continue;
+      }
+      break;
+    }
 
     if (invErr) { console.error('Create invoice error:', invErr); return c.json({ error: 'server_error', detail: invErr.message }, 500); }
 
