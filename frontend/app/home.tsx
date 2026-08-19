@@ -11,6 +11,7 @@ import {
   Modal,
   Pressable,
   TextInput,
+  Alert,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, useNavigation, useFocusEffect } from 'expo-router';
@@ -97,6 +98,46 @@ export default function HomeScreen() {
   const [showThreeDotMenu, setShowThreeDotMenu] = useState(false);
   // ── Header Search, Tier 1 (Home Menu Audit) ──
   const [searchActive, setSearchActive] = useState(false);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [hiding, setHiding] = useState(false);
+
+  // Hide (not delete) selected conversations from Home -- Aug 2026.
+  // Fully reversible by re-adding the same contact (existing add-contact
+  // flow already correctly routes into the same conversation and resets
+  // status back to active). Never touches customers/invoices/balance.
+  const handleHideSelected = async () => {
+    if (selectedIds.size === 0) return;
+    setHiding(true);
+    try {
+      const token = await authService.getAccessToken();
+      if (!token) return;
+      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+      const res = await fetch(`${backendUrl}/api/customers/hide`, {
+        method: 'PATCH', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ customer_ids: Array.from(selectedIds) }),
+      });
+      if (res.ok) {
+        setSelectionMode(false);
+        setSelectedIds(new Set());
+        homeQuery.refetch();
+      } else {
+        Alert.alert('Error', 'Could not hide. Please try again.');
+      }
+    } catch {
+      Alert.alert('Error', 'Could not hide. Please try again.');
+    } finally {
+      setHiding(false);
+    }
+  };
+
+  const toggleSelected = (customerId: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(customerId)) next.delete(customerId); else next.add(customerId);
+      return next;
+    });
+  };
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<Array<{ id: string; name: string; phone: string | null; company: string | null; outstanding_balance: number }>>([]);
   const [searching, setSearching] = useState(false);
@@ -493,12 +534,25 @@ export default function HomeScreen() {
   const renderConversationItem = ({ item }: { item: Conversation }) => (
     <TouchableOpacity
       style={styles.conversationRow}
-      onPress={() => router.push(`/chat/${item.customer_id}`)}
+      onPress={() => {
+        if (selectionMode) { toggleSelected(item.customer_id); return; }
+        router.push(`/chat/${item.customer_id}`);
+      }}
+      onLongPress={() => {
+        if (!selectionMode) setSelectionMode(true);
+        toggleSelected(item.customer_id);
+      }}
     >
-      {/* Avatar */}
-      <View style={[styles.avatar, { backgroundColor: item.avatar_color }]}>
-        <Text style={styles.avatarText}>{item.initials}</Text>
-      </View>
+      {/* Avatar (or selection checkmark, when in selection mode) */}
+      {selectionMode ? (
+        <View style={[styles.avatar, { backgroundColor: selectedIds.has(item.customer_id) ? '#075E54' : '#E0E0E0', alignItems: 'center', justifyContent: 'center' }]}>
+          {selectedIds.has(item.customer_id) && <Ionicons name="checkmark" size={22} color="#FFFFFF" />}
+        </View>
+      ) : (
+        <View style={[styles.avatar, { backgroundColor: item.avatar_color }]}>
+          <Text style={styles.avatarText}>{item.initials}</Text>
+        </View>
+      )}
 
       {/* Content */}
       <View style={styles.conversationContent}>
@@ -587,7 +641,17 @@ export default function HomeScreen() {
       {/* Header SafeAreaView */}
       <SafeAreaView style={styles.headerSafeArea} edges={['top']}>
         <View style={styles.header}>
-          {searchActive ? (
+          {selectionMode ? (
+            <View style={styles.searchBarRow}>
+              <TouchableOpacity onPress={() => { setSelectionMode(false); setSelectedIds(new Set()); }} style={styles.headerIcon}>
+                <Ionicons name="close" size={24} color="#FFFFFF" />
+              </TouchableOpacity>
+              <Text style={[styles.headerTitle, { flex: 1, marginLeft: 12 }]}>{selectedIds.size} selected</Text>
+              <TouchableOpacity onPress={handleHideSelected} disabled={hiding || selectedIds.size === 0} style={styles.headerIcon}>
+                {hiding ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Ionicons name="eye-off-outline" size={24} color="#FFFFFF" />}
+              </TouchableOpacity>
+            </View>
+          ) : searchActive ? (
             // Header Search, Tier 1 (Home Menu Audit) — WhatsApp-style: title
             // area replaced by an input while search is active.
             <View style={styles.searchBarRow}>
@@ -863,7 +927,7 @@ export default function HomeScreen() {
         <Ionicons name={fabExpanded ? 'close' : 'add'} size={28} color="#FFFFFF" />
       </TouchableOpacity>
 
-      <Text style={{ textAlign: "center", fontSize: 10, color: "#CCC", paddingVertical: 2 }}>v1.3.462</Text>
+      <Text style={{ textAlign: "center", fontSize: 10, color: "#CCC", paddingVertical: 2 }}>v1.3.463</Text>
       {/* Bottom Navigation SafeAreaView */}
       <SafeAreaView style={styles.bottomNavSafeArea} edges={['bottom']}>
         <View style={styles.bottomNav}>
