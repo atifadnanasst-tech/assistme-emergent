@@ -3085,8 +3085,12 @@ async function generateDocumentPDF({ documentId, organisationId, documentType, d
     // Indian Rupee glyph (U+20B9, added to Unicode in 2010, after the
     // classic base-14 PDF fonts were defined). Verified via actual PDF
     // text-extraction round-trip before shipping, not assumed to work.
-    doc2.registerFont('NotoSans', __dirname + '/assets/fonts/NotoSans-Regular.ttf');
-    doc2.registerFont('NotoSans-Bold', __dirname + '/assets/fonts/NotoSans-Bold.ttf');
+    // Path bug fixed immediately after the previous commit -- __dirname
+    // resolves to backend/src/ (index.js's own directory), but the font
+    // files live at backend/assets/fonts/, one level up from src/. Needed
+    // ../ to go up from src/ to backend/ before descending into assets/.
+    doc2.registerFont('NotoSans', __dirname + '/../assets/fonts/NotoSans-Regular.ttf');
+    doc2.registerFont('NotoSans-Bold', __dirname + '/../assets/fonts/NotoSans-Bold.ttf');
     const chunks = [];
     doc2.on('data', chunk => chunks.push(chunk));
     const pdfReady = new Promise((resolve) => doc2.on('end', resolve));
