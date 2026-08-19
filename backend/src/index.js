@@ -6956,6 +6956,9 @@ app.post('/api/invoices', async (c) => {
     const { userId, organisationId } = auth;
     const body = await c.req.json();
     const { customer_id, items, packing_handling, due_date, invoice_type, po_number } = body;
+    // Unified Documents surface subtask D (Aug 2026): resuming a draft
+    // updates that SAME row in place instead of creating a new one.
+    const existingInvoiceId = body.existing_invoice_id || null;
 
     if (!customer_id || !items || items.length === 0) return c.json({ error: 'missing_fields' }, 400);
     const customer = await validateCustomer(customer_id, organisationId);
@@ -7114,27 +7117,69 @@ app.post('/api/invoices', async (c) => {
     const status = body.status || 'sent';
     let newInvoice, invErr;
     const MAX_INVOICE_NUMBER_RETRIES = 5;
-    for (let attempt = 0; attempt < MAX_INVOICE_NUMBER_RETRIES; attempt++) {
-      const result = await supabase.from('invoices').insert({
-        organisation_id: organisationId, customer_id, invoice_number: invoiceNumber,
-        status, issue_date: getISTDateString(), due_date: computedDueDate,
-        currency: 'INR', subtotal, tax_amount: totalTax, total_amount: totalAmount,
-        amount_due: totalAmount, amount_paid: 0,
-        custom_fields: {
-          invoice_type: invoice_type || 'Tax Invoice', po_number: po_number || null,
-          packing_handling: packingHandling, freight_tax: freightTax,
-          cgst_amount: cgstTotal, sgst_amount: sgstTotal, igst_amount: igstTotal,
-        },
-      }).select('id').single();
-      newInvoice = result.data;
-      invErr = result.error;
-      if (!invErr) break;
-      if (invErr.code === '23505') {
-        console.warn(`[INVOICE] Number collision on ${invoiceNumber}, retrying (attempt ${attempt + 1}/${MAX_INVOICE_NUMBER_RETRIES})`);
-        invoiceNumber = await generateInvoiceNumber();
-        continue;
+
+    if (existingInvoiceId) {
+      // Resuming a draft (Aug 2026, Unified Documents subtask D). Verify
+      // it's genuinely still a draft before touching it -- a finalized
+      // invoice must never be silently rewritten (matches the immutability
+      // policy already confirmed for finalized invoices).
+      const { data: draftCheck } = await supabase.from('invoices')
+        .select('id, status').eq('id', existingInvoiceId).eq('organisation_id', organisationId).single();
+      if (!draftCheck || draftCheck.status !== 'draft') {
+        return c.json({ error: 'not_a_draft_or_not_found' }, 400);
       }
-      break;
+      for (let attempt = 0; attempt < MAX_INVOICE_NUMBER_RETRIES; attempt++) {
+        const result = await supabase.from('invoices').update({
+          customer_id, invoice_number: invoiceNumber,
+          status, issue_date: getISTDateString(), due_date: computedDueDate,
+          subtotal, tax_amount: totalTax, total_amount: totalAmount,
+          amount_due: totalAmount,
+          custom_fields: {
+            invoice_type: invoice_type || 'Tax Invoice', po_number: po_number || null,
+            packing_handling: packingHandling, freight_tax: freightTax,
+            cgst_amount: cgstTotal, sgst_amount: sgstTotal, igst_amount: igstTotal,
+          },
+        }).eq('id', existingInvoiceId).select('id').single();
+        newInvoice = result.data;
+        invErr = result.error;
+        if (!invErr) break;
+        if (invErr.code === '23505') {
+          console.warn(`[INVOICE] Number collision on ${invoiceNumber} while updating draft, retrying (attempt ${attempt + 1}/${MAX_INVOICE_NUMBER_RETRIES})`);
+          invoiceNumber = await generateInvoiceNumber();
+          continue;
+        }
+        break;
+      }
+      if (!invErr) {
+        // Replace items entirely -- simpler and safer than diffing which
+        // lines changed, and drafts are low-stakes (never touched
+        // outstanding_balance yet, matching the existing status!=='draft'
+        // gate below).
+        await supabase.from('invoice_items').delete().eq('invoice_id', existingInvoiceId);
+      }
+    } else {
+      for (let attempt = 0; attempt < MAX_INVOICE_NUMBER_RETRIES; attempt++) {
+        const result = await supabase.from('invoices').insert({
+          organisation_id: organisationId, customer_id, invoice_number: invoiceNumber,
+          status, issue_date: getISTDateString(), due_date: computedDueDate,
+          currency: 'INR', subtotal, tax_amount: totalTax, total_amount: totalAmount,
+          amount_due: totalAmount, amount_paid: 0,
+          custom_fields: {
+            invoice_type: invoice_type || 'Tax Invoice', po_number: po_number || null,
+            packing_handling: packingHandling, freight_tax: freightTax,
+            cgst_amount: cgstTotal, sgst_amount: sgstTotal, igst_amount: igstTotal,
+          },
+        }).select('id').single();
+        newInvoice = result.data;
+        invErr = result.error;
+        if (!invErr) break;
+        if (invErr.code === '23505') {
+          console.warn(`[INVOICE] Number collision on ${invoiceNumber}, retrying (attempt ${attempt + 1}/${MAX_INVOICE_NUMBER_RETRIES})`);
+          invoiceNumber = await generateInvoiceNumber();
+          continue;
+        }
+        break;
+      }
     }
 
     if (invErr) { console.error('Create invoice error:', invErr); return c.json({ error: 'server_error', detail: invErr.message }, 500); }
