@@ -64,15 +64,24 @@ if (!supabaseUrl || !supabaseServiceKey || supabaseUrl.includes('your_supabase')
 // add a separate primitive rather than adding a status parameter here.
 //
 async function resolveActiveEntityConversation(organisationId, entityId) {
-  const { data: conversation } = await supabase
+  // BUG FIXED Aug 2026: .maybeSingle() throws when MORE than one row
+  // matches (it expects exactly 0 or 1). Once duplicate active conversations
+  // existed (from the fallback-create bug below), this call started
+  // silently failing on every invocation, its error swallowed by the plain
+  // destructure -- making every caller think "no conversation" and create
+  // yet another one, compounding without bound. Using .limit(1) instead
+  // tolerates any pre-existing duplicates while this data gets cleaned up,
+  // and order by created_at so it deterministically picks the original.
+  const { data: rows } = await supabase
     .from('conversations')
     .select('id')
     .eq('organisation_id', organisationId)
     .eq('entity_type', 'customer')
     .eq('entity_id', entityId)
     .eq('status', 'active')
-    .maybeSingle();
-  return conversation || null;
+    .order('created_at', { ascending: true })
+    .limit(1);
+  return (rows && rows[0]) || null;
 }
 
 // ── markConversationViewed ───────────────────────────────────────────────────
@@ -2223,23 +2232,45 @@ app.get('/api/chat/:customer_id', async (c) => {
     let conversation = await resolveActiveEntityConversation(organisationId, customerId);
 
     if (!conversation) {
-      const { data: newConv, error: createErr } = await supabase
+      // BUG FIXED Aug 2026: "no ACTIVE conversation found" was previously
+      // assumed to always mean "genuinely new customer" -- but a HIDDEN
+      // (archived) conversation also fails the active-only lookup, causing
+      // a stray duplicate to be created every time a hidden customer's
+      // chat is viewed directly (e.g. via search) rather than through the
+      // "re-add to unhide" flow. Now checks for ANY existing conversation
+      // for this entity first and reactivates the oldest one instead.
+      const { data: anyExisting } = await supabase
         .from('conversations')
-        .insert({
-          organisation_id: organisationId,
-          user_id: userId,
-          entity_type: 'customer',
-          entity_id: customerId,
-          model: 'gpt-4o-mini',
-          status: 'active',
-        })
         .select('id')
-        .single();
-      if (createErr) {
-        console.error('Create conversation error:', createErr);
-        return c.json({ error: 'server_error' }, 500);
+        .eq('organisation_id', organisationId)
+        .eq('entity_type', 'customer')
+        .eq('entity_id', customerId)
+        .order('created_at', { ascending: true })
+        .limit(1)
+        .maybeSingle();
+
+      if (anyExisting) {
+        await supabase.from('conversations').update({ status: 'active' }).eq('id', anyExisting.id);
+        conversation = anyExisting;
+      } else {
+        const { data: newConv, error: createErr } = await supabase
+          .from('conversations')
+          .insert({
+            organisation_id: organisationId,
+            user_id: userId,
+            entity_type: 'customer',
+            entity_id: customerId,
+            model: 'gpt-4o-mini',
+            status: 'active',
+          })
+          .select('id')
+          .single();
+        if (createErr) {
+          console.error('Create conversation error:', createErr);
+          return c.json({ error: 'server_error' }, 500);
+        }
+        conversation = newConv;
       }
-      conversation = newConv;
     }
 
     // 3. Fetch messages (only if conversation exists)
@@ -7993,26 +8024,54 @@ async function insertAlert(orgId, convId, content, meta) {
 
 // ── Get or create customer conversation ──────────────────────
 async function getConvForCustomer(orgId, userId, customerId) {
-  let { data: conv } = await supabase.from('conversations').select('id')
-    .eq('organisation_id', orgId).eq('entity_type', 'customer').eq('entity_id', customerId).eq('status', 'active').maybeSingle();
+  // BUG FIXED Aug 2026: same class of bug as resolveActiveEntityConversation
+  // -- .maybeSingle() throws on 2+ matches, silently causing this function
+  // to create a NEW conversation on every call once duplicates existed,
+  // compounding without bound (this is the function the WatchEngine's
+  // overdue-alert job calls, explaining the rapid multiplication observed).
+  const { data: activeRows } = await supabase.from('conversations').select('id')
+    .eq('organisation_id', orgId).eq('entity_type', 'customer').eq('entity_id', customerId).eq('status', 'active')
+    .order('created_at', { ascending: true }).limit(1);
+  let conv = activeRows && activeRows[0];
   if (!conv) {
-    const { data: newConv } = await supabase.from('conversations').insert({
-      organisation_id: orgId, user_id: userId, entity_type: 'customer', entity_id: customerId, model: 'gpt-4o-mini', status: 'active',
-    }).select('id').single();
-    conv = newConv;
+    const { data: anyRows } = await supabase.from('conversations').select('id')
+      .eq('organisation_id', orgId).eq('entity_type', 'customer').eq('entity_id', customerId)
+      .order('created_at', { ascending: true }).limit(1);
+    if (anyRows && anyRows[0]) {
+      await supabase.from('conversations').update({ status: 'active' }).eq('id', anyRows[0].id);
+      conv = anyRows[0];
+    } else {
+      const { data: newConv } = await supabase.from('conversations').insert({
+        organisation_id: orgId, user_id: userId, entity_type: 'customer', entity_id: customerId, model: 'gpt-4o-mini', status: 'active',
+      }).select('id').single();
+      conv = newConv;
+    }
   }
   return conv?.id;
 }
 
 // ── Get global AI conversation ───────────────────────────────
 async function getGlobalConv(orgId, userId) {
-  let { data: conv } = await supabase.from('conversations').select('id')
-    .eq('organisation_id', orgId).is('entity_type', null).eq('status', 'active').maybeSingle();
+  // Same defensive fix as getConvForCustomer, applied here too even though
+  // less likely to have been triggered in practice (org-scoped, not
+  // per-customer) -- same underlying bug class, fixed consistently.
+  const { data: activeRows } = await supabase.from('conversations').select('id')
+    .eq('organisation_id', orgId).is('entity_type', null).eq('status', 'active')
+    .order('created_at', { ascending: true }).limit(1);
+  let conv = activeRows && activeRows[0];
   if (!conv) {
-    const { data: newConv } = await supabase.from('conversations').insert({
-      organisation_id: orgId, user_id: userId, entity_type: null, model: 'gpt-4o-mini', status: 'active',
-    }).select('id').single();
-    conv = newConv;
+    const { data: anyRows } = await supabase.from('conversations').select('id')
+      .eq('organisation_id', orgId).is('entity_type', null)
+      .order('created_at', { ascending: true }).limit(1);
+    if (anyRows && anyRows[0]) {
+      await supabase.from('conversations').update({ status: 'active' }).eq('id', anyRows[0].id);
+      conv = anyRows[0];
+    } else {
+      const { data: newConv } = await supabase.from('conversations').insert({
+        organisation_id: orgId, user_id: userId, entity_type: null, model: 'gpt-4o-mini', status: 'active',
+      }).select('id').single();
+      conv = newConv;
+    }
   }
   return conv?.id;
 }
