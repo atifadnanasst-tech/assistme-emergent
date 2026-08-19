@@ -484,12 +484,12 @@ export default function NewInvoiceScreen() {
         <View style={s.header}>
           <TouchableOpacity onPress={() => router.back()} style={s.headerBtn}><Ionicons name="arrow-back" size={24} color="#FFF" /></TouchableOpacity>
           <Text style={s.headerTitle}>New Invoice</Text>
-          <TouchableOpacity onPress={handleSaveDraft} style={s.saveDraftBtn} disabled={!!submitting}>
-            {submitting === 'draft' ? <ActivityIndicator size="small" color="#A5D6A7" /> : <Text style={s.saveDraftText}>Save Draft</Text>}
+          <TouchableOpacity onPress={handleSaveDraft} style={s.saveDraftBtn} disabled={!!submitting || !!createdInvoice}>
+            {submitting === 'draft' ? <ActivityIndicator size="small" color="#A5D6A7" /> : <Text style={s.saveDraftText}>{createdInvoice ? 'Saved' : 'Save Draft'}</Text>}
           </TouchableOpacity>
         </View>
 
-        <ScrollView style={s.scroll} contentContainerStyle={s.scrollContent}>
+        <ScrollView style={s.scroll} contentContainerStyle={s.scrollContent} keyboardShouldPersistTaps="handled">
         {/* Business Name - NO MARGIN, clickable */}
         <Text style={[s.sectionLabel, { marginTop: 0 }]}>MY BUSINESS NAME</Text>
         <TouchableOpacity style={s.fieldRow} onPress={() => router.push('/settings/profile')} activeOpacity={0.7}>
