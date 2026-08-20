@@ -7236,7 +7236,56 @@ app.get('/api/documents', async (c) => {
       created_at: d.created_at,
     }));
 
-    return c.json({ invoices, quotes, drafts });
+    // Payments -- real payment history, genuinely populated as of this
+    // morning's Payment Recording feature (this table existed before,
+    // but the manual /api/payments endpoint never actually wrote to it
+    // until it was rewired to the canonical recordPayment() service).
+    let paymentQuery = supabase.from('payments')
+      .select('id, invoice_id, customer_id, amount, payment_date, payment_method, created_at, customers(name), invoices(invoice_number)')
+      .eq('organisation_id', organisationId)
+      .order('payment_date', { ascending: false })
+      .limit(200);
+    const { data: paymentRows } = await applyScope(paymentQuery);
+
+    // Advances -- separate table (deliberately never touches invoices or
+    // outstanding_balance), but for THIS tab's purpose ("money the owner
+    // has received"), it belongs alongside regular payments -- Atif's
+    // own spec: "all receipts (payments & advance) can be seen in one
+    // place but card structure will ensure it is seen a little
+    // differently". The type field is what the frontend uses to render
+    // that visual distinction.
+    let advanceQuery = supabase.from('customer_advances')
+      .select('id, customer_id, amount, purpose, received_date, payment_mode, status, customers(name)')
+      .eq('organisation_id', organisationId)
+      .order('received_date', { ascending: false })
+      .limit(200);
+    const { data: advanceRows } = await applyScope(advanceQuery);
+
+    const receipts = [
+      ...(paymentRows || []).map(p => ({
+        type: 'payment',
+        id: p.id,
+        customer_id: p.customer_id,
+        customer_name: p.customers?.name || 'Customer',
+        amount: p.amount,
+        date: p.payment_date,
+        payment_mode: p.payment_method,
+        invoice_number: p.invoices?.invoice_number || null,
+      })),
+      ...(advanceRows || []).map(a => ({
+        type: 'advance',
+        id: a.id,
+        customer_id: a.customer_id,
+        customer_name: a.customers?.name || 'Customer',
+        amount: a.amount,
+        date: a.received_date,
+        payment_mode: a.payment_mode,
+        purpose: a.purpose,
+        status: a.status,
+      })),
+    ].sort((x, y) => (y.date || '').localeCompare(x.date || ''));
+
+    return c.json({ invoices, quotes, drafts, receipts });
   } catch (err) {
     console.error('[GET /api/documents] Error:', err.message);
     return c.json({ error: 'internal_error' }, 500);
