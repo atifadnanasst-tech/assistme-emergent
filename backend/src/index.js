@@ -2942,6 +2942,80 @@ app.get('/api/customer/:customer_id/unpaid-invoices', async (c) => {
   }
 });
 
+// ─── POST /api/customer/:customer_id/advance (Aug 2026) ─────
+// Payment recording subtask 2 -- advances. Deliberately a plain insert
+// into customer_advances, NOT recordPayment() -- an advance is money
+// held for a customer, not yet a payment against anything. Never
+// touches outstanding_balance, invoices, or reminder logic. Applying it
+// later (subtask 3) is what goes through the normal payment path.
+app.post('/api/customer/:customer_id/advance', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+    const customerId = c.req.param('customer_id');
+
+    const body = await c.req.json();
+    const { amount, purpose, received_date, payment_mode } = body;
+
+    if (!amount || typeof amount !== 'number' || amount <= 0) {
+      return c.json({ error: 'invalid_amount' }, 400);
+    }
+
+    const customer = await validateCustomer(customerId, organisationId);
+    if (!customer) return c.json({ error: 'customer_not_found' }, 404);
+
+    const { data: advance, error } = await supabase
+      .from('customer_advances')
+      .insert({
+        organisation_id: organisationId,
+        customer_id: customerId,
+        amount,
+        purpose: purpose || null,
+        received_date: received_date || getISTDateString(),
+        payment_mode: payment_mode || null,
+        status: 'active',
+      })
+      .select('id, amount, purpose, received_date, payment_mode, status')
+      .single();
+
+    if (error) {
+      console.error('[POST /api/customer/:customer_id/advance] Insert error:', error.message);
+      return c.json({ error: 'internal_error' }, 500);
+    }
+
+    return c.json({ advance });
+  } catch (err) {
+    console.error('[POST /api/customer/:customer_id/advance] Error:', err.message);
+    return c.json({ error: 'internal_error' }, 500);
+  }
+});
+
+// ─── GET /api/customer/:customer_id/advances (Aug 2026) ─────
+// Lists this customer's advances with remaining balance still to apply.
+// Backs both the "apply an advance" picker (subtask 3) and the Documents
+// Receipts merge (subtask 4).
+app.get('/api/customer/:customer_id/advances', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+    const customerId = c.req.param('customer_id');
+
+    const { data: advances } = await supabase
+      .from('customer_advances')
+      .select('id, amount, amount_applied, amount_remaining, purpose, received_date, payment_mode, status')
+      .eq('organisation_id', organisationId)
+      .eq('customer_id', customerId)
+      .order('received_date', { ascending: false });
+
+    return c.json({ advances: advances || [] });
+  } catch (err) {
+    console.error('[GET /api/customer/:customer_id/advances] Error:', err.message);
+    return c.json({ error: 'internal_error' }, 500);
+  }
+});
+
 
 // ──────────────────────────────────────────────────────────────
 // calculateInvoiceTotals — SINGLE SOURCE OF TRUTH FOR ALL FINANCIAL MATH
