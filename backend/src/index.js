@@ -2868,84 +2868,42 @@ app.post('/api/payments', async (c) => {
     const { organisationId } = auth;
 
     const body = await c.req.json();
-    const { customer_id, invoice_id, amount, payment_date } = body;
+    const { customer_id, invoice_id, amount, payment_date, payment_mode } = body;
 
-    if (!customer_id || !invoice_id || !amount) {
+    if (!customer_id || !amount) {
       return c.json({ error: 'missing_fields' }, 400);
     }
     if (typeof amount !== 'number' || amount <= 0) {
       return c.json({ error: 'invalid_amount' }, 400);
     }
 
-    // Validate customer
     const customer = await validateCustomer(customer_id, organisationId);
     if (!customer) return c.json({ error: 'customer_not_found' }, 404);
 
-    // Validate invoice
-    const { data: invoice } = await supabase
-      .from('invoices')
-      .select('id, total_amount, amount_paid, status')
-      .eq('id', invoice_id)
-      .eq('organisation_id', organisationId)
-      .maybeSingle();
+    // REWIRED Aug 2026 -- this endpoint previously had its own separate,
+    // incomplete duplicate logic (no payments row ever created, payment_mode
+    // silently dropped, no reminder resolution). Now calls the canonical
+    // recordPayment() service, the SAME function Spark's own record_payment
+    // flow already uses -- matching the file's own header comment
+    // ("current dead route, now activated") that was never actually
+    // completed until now. invoice_id is optional: pass a specific invoice
+    // to target it, or omit it to auto-allocate across unpaid invoices
+    // oldest-first, identical to how Spark itself behaves.
+    const result = await recordPayment(
+      supabase, organisationId, customer_id, amount,
+      payment_date || null, payment_mode || null, invoice_id || null
+    );
 
-    if (!invoice) return c.json({ error: 'invoice_not_found' }, 404);
-    if (invoice.status === 'paid') return c.json({ error: 'invoice_already_paid' }, 400);
-
-    const maxPayable = (invoice.total_amount || 0) - (invoice.amount_paid || 0);
-    if (amount > maxPayable) {
-      return c.json({ error: 'amount_exceeds_due', max_payable: maxPayable }, 400);
-    }
-
-    // Step 1: Update invoice (MUST succeed before touching customer balance)
-    const newAmountPaid = (invoice.amount_paid || 0) + amount;
-    const newStatus = newAmountPaid >= (invoice.total_amount || 0) ? 'paid' : 'partial';
-
-    const { error: invoiceErr } = await supabase
-      .from('invoices')
-      .update({ amount_paid: newAmountPaid, status: newStatus })
-      .eq('id', invoice_id)
-      .eq('organisation_id', organisationId);
-
-    if (invoiceErr) {
-      console.error('Invoice update failed:', invoiceErr);
-      return c.json({ error: 'server_error', message: 'Failed to update invoice' }, 500);
-    }
-
-    // Step 2: Update customer balance (only after invoice update succeeds)
-    let balanceWarning = null;
-    const newBalance = Math.max(0, (customer.outstanding_balance || 0) - amount);
-
-    const { error: balanceErr } = await supabase
-      .from('customers')
-      .update({ outstanding_balance: newBalance })
-      .eq('id', customer_id)
-      .eq('organisation_id', organisationId);
-
-    if (balanceErr) {
-      console.error('Customer balance update failed:', balanceErr);
-      balanceWarning = 'Invoice updated but customer balance sync failed. Please verify manually.';
-    }
-
-    // Step 3: Record payment pattern in entity_memory
-    try {
-      await supabase.from('entity_memory').insert({
-        organisation_id: organisationId,
-        entity_type: 'customer',
-        entity_id: customer_id,
-        memory_key: 'last_payment_amount',
-        memory_value: amount.toString(),
-        confidence: 1.0,
-      });
-    } catch (memErr) {
-      console.warn('entity_memory write failed:', memErr.message);
+    if (result.status === 'failed') {
+      return c.json({ error: result.error || 'payment_failed', detail: result }, 400);
     }
 
     return c.json({
-      payment_id: invoice_id,
-      new_status: newStatus,
-      new_balance: newBalance,
-      warning: balanceWarning,
+      status: result.status,
+      operation_id: result.operation_id,
+      events: result.events,
+      total_applied: result.total_applied,
+      new_balance: result.new_balance,
     });
 
   } catch (error) {
