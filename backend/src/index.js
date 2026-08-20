@@ -3016,6 +3016,85 @@ app.get('/api/customer/:customer_id/advances', async (c) => {
   }
 });
 
+// ─── GET /api/customer/:customer_id/ledger (Aug 2026) ───────
+// Balance Sheet tab, subtask 1. Deliberately only merges invoices
+// (add to what's owed) and payments (reduce it) -- NOT customer_advances
+// directly. A held, unapplied advance genuinely doesn't affect what's
+// owed yet (per the Aug 2026 design: advances stay structurally separate
+// until consciously applied), and once an advance IS applied, that
+// application already goes through the normal /api/payments path
+// tagged payment_mode='Advance' -- so it's already correctly present in
+// the payments table. This also means the ledger's own computed closing
+// balance should naturally match customers.outstanding_balance -- a
+// useful built-in correctness check, not coincidental.
+//
+// Running balance is computed live here, never read from any stored
+// field, matching the same safe pattern already proven for net_position
+// on Home/chat headers.
+app.get('/api/customer/:customer_id/ledger', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+    const customerId = c.req.param('customer_id');
+    const startDate = c.req.query('start');
+    const endDate = c.req.query('end');
+
+    if (!startDate || !endDate) return c.json({ error: 'missing_date_range' }, 400);
+
+    const customer = await validateCustomer(customerId, organisationId);
+    if (!customer) return c.json({ error: 'customer_not_found' }, 404);
+
+    const { data: priorInvoices } = await supabase.from('invoices')
+      .select('total_amount')
+      .eq('organisation_id', organisationId).eq('customer_id', customerId)
+      .neq('status', 'draft').lt('issue_date', startDate);
+    const { data: priorPayments } = await supabase.from('payments')
+      .select('amount')
+      .eq('organisation_id', organisationId).eq('customer_id', customerId)
+      .lt('payment_date', startDate);
+    const openingBalance =
+      (priorInvoices || []).reduce((s, i) => s + Number(i.total_amount || 0), 0) -
+      (priorPayments || []).reduce((s, p) => s + Number(p.amount || 0), 0);
+
+    const { data: invoicesInRange } = await supabase.from('invoices')
+      .select('id, invoice_number, total_amount, issue_date')
+      .eq('organisation_id', organisationId).eq('customer_id', customerId)
+      .neq('status', 'draft').gte('issue_date', startDate).lte('issue_date', endDate);
+    const { data: paymentsInRange } = await supabase.from('payments')
+      .select('id, invoice_id, amount, payment_date, payment_method')
+      .eq('organisation_id', organisationId).eq('customer_id', customerId)
+      .gte('payment_date', startDate).lte('payment_date', endDate);
+
+    const lines = [
+      ...(invoicesInRange || []).map(i => ({
+        type: 'invoice', date: i.issue_date, description: i.invoice_number,
+        amount: Number(i.total_amount || 0), invoice_id: i.id, invoice_number: i.invoice_number,
+      })),
+      ...(paymentsInRange || []).map(p => ({
+        type: 'payment', date: p.payment_date, description: p.payment_method || 'Payment',
+        amount: -Number(p.amount || 0), invoice_id: p.invoice_id,
+      })),
+    ].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+
+    let running = openingBalance;
+    const ledger = lines.map(line => {
+      running = Math.round((running + line.amount) * 100) / 100;
+      return { ...line, running_balance: running };
+    });
+
+    return c.json({
+      customer_name: customer.name,
+      opening_balance: Math.round(openingBalance * 100) / 100,
+      closing_balance: running,
+      ledger,
+    });
+  } catch (err) {
+    console.error('[GET /api/customer/:customer_id/ledger] Error:', err.message);
+    return c.json({ error: 'internal_error' }, 500);
+  }
+});
+
 // ─── POST /api/customer/:customer_id/advance/:advance_id/apply-amount ──
 // Payment recording subtask 3. Deliberately bookkeeping-ONLY -- decrements
 // amount_applied on an advance by a given amount, called AFTER the actual
