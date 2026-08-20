@@ -267,21 +267,27 @@ export default function DocumentsScreen() {
     </TouchableOpacity>
   );
 
+  // Compacted to a two-column layout (Aug 2026, Atif's feedback) --
+  // matches the same amount-on-the-right pattern the other row renderers
+  // already use, cutting the row height roughly in half versus four
+  // fully stacked lines.
   const renderReceiptRow = ({ item }: { item: ReceiptDoc }) => (
     <View style={[s.row, item.type === 'advance' && s.advanceRow]}>
       <View style={{ flex: 1 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-          <Text style={s.rowTitle}>{fmt(item.amount)}</Text>
+          {!isCustomerScoped && <Text style={s.rowTitle}>{item.customer_name}</Text>}
           {item.type === 'advance' && (
             <View style={s.advanceBadge}><Text style={s.advanceBadgeText}>ADVANCE</Text></View>
           )}
         </View>
-        {!isCustomerScoped && <Text style={s.rowSubtitle}>{item.customer_name}</Text>}
         <Text style={s.rowSubtitle}>
           {item.type === 'payment'
             ? `${item.payment_mode || 'Payment'}${item.invoice_number ? ` — ${item.invoice_number}` : ''}`
             : `${item.payment_mode || 'Advance'}${item.purpose ? ` — ${item.purpose}` : ''}${item.status === 'fully_applied' ? ' (fully applied)' : ''}`}
         </Text>
+      </View>
+      <View style={{ alignItems: 'flex-end' }}>
+        <Text style={s.rowAmount}>{fmt(item.amount)}</Text>
         <Text style={s.rowDate}>{fmtDate(item.date)}</Text>
       </View>
     </View>
@@ -344,13 +350,15 @@ export default function DocumentsScreen() {
         </BottomSheet>
       )}
 
-      <View style={s.tabBar}>
-        {tabs.map(t => (
-          <TouchableOpacity key={t.key} style={[s.tab, activeTab === t.key && s.tabActive]} onPress={() => setActiveTab(t.key)}>
-            <Text style={[s.tabText, activeTab === t.key && s.tabTextActive]}>{t.label}{t.count > 0 ? ` (${t.count})` : ''}</Text>
-          </TouchableOpacity>
-        ))}
-        <TouchableOpacity style={{ paddingHorizontal: 12, justifyContent: 'center' }} onPress={() => setSortAscending(!sortAscending)}>
+      <View style={s.tabBarContainer}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.tabBar}>
+          {tabs.map(t => (
+            <TouchableOpacity key={t.key} style={[s.tab, activeTab === t.key && s.tabActive]} onPress={() => setActiveTab(t.key)}>
+              <Text style={[s.tabText, activeTab === t.key && s.tabTextActive]}>{t.label}{t.count > 0 ? ` (${t.count})` : ''}</Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+        <TouchableOpacity style={s.sortBtn} onPress={() => setSortAscending(!sortAscending)}>
           <Ionicons name={sortAscending ? 'arrow-up' : 'arrow-down'} size={18} color="#075E54" />
         </TouchableOpacity>
       </View>
@@ -374,8 +382,14 @@ const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F5F5F5' },
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#075E54', paddingHorizontal: 16, paddingVertical: 14 },
   headerTitle: { fontSize: 18, fontWeight: '700', color: '#FFFFFF' },
-  tabBar: { flexDirection: 'row', backgroundColor: '#FFFFFF', borderBottomWidth: 1, borderBottomColor: '#E0E0E0' },
-  tab: { flex: 1, paddingVertical: 12, alignItems: 'center', borderBottomWidth: 2, borderBottomColor: 'transparent' },
+  // Made horizontally scrollable (Aug 2026, Atif's feedback) -- flex:1
+  // equal division looked increasingly squeezed as tabs were added
+  // (Receipt, and Balance Sheet to follow), so each tab now takes its
+  // own natural content width and the row scrolls instead of shrinking.
+  tabBarContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFFFFF', borderBottomWidth: 1, borderBottomColor: '#E0E0E0' },
+  tabBar: { flexDirection: 'row', flexGrow: 0 },
+  tab: { paddingVertical: 12, paddingHorizontal: 18, alignItems: 'center', borderBottomWidth: 2, borderBottomColor: 'transparent' },
+  sortBtn: { paddingHorizontal: 14, paddingVertical: 12, justifyContent: 'center', borderLeftWidth: 1, borderLeftColor: '#F0F0F0' },
   tabActive: { borderBottomColor: '#075E54' },
   tabText: { fontSize: 13, fontWeight: '600', color: '#999' },
   tabTextActive: { color: '#075E54' },
