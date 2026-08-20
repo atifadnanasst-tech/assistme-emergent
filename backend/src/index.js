@@ -3070,6 +3070,82 @@ app.post('/api/customer/:customer_id/advance/:advance_id/apply-amount', async (c
   }
 });
 
+// ─── POST /api/customer/:customer_id/receipt (Aug 2026) ─────
+// Payment recording subtask 6. Called AFTER the real payment(s) have
+// already been recorded via /api/payments (this endpoint never touches
+// invoices/payments itself, purely generates a receipt document and
+// optionally shares it). Frontend passes the AGGREGATE totals/breakdown
+// it already collected across whatever individual calls it made.
+// channel='app' posts a chat card visible to BOTH sides (Atif's spec:
+// "records and send a confirmation to the customer in this app
+// itself") -- reuses the EXISTING invoice_card renderer via a new
+// is_receipt flag rather than a new card type, per Atif's explicit
+// instruction to reuse the same buttons/callable functions an invoice
+// card already has. channel='whatsapp' returns a wa.me link, matching
+// the existing invoice-share pattern.
+app.post('/api/customer/:customer_id/receipt', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId, userId } = auth;
+    const customerId = c.req.param('customer_id');
+
+    const body = await c.req.json();
+    const { total_amount, payment_mode, applied_to, receipt_date, channel } = body;
+
+    if (!total_amount || !payment_mode) return c.json({ error: 'missing_fields' }, 400);
+
+    const customer = await validateCustomer(customerId, organisationId);
+    if (!customer) return c.json({ error: 'customer_not_found' }, 404);
+
+    const pdfUrl = await generateReceiptPDF({
+      organisationId, customerId,
+      receiptDate: receipt_date || getISTDateString(),
+      totalAmount: total_amount,
+      paymentMode: payment_mode,
+      appliedTo: applied_to || [],
+    });
+
+    if (!pdfUrl) return c.json({ error: 'pdf_generation_failed' }, 500);
+
+    if (channel === 'app') {
+      let conv = await resolveActiveEntityConversation(organisationId, customerId);
+      if (!conv) {
+        const { data: newConv } = await supabase.from('conversations').insert({
+          organisation_id: organisationId, user_id: userId, entity_type: 'customer',
+          entity_id: customerId, model: 'gpt-4o-mini', status: 'active',
+        }).select('id').single();
+        conv = newConv;
+      }
+      const { data: msg } = await supabase.from('messages').insert({
+        organisation_id: organisationId, conversation_id: conv.id,
+        role: 'tool', content: `Payment Receipt — ₹${Number(total_amount).toFixed(2)} received`,
+        metadata: {
+          sender_type: 'system', visibility: 'both', message_type: 'invoice_card',
+          read_by_owner: true, preview_text: `Receipt: ₹${Number(total_amount).toFixed(2)} received`,
+          card_data: {
+            is_receipt: true, pdf_url: pdfUrl, total_amount,
+            items_summary: `Paid via ${payment_mode}`,
+          },
+        },
+        tokens_input: 0, tokens_output: 0,
+      }).select('id').single();
+      await broadcastNewMessage(organisationId, { conversation_id: conv.id });
+      return c.json({ pdf_url: pdfUrl, shared: true, message_id: msg?.id });
+    }
+
+    if (channel === 'whatsapp') {
+      const waUrl = `https://wa.me/${(customer.phone || '').replace(/[^0-9]/g, '')}?text=${encodeURIComponent(`Payment Receipt: ₹${Number(total_amount).toFixed(2)} received via ${payment_mode}.\n\nView receipt: ${pdfUrl}`)}`;
+      return c.json({ pdf_url: pdfUrl, whatsapp_url: waUrl });
+    }
+
+    return c.json({ pdf_url: pdfUrl });
+  } catch (err) {
+    console.error('[POST /api/customer/:customer_id/receipt] Error:', err.message);
+    return c.json({ error: 'internal_error' }, 500);
+  }
+});
+
 
 // ──────────────────────────────────────────────────────────────
 // calculateInvoiceTotals — SINGLE SOURCE OF TRUTH FOR ALL FINANCIAL MATH
