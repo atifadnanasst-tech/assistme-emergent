@@ -3016,6 +3016,60 @@ app.get('/api/customer/:customer_id/advances', async (c) => {
   }
 });
 
+// ─── POST /api/customer/:customer_id/advance/:advance_id/apply-amount ──
+// Payment recording subtask 3. Deliberately bookkeeping-ONLY -- decrements
+// amount_applied on an advance by a given amount, called AFTER the actual
+// payment has already been recorded via the normal /api/payments flow
+// (which itself calls recordPayment() unchanged). Never calls
+// recordPayment() itself, never touches invoices -- keeps the canonical
+// payment function completely unaware that advances exist, matching
+// Atif's design ("Advance" as a payment_mode, not a new payment path).
+app.post('/api/customer/:customer_id/advance/:advance_id/apply-amount', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+    const customerId = c.req.param('customer_id');
+    const advanceId = c.req.param('advance_id');
+
+    const body = await c.req.json();
+    const { amount } = body;
+    if (!amount || typeof amount !== 'number' || amount <= 0) {
+      return c.json({ error: 'invalid_amount' }, 400);
+    }
+
+    const { data: advance } = await supabase
+      .from('customer_advances')
+      .select('id, amount, amount_applied, amount_remaining, status')
+      .eq('id', advanceId)
+      .eq('organisation_id', organisationId)
+      .eq('customer_id', customerId)
+      .maybeSingle();
+
+    if (!advance) return c.json({ error: 'advance_not_found' }, 404);
+    if (advance.amount_remaining < amount - 0.01) {
+      return c.json({ error: 'amount_exceeds_remaining', remaining: advance.amount_remaining }, 400);
+    }
+
+    const newAmountApplied = Math.round((advance.amount_applied + amount) * 100) / 100;
+    const newStatus = newAmountApplied >= advance.amount - 0.01 ? 'fully_applied' : 'active';
+
+    const { error } = await supabase.from('customer_advances')
+      .update({ amount_applied: newAmountApplied, status: newStatus })
+      .eq('id', advanceId);
+
+    if (error) {
+      console.error('[POST advance/apply-amount] Update error:', error.message);
+      return c.json({ error: 'internal_error' }, 500);
+    }
+
+    return c.json({ advance_id: advanceId, new_amount_applied: newAmountApplied, new_status: newStatus });
+  } catch (err) {
+    console.error('[POST advance/apply-amount] Error:', err.message);
+    return c.json({ error: 'internal_error' }, 500);
+  }
+});
+
 
 // ──────────────────────────────────────────────────────────────
 // calculateInvoiceTotals — SINGLE SOURCE OF TRUTH FOR ALL FINANCIAL MATH
