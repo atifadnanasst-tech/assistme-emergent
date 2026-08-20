@@ -2,29 +2,34 @@
  * AssistMe - Record Payment Screen
  * Location: /frontend/app/customer/[id]/record-payment.tsx
  * Created: Aug 2026 (Payment recording, subtask 3)
- * Updated: Aug 2026 -- real date picker, multi-select invoices with
- * auto-summing amount, per Atif's live-testing feedback.
- * Updated: Aug 2026 -- Advance as a payment_mode (Atif's simplified
- * design): reuses the ENTIRE existing invoice-selection flow unchanged
- * (Auto-allocate / specific / multi-select all work exactly as before).
- * Selecting "Advance" mode just reveals an optional inline picker of the
- * customer's held advances (amount, date, purpose) to draw from --
- * defaults to oldest-first if none explicitly picked. recordPayment()
- * itself never becomes aware advances exist; a small separate bookkeeping
- * call decrements the chosen advance's amount_applied AFTER the normal
- * payment succeeds.
- * Updated: Aug 2026 -- SafeAreaView now reserves bottom space too (was
- * sitting on top of the Android nav bar, Atif's live-testing feedback).
  *
- * Backs the "Record payment" menu item in the customer chat's 3-dot menu.
+ * Updated: Aug 2026 -- mutual exclusivity fixes, mandatory payment_mode
+ * (NO default, per Atif's explicit design: a gate that pre-fills a
+ * default is not a gate at all -- it lets the owner tap through without
+ * ever consciously choosing, defeating the audit purpose entirely), and
+ * a precise, per-rupee-accurate shortfall split when "Advance" mode is
+ * selected but doesn't cover the full amount.
  *
- * DEFERRED (Atif's explicit instruction, bundled into a future dedicated
- * Spark session): bank-account balance tracking on UPI/Bank Transfer,
- * Spark's own record-payment behavior, the stubbed Edit button on Spark's
- * payment card, Spark-driven invoice creation.
+ * Bugs fixed this round (all confirmed via real Supabase data, not
+ * assumed): (1) "Advance" tag (drawing FROM an advance) and "Record as
+ * new Advance" (creating one) could be selected simultaneously -- input
+ * and output confused as the same action. (2) "Record as new Advance"
+ * and "Auto-allocate" could show simultaneously selected -- traced to
+ * the Auto-allocate radio ICON only checking selectedInvoiceIds.size,
+ * while the row's own background correctly also checked isAdvanceMode --
+ * a real visual/logic mismatch. (3) The advance-application bookkeeping
+ * only ever drew from ONE advance and silently capped the amount via
+ * Math.min() when insufficient, while the REAL payment (via
+ * /api/payments) went through in full regardless -- confirmed via SQL
+ * that a ₹15,000 request against ₹12,000 available resulted in real
+ * invoices being fully paid but only ₹10,000 of genuine advance backing
+ * it, with zero warning. Now: shortfall is detected proactively (live,
+ * as the amount is typed) and requires an explicit, ungated choice of
+ * remainder tag before the button unlocks -- the split is applied with
+ * per-rupee accuracy, not a lump "tag everything as X" approximation.
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, TextInput, ActivityIndicator,
   ScrollView, Alert, Platform,
@@ -44,6 +49,10 @@ interface CustomerAdvance {
 }
 
 const PAYMENT_MODES = ['Cash', 'UPI', 'Bank Transfer', 'Cheque', 'Advance', 'Other'];
+// Remainder tag excludes "Advance" itself -- the shortfall by definition
+// isn't advance-backed, so tagging it "Advance" would just recreate the
+// exact bug this whole update fixes.
+const REMAINDER_MODES = PAYMENT_MODES.filter(m => m !== 'Advance');
 
 const fmt = (n: number) => `₹${(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const toISODate = (d: Date) => {
@@ -65,6 +74,7 @@ export default function RecordPaymentScreen() {
   const [paymentDate, setPaymentDate] = useState(new Date());
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [paymentMode, setPaymentMode] = useState<string | null>(null);
+  const [remainderMode, setRemainderMode] = useState<string | null>(null);
   const [selectedInvoiceIds, setSelectedInvoiceIds] = useState<Set<string>>(new Set());
   const [isAdvanceMode, setIsAdvanceMode] = useState(false);
   const [advancePurpose, setAdvancePurpose] = useState('');
@@ -96,7 +106,7 @@ export default function RecordPaymentScreen() {
   }, [customerId]);
 
   useEffect(() => {
-    if (paymentMode !== 'Advance') return;
+    if (paymentMode !== 'Advance') { setRemainderMode(null); return; }
     (async () => {
       try {
         const token = await getToken();
@@ -112,6 +122,35 @@ export default function RecordPaymentScreen() {
       } catch {}
     })();
   }, [paymentMode, customerId]);
+
+  const totalAdvanceAvailable = useMemo(
+    () => selectedAdvanceId
+      ? (advances.find(a => a.id === selectedAdvanceId)?.amount_remaining || 0)
+      : advances.reduce((s, a) => s + a.amount_remaining, 0),
+    [advances, selectedAdvanceId]
+  );
+
+  const requestedAmount = parseFloat(amount) || 0;
+  const shortfall = paymentMode === 'Advance' && requestedAmount > totalAdvanceAvailable
+    ? Math.round((requestedAmount - totalAdvanceAvailable) * 100) / 100
+    : 0;
+
+  const selectPaymentMode = (mode: string) => {
+    const next = paymentMode === mode ? null : mode;
+    setPaymentMode(next);
+    if (next === 'Advance') setIsAdvanceMode(false);
+  };
+
+  const enterAdvanceRecordMode = () => {
+    setIsAdvanceMode(true);
+    setSelectedInvoiceIds(new Set());
+    if (paymentMode === 'Advance') setPaymentMode(null);
+  };
+
+  const selectAutoAllocate = () => {
+    setIsAdvanceMode(false);
+    setSelectedInvoiceIds(new Set());
+  };
 
   const toggleInvoiceSelection = (inv: UnpaidInvoice) => {
     setIsAdvanceMode(false);
@@ -130,21 +169,33 @@ export default function RecordPaymentScreen() {
     setAmount(sum.toString());
   }, [selectedInvoiceIds, unpaidInvoices]);
 
-  const applyFromAdvance = async (token: string, backendUrl: string, appliedTotal: number) => {
-    if (paymentMode !== 'Advance' || appliedTotal <= 0) return;
-    const target = selectedAdvanceId
-      ? advances.find(a => a.id === selectedAdvanceId)
-      : [...advances].sort((a, b) => a.received_date.localeCompare(b.received_date))[0];
-    if (!target) return;
-    try {
-      await fetch(`${backendUrl}/api/customer/${customerId}/advance/${target.id}/apply-amount`, {
-        method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ amount: Math.min(appliedTotal, target.amount_remaining) }),
-      });
-    } catch (e) { console.warn('Advance bookkeeping failed (non-fatal):', e); }
+  const applyFromAdvances = async (token: string, backendUrl: string, totalToApply: number) => {
+    if (totalToApply <= 0) return;
+    const ordered = selectedAdvanceId
+      ? [advances.find(a => a.id === selectedAdvanceId)!, ...advances.filter(a => a.id !== selectedAdvanceId)].filter(Boolean)
+      : [...advances].sort((a, b) => a.received_date.localeCompare(b.received_date));
+    let remaining = totalToApply;
+    for (const adv of ordered) {
+      if (remaining <= 0) break;
+      const drawAmount = Math.min(remaining, adv.amount_remaining);
+      if (drawAmount <= 0) continue;
+      try {
+        await fetch(`${backendUrl}/api/customer/${customerId}/advance/${adv.id}/apply-amount`, {
+          method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ amount: drawAmount }),
+        });
+        remaining = Math.round((remaining - drawAmount) * 100) / 100;
+      } catch (e) { console.warn('Advance bookkeeping failed (non-fatal):', e); }
+    }
   };
 
   const handleSubmit = async () => {
+    if (!paymentMode) { Alert.alert('Payment Mode Required', 'Select how this payment was received.'); return; }
+    if (shortfall > 0 && !remainderMode) {
+      Alert.alert('Remainder Tag Required', `${fmt(shortfall)} isn't covered by available advance -- select how the rest was received.`);
+      return;
+    }
+
     const token = await getToken();
     if (!token) return;
     const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
@@ -159,7 +210,7 @@ export default function RecordPaymentScreen() {
           method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({
             amount: amt, purpose: advancePurpose || undefined,
-            received_date: dateStr, payment_mode: paymentMode || undefined,
+            received_date: dateStr, payment_mode: paymentMode,
           }),
         });
         if (res.ok) {
@@ -173,64 +224,86 @@ export default function RecordPaymentScreen() {
         const targets = unpaidInvoices.filter(inv => selectedInvoiceIds.has(inv.id));
         const resultLines: string[] = [];
         let anyFailed = false;
-        let appliedTotal = 0;
+        let advanceRunningTotal = 0;
+        let advanceAppliedTotal = 0;
         for (const inv of targets) {
+          const wouldBeTotal = advanceRunningTotal + inv.amount_due;
+          const tagForThisInvoice = paymentMode === 'Advance' && wouldBeTotal > totalAdvanceAvailable
+            ? remainderMode!
+            : paymentMode!;
+          if (tagForThisInvoice === paymentMode) advanceRunningTotal = wouldBeTotal;
+
           const res = await fetch(`${backendUrl}/api/payments`, {
             method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({
               customer_id: customerId, invoice_id: inv.id, amount: inv.amount_due,
-              payment_date: dateStr, payment_mode: paymentMode || undefined,
+              payment_date: dateStr, payment_mode: tagForThisInvoice,
             }),
           });
           const data = await res.json();
           if (res.ok) {
             resultLines.push(`${fmt(inv.amount_due)} applied to ${inv.invoice_number} — fully paid`);
-            appliedTotal += Number(data.total_applied || inv.amount_due);
+            if (tagForThisInvoice === paymentMode && paymentMode === 'Advance') {
+              advanceAppliedTotal += Number(data.total_applied || inv.amount_due);
+            }
           } else {
             anyFailed = true;
             resultLines.push(`${inv.invoice_number}: failed (${data.error || 'error'})`);
           }
         }
-        await applyFromAdvance(token, backendUrl, appliedTotal);
+        if (paymentMode === 'Advance') await applyFromAdvances(token, backendUrl, advanceAppliedTotal);
         Alert.alert(anyFailed ? 'Payment Partially Recorded' : 'Payment Recorded', resultLines.join('\n'), [
           { text: 'OK', onPress: () => router.back() },
         ]);
       } else {
         const amt = parseFloat(amount);
         if (!amt || amt <= 0) { Alert.alert('Error', 'Enter a valid amount'); setSubmitting(false); return; }
-        const res = await fetch(`${backendUrl}/api/payments`, {
-          method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            customer_id: customerId, amount: amt,
-            payment_date: dateStr, payment_mode: paymentMode || undefined,
-          }),
-        });
-        const data = await res.json();
-        if (res.ok) {
-          await applyFromAdvance(token, backendUrl, Number(data.total_applied || amt));
-          const recorded = (data.events || []).filter((e: any) => e.type === 'payment_recorded');
-          const lines = recorded.map((e: any) =>
-            e.remaining_due > 0.01
-              ? `${fmt(e.amount_applied)} applied to ${e.invoice_number} — ${fmt(e.remaining_due)} still pending`
-              : `${fmt(e.amount_applied)} applied to ${e.invoice_number} — fully paid`
-          );
-          Alert.alert('Payment Recorded', lines.join('\n') || 'Payment recorded successfully.', [
-            { text: 'OK', onPress: () => router.back() },
-          ]);
-        } else {
-          const errorMessages: Record<string, string> = {
-            no_unpaid_invoices: 'This customer has no unpaid invoices to apply a payment to.',
-            amount_exceeds_due: `Amount exceeds what's due${data.detail?.max_payable ? ` (max: ${fmt(data.detail.max_payable)})` : ''}.`,
-            invoice_already_paid: 'That invoice is already fully paid.',
-            invoice_not_found: 'That invoice could not be found.',
-          };
-          Alert.alert('Error', errorMessages[data.error] || 'Could not record payment. Please try again.');
+
+        const segments: { amt: number; mode: string }[] = shortfall > 0
+          ? [{ amt: Math.round((amt - shortfall) * 100) / 100, mode: paymentMode }, { amt: shortfall, mode: remainderMode! }]
+          : [{ amt, mode: paymentMode }];
+
+        const allLines: string[] = [];
+        let advanceAppliedTotal = 0;
+        let anyFailed = false;
+        for (const seg of segments) {
+          if (seg.amt <= 0) continue;
+          const res = await fetch(`${backendUrl}/api/payments`, {
+            method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              customer_id: customerId, amount: seg.amt,
+              payment_date: dateStr, payment_mode: seg.mode,
+            }),
+          });
+          const data = await res.json();
+          if (res.ok) {
+            if (seg.mode === 'Advance') advanceAppliedTotal += Number(data.total_applied || seg.amt);
+            const recorded = (data.events || []).filter((e: any) => e.type === 'payment_recorded');
+            recorded.forEach((e: any) => {
+              allLines.push(e.remaining_due > 0.01
+                ? `${fmt(e.amount_applied)} applied to ${e.invoice_number} — ${fmt(e.remaining_due)} still pending`
+                : `${fmt(e.amount_applied)} applied to ${e.invoice_number} — fully paid`);
+            });
+          } else {
+            anyFailed = true;
+            const errorMessages: Record<string, string> = {
+              no_unpaid_invoices: 'No unpaid invoices to apply to.',
+              amount_exceeds_due: `Amount exceeds what's due.`,
+            };
+            allLines.push(errorMessages[data.error] || `Failed: ${data.error || 'error'}`);
+          }
         }
+        if (advanceAppliedTotal > 0) await applyFromAdvances(token, backendUrl, advanceAppliedTotal);
+        Alert.alert(anyFailed ? 'Payment Partially Recorded' : 'Payment Recorded', allLines.join('\n') || 'Payment recorded successfully.', [
+          { text: 'OK', onPress: () => router.back() },
+        ]);
       }
     } catch {
       Alert.alert('Error', 'Could not record payment. Please try again.');
     } finally { setSubmitting(false); }
   };
+
+  const canSubmit = !!paymentMode && (shortfall === 0 || !!remainderMode);
 
   return (
     <SafeAreaView style={s.container} edges={['top', 'bottom']}>
@@ -276,13 +349,13 @@ export default function RecordPaymentScreen() {
             />
           )}
 
-          <Text style={s.label}>PAYMENT MODE (OPTIONAL)</Text>
+          <Text style={s.label}>PAYMENT MODE <Text style={{ color: 'red' }}>*</Text></Text>
           <View style={s.chipRow}>
             {PAYMENT_MODES.map(mode => (
               <TouchableOpacity
                 key={mode}
                 style={[s.chip, paymentMode === mode && s.chipActive]}
-                onPress={() => setPaymentMode(paymentMode === mode ? null : mode)}
+                onPress={() => selectPaymentMode(mode)}
               >
                 <Text style={[s.chipText, paymentMode === mode && s.chipTextActive]}>{mode}</Text>
               </TouchableOpacity>
@@ -294,7 +367,7 @@ export default function RecordPaymentScreen() {
                 <Text style={s.emptyText}>This customer has no advances available to draw from.</Text>
               ) : (
                 <>
-                  <Text style={s.helperText}>Optional: pick which advance to draw from, or leave unselected to use the oldest first.</Text>
+                  <Text style={s.helperText}>Optional: pick which advance to draw from, or leave unselected to use the oldest first (spills to more than one if needed).</Text>
                   {advances.map(adv => (
                     <TouchableOpacity
                       key={adv.id}
@@ -310,6 +383,25 @@ export default function RecordPaymentScreen() {
                   ))}
                 </>
               )}
+              {shortfall > 0 && (
+                <View style={s.shortfallBox}>
+                  <Text style={s.shortfallText}>
+                    Only {fmt(totalAdvanceAvailable)} available in advance — {fmt(shortfall)} needs another payment method.
+                  </Text>
+                  <Text style={[s.label, { marginTop: 10, color: '#B45309' }]}>REMAINDER TAG <Text style={{ color: 'red' }}>*</Text></Text>
+                  <View style={s.chipRow}>
+                    {REMAINDER_MODES.map(mode => (
+                      <TouchableOpacity
+                        key={mode}
+                        style={[s.chip, remainderMode === mode && s.chipActive]}
+                        onPress={() => setRemainderMode(remainderMode === mode ? null : mode)}
+                      >
+                        <Text style={[s.chipText, remainderMode === mode && s.chipTextActive]}>{mode}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </View>
+              )}
             </View>
           )}
 
@@ -317,7 +409,7 @@ export default function RecordPaymentScreen() {
           <Text style={s.helperText}>Tap for Auto-allocate, or long-press an invoice to select multiple.</Text>
           <TouchableOpacity
             style={[s.invoiceRow, isAdvanceMode && s.invoiceRowActive]}
-            onPress={() => { setIsAdvanceMode(true); setSelectedInvoiceIds(new Set()); }}
+            onPress={enterAdvanceRecordMode}
           >
             <Ionicons name={isAdvanceMode ? 'radio-button-on' : 'radio-button-off'} size={20} color="#075E54" />
             <View style={{ marginLeft: 10, flex: 1 }}>
@@ -333,9 +425,9 @@ export default function RecordPaymentScreen() {
           )}
           <TouchableOpacity
             style={[s.invoiceRow, !isAdvanceMode && selectedInvoiceIds.size === 0 && s.invoiceRowActive]}
-            onPress={() => { setIsAdvanceMode(false); setSelectedInvoiceIds(new Set()); }}
+            onPress={selectAutoAllocate}
           >
-            <Ionicons name={selectedInvoiceIds.size === 0 ? 'radio-button-on' : 'radio-button-off'} size={20} color="#075E54" />
+            <Ionicons name={!isAdvanceMode && selectedInvoiceIds.size === 0 ? 'radio-button-on' : 'radio-button-off'} size={20} color="#075E54" />
             <View style={{ marginLeft: 10, flex: 1 }}>
               <Text style={s.invoiceRowTitle}>Auto-allocate</Text>
               <Text style={s.invoiceRowSubtitle}>Applies across unpaid invoices, oldest first</Text>
@@ -359,7 +451,7 @@ export default function RecordPaymentScreen() {
             <Text style={s.emptyText}>No unpaid invoices — a payment here will need Auto-allocate, and will simply reduce the customer's outstanding balance.</Text>
           )}
 
-          <TouchableOpacity style={s.submitBtn} onPress={handleSubmit} disabled={submitting}>
+          <TouchableOpacity style={[s.submitBtn, !canSubmit && s.submitBtnDisabled]} onPress={handleSubmit} disabled={submitting || !canSubmit}>
             {submitting ? <ActivityIndicator size="small" color="#FFF" /> : <Text style={s.submitText}>Record Payment</Text>}
           </TouchableOpacity>
         </ScrollView>
@@ -386,6 +478,9 @@ const s = StyleSheet.create({
   invoiceRowTitle: { fontSize: 14, fontWeight: '700', color: '#1A1A1A' },
   invoiceRowSubtitle: { fontSize: 12, color: '#999', marginTop: 2 },
   emptyText: { fontSize: 13, color: '#999', marginTop: 4, marginBottom: 8, fontStyle: 'italic' },
+  shortfallBox: { marginTop: 8, backgroundColor: '#FEF3C7', borderRadius: 10, padding: 12, borderWidth: 1, borderColor: '#FCD34D' },
+  shortfallText: { fontSize: 13, color: '#92400E', fontWeight: '600' },
   submitBtn: { marginTop: 24, backgroundColor: '#075E54', paddingVertical: 14, borderRadius: 10, alignItems: 'center' },
+  submitBtnDisabled: { backgroundColor: '#CCC' },
   submitText: { fontSize: 15, fontWeight: '700', color: '#FFFFFF' },
 });
