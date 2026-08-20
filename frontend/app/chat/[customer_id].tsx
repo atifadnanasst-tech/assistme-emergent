@@ -2264,7 +2264,9 @@ export default function CustomerChatScreen() {
     // Atif's feedback -- logically belongs right next to Create invoice.
     { icon: 'document-text-outline', label: 'Documents', action: () => { setMenuVisible(false); router.push(`/documents?customer_id=${customer_id}`); } },
     { icon: 'alarm-outline', label: 'Set payment reminder', action: () => { setMenuVisible(false); } },
-    { icon: 'cash-outline', label: 'Record payment', action: () => { setMenuVisible(false); } },
+    // Payment recording subtask 3 (Aug 2026): wired to the new Record
+    // Payment screen -- was previously an empty action.
+    { icon: 'cash-outline', label: 'Record payment', action: () => { setMenuVisible(false); router.push(`/customer/${customer_id}/record-payment`); } },
     { divider: true },
     { icon: 'sparkles-outline', label: 'Customer Intelligence', action: () => { setMenuVisible(false); router.push(`/customer/${customer_id}/intelligence`); } },
     { icon: 'logo-whatsapp', label: 'Import WhatsApp History', action: handleWhatsAppImport },
