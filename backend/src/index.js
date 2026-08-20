@@ -3031,6 +3031,30 @@ app.get('/api/customer/:customer_id/advances', async (c) => {
 // Running balance is computed live here, never read from any stored
 // field, matching the same safe pattern already proven for net_position
 // on Home/chat headers.
+// UPDATED Aug 2026 (Atif's design, confirmed after live testing): now a
+// genuinely complete "total running source of truth" -- four sources
+// merged, matching the EXISTING net_position formula already used on
+// chat headers exactly (net_position = receivable - payable), so the
+// header figure and this ledger's own closing_balance now always agree
+// by construction. This also matches an existing, deliberate
+// architectural principle from an earlier session (Entity Financial
+// Doctrine): "LedgerView MUST show ALL transaction types in one
+// chronological view. Do not build separate invoice history and bill
+// history screens." Uses customer_id (not supplier_id) on purchase_bills
+// and supplier_payments, per that doctrine's own explicit instruction --
+// "Never write new code against supplier_id."
+//
+// Sign convention: invoices ADD (they owe more), payments SUBTRACT
+// (they owe less), purchase_bills SUBTRACT (you now owe them, reducing
+// your net receivable position), supplier_payments ADD BACK (you paid
+// down what you owed them, moving the net position back toward
+// receivable).
+//
+// Advances are deliberately NOT part of this running balance -- per
+// Atif's own design, they're a separate, non-computational section
+// returned alongside the ledger, matching how advances already stay
+// structurally separate everywhere else in the app until consciously
+// applied.
 app.get('/api/customer/:customer_id/ledger', async (c) => {
   try {
     const auth = await authenticateChat(c);
@@ -3053,9 +3077,20 @@ app.get('/api/customer/:customer_id/ledger', async (c) => {
       .select('amount')
       .eq('organisation_id', organisationId).eq('customer_id', customerId)
       .lt('payment_date', startDate);
+    const { data: priorBills } = await supabase.from('purchase_bills')
+      .select('total_amount')
+      .eq('organisation_id', organisationId).eq('customer_id', customerId)
+      .eq('is_historical', false).is('deleted_at', null)
+      .neq('status', 'draft').lt('issue_date', startDate);
+    const { data: priorSupplierPayments } = await supabase.from('supplier_payments')
+      .select('amount')
+      .eq('organisation_id', organisationId).eq('customer_id', customerId)
+      .is('deleted_at', null).lt('payment_date', startDate);
     const openingBalance =
       (priorInvoices || []).reduce((s, i) => s + Number(i.total_amount || 0), 0) -
-      (priorPayments || []).reduce((s, p) => s + Number(p.amount || 0), 0);
+      (priorPayments || []).reduce((s, p) => s + Number(p.amount || 0), 0) -
+      (priorBills || []).reduce((s, b) => s + Number(b.total_amount || 0), 0) +
+      (priorSupplierPayments || []).reduce((s, sp) => s + Number(sp.amount || 0), 0);
 
     const { data: invoicesInRange } = await supabase.from('invoices')
       .select('id, invoice_number, total_amount, issue_date')
@@ -3065,6 +3100,15 @@ app.get('/api/customer/:customer_id/ledger', async (c) => {
       .select('id, invoice_id, amount, payment_date, payment_method')
       .eq('organisation_id', organisationId).eq('customer_id', customerId)
       .gte('payment_date', startDate).lte('payment_date', endDate);
+    const { data: billsInRange } = await supabase.from('purchase_bills')
+      .select('id, bill_number, total_amount, issue_date')
+      .eq('organisation_id', organisationId).eq('customer_id', customerId)
+      .eq('is_historical', false).is('deleted_at', null)
+      .neq('status', 'draft').gte('issue_date', startDate).lte('issue_date', endDate);
+    const { data: supplierPaymentsInRange } = await supabase.from('supplier_payments')
+      .select('id, bill_id, amount, payment_date, payment_method')
+      .eq('organisation_id', organisationId).eq('customer_id', customerId)
+      .is('deleted_at', null).gte('payment_date', startDate).lte('payment_date', endDate);
 
     const lines = [
       ...(invoicesInRange || []).map(i => ({
@@ -3075,6 +3119,14 @@ app.get('/api/customer/:customer_id/ledger', async (c) => {
         type: 'payment', date: p.payment_date, description: p.payment_method || 'Payment',
         amount: -Number(p.amount || 0), invoice_id: p.invoice_id,
       })),
+      ...(billsInRange || []).map(b => ({
+        type: 'purchase_bill', date: b.issue_date, description: `Goods purchased — ${b.bill_number}`,
+        amount: -Number(b.total_amount || 0), bill_id: b.id,
+      })),
+      ...(supplierPaymentsInRange || []).map(sp => ({
+        type: 'supplier_payment', date: sp.payment_date, description: `Paid to them — ${sp.payment_method || 'Payment'}`,
+        amount: Number(sp.amount || 0), bill_id: sp.bill_id,
+      })),
     ].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
 
     let running = openingBalance;
@@ -3083,11 +3135,17 @@ app.get('/api/customer/:customer_id/ledger', async (c) => {
       return { ...line, running_balance: running };
     });
 
+    const { data: advances } = await supabase.from('customer_advances')
+      .select('id, amount, amount_applied, amount_remaining, purpose, received_date, payment_mode, status')
+      .eq('organisation_id', organisationId).eq('customer_id', customerId)
+      .order('received_date', { ascending: false });
+
     return c.json({
       customer_name: customer.name,
       opening_balance: Math.round(openingBalance * 100) / 100,
       closing_balance: running,
       ledger,
+      advances: advances || [],
     });
   } catch (err) {
     console.error('[GET /api/customer/:customer_id/ledger] Error:', err.message);
