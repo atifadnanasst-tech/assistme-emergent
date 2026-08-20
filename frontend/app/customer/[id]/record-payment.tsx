@@ -155,7 +155,7 @@ export default function RecordPaymentScreen() {
     const sum = unpaidInvoices
       .filter(inv => selectedInvoiceIds.has(inv.id))
       .reduce((s, inv) => s + inv.amount_due, 0);
-    setAmount(sum.toString());
+    setAmount((Math.round(sum * 100) / 100).toString());
   }, [selectedInvoiceIds, unpaidInvoices]);
 
   const applyFromAdvances = async (token: string, backendUrl: string, totalToApply: number) => {
@@ -341,13 +341,16 @@ export default function RecordPaymentScreen() {
       ) : (
         <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 32 }} keyboardShouldPersistTaps="handled">
           <Text style={s.label}>AMOUNT <Text style={{ color: 'red' }}>*</Text></Text>
-          <TextInput
-            style={[s.input, selectedInvoiceIds.size > 0 && s.inputReadOnly]}
-            value={amount}
-            onChangeText={selectedInvoiceIds.size === 0 ? setAmount : undefined}
-            editable={selectedInvoiceIds.size === 0}
-            keyboardType="numeric" placeholder="0.00" placeholderTextColor="#999"
-          />
+          <View style={[s.input, { flexDirection: 'row', alignItems: 'center', paddingVertical: 0 }, selectedInvoiceIds.size > 0 && s.inputReadOnly]}>
+            <Text style={{ fontSize: 15, color: '#666', marginRight: 4 }}>₹</Text>
+            <TextInput
+              style={{ flex: 1, paddingVertical: 12, fontSize: 15, color: '#1A1A1A' }}
+              value={amount}
+              onChangeText={selectedInvoiceIds.size === 0 ? setAmount : undefined}
+              editable={selectedInvoiceIds.size === 0}
+              keyboardType="numeric" placeholder="0.00" placeholderTextColor="#999"
+            />
+          </View>
           {selectedInvoiceIds.size > 0 && (
             <Text style={s.helperText}>Auto-summed from {selectedInvoiceIds.size} selected invoice{selectedInvoiceIds.size > 1 ? 's' : ''}</Text>
           )}

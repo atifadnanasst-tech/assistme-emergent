@@ -311,6 +311,16 @@ export default function NewInvoiceScreen() {
 
   const handleSubmit = async (action: 'pdf' | 'share' | 'whatsapp') => {
     if (items.length === 0) { Alert.alert('Error', 'Add at least one item'); return; }
+    // Real bug fixed Aug 2026 (Atif's live testing): this check previously
+    // lived AFTER invoice creation, and Alert.alert() is non-blocking --
+    // the surrounding async function kept running immediately after the
+    // popup fired, navigating away before the person could even read it,
+    // let alone go back and fix it. Moved here as a genuine early exit,
+    // matching the existing items.length check just above.
+    if (collectPaymentNow && !collectionMode) {
+      Alert.alert('Payment Mode Required', 'Select how the payment was received, or uncheck "Also collect payment now".');
+      return;
+    }
     setSubmitting(action);
     try {
       const token = await getToken();
@@ -834,14 +844,17 @@ export default function NewInvoiceScreen() {
             </View>
           )}
 
-          <TouchableOpacity style={{ flexDirection: 'row', alignItems: 'center', marginTop: 16 }} onPress={() => { setCollectPaymentNow(!collectPaymentNow); if (!collectPaymentNow) setCollectionAmount(total.toString()); }}>
+          <TouchableOpacity style={{ flexDirection: 'row', alignItems: 'center', marginTop: 16 }} onPress={() => { setCollectPaymentNow(!collectPaymentNow); if (!collectPaymentNow) setCollectionAmount((Math.round(total * 100) / 100).toString()); }}>
             <Ionicons name={collectPaymentNow ? 'checkbox' : 'square-outline'} size={20} color="#075E54" />
             <Text style={{ marginLeft: 8, fontSize: 14, color: '#333', fontWeight: '600' }}>Also collect payment now</Text>
           </TouchableOpacity>
           {collectPaymentNow && (
             <View style={{ marginTop: 12 }}>
               <Text style={s.miniLabel}>AMOUNT</Text>
-              <TextInput style={s.numInput} value={collectionAmount} onChangeText={setCollectionAmount} keyboardType="numeric" placeholder="0.00" />
+              <View style={{ flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 8, paddingHorizontal: 10 }}>
+                <Text style={{ fontSize: 15, color: '#666', marginRight: 4 }}>₹</Text>
+                <TextInput style={{ flex: 1, paddingVertical: 10, fontSize: 15 }} value={collectionAmount} onChangeText={setCollectionAmount} keyboardType="numeric" placeholder="0.00" />
+              </View>
               <Text style={[s.miniLabel, { marginTop: 12 }]}>PAYMENT MODE <Text style={{ color: 'red' }}>*</Text></Text>
               <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 4 }}>
                 {['Cash', 'UPI', 'Bank Transfer', 'Cheque', 'Other'].map(mode => (
