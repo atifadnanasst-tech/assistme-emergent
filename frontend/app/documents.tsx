@@ -94,6 +94,7 @@ export default function DocumentsScreen() {
   const [ledgerOpeningBalance, setLedgerOpeningBalance] = useState(0);
   const [ledgerClosingBalance, setLedgerClosingBalance] = useState(0);
   const [loadingLedger, setLoadingLedger] = useState(false);
+  const [ledgerAdvances, setLedgerAdvances] = useState<any[]>([]);
 
   const currentPeriodBounds = periodMode === 'month' ? getMonthBounds(refDate)
     : periodMode === 'quarter' ? getFYQuarterBounds(refDate)
@@ -116,6 +117,7 @@ export default function DocumentsScreen() {
         setLedger(data.ledger || []);
         setLedgerOpeningBalance(data.opening_balance || 0);
         setLedgerClosingBalance(data.closing_balance || 0);
+        setLedgerAdvances(data.advances || []);
       }
     } catch {} finally { setLoadingLedger(false); }
   };
@@ -250,8 +252,11 @@ export default function DocumentsScreen() {
     { key: 'draft', label: 'Draft', count: drafts.length },
     { key: 'receipt', label: 'Receipt', count: receipts.length },
     // Customer-scoped only -- a running balance mixing multiple
-    // customers together wouldn't mean anything coherent.
-    ...(isCustomerScoped ? [{ key: 'balance_sheet' as TabType, label: 'Balance Sheet', count: 0 }] : []),
+    // customers together wouldn't mean anything coherent. Label shows
+    // the closing balance at a glance (Aug 2026, Atif's feedback),
+    // matching the "(count)" pattern every other tab already uses, just
+    // showing the amount instead of a count.
+    ...(isCustomerScoped ? [{ key: 'balance_sheet' as TabType, label: `Balance Sheet${ledger.length > 0 || ledgerClosingBalance !== 0 ? ` (${fmt(ledgerClosingBalance)})` : ''}`, count: 0 }] : []),
   ];
 
   const renderInvoiceRow = ({ item }: { item: InvoiceDoc }) => (
@@ -359,14 +364,19 @@ export default function DocumentsScreen() {
           <Ionicons name="arrow-back" size={24} color="#FFFFFF" />
         </TouchableOpacity>
         <Text style={s.headerTitle}>Documents</Text>
-        {isCustomerScoped ? (
-          <View style={{ width: 24 }} />
-        ) : (
-          <TouchableOpacity onPress={() => setCustomerFilterVisible(true)} style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-            <Ionicons name="filter" size={20} color="#FFFFFF" />
-            {selectedCustomerIds.size > 0 && <Text style={{ color: '#FFFFFF', fontSize: 12, fontWeight: '700' }}>{selectedCustomerIds.size}</Text>}
+        {/* Sort moved here from the tab bar (Aug 2026, Atif's feedback) --
+            applies to every tab, always visible regardless of scope. */}
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
+          {!isCustomerScoped && (
+            <TouchableOpacity onPress={() => setCustomerFilterVisible(true)} style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+              <Ionicons name="filter" size={20} color="#FFFFFF" />
+              {selectedCustomerIds.size > 0 && <Text style={{ color: '#FFFFFF', fontSize: 12, fontWeight: '700' }}>{selectedCustomerIds.size}</Text>}
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity onPress={() => setSortAscending(!sortAscending)}>
+            <Ionicons name={sortAscending ? 'arrow-up' : 'arrow-down'} size={20} color="#FFFFFF" />
           </TouchableOpacity>
-        )}
+        </View>
       </View>
 
       {!isCustomerScoped && (
@@ -412,9 +422,6 @@ export default function DocumentsScreen() {
             </TouchableOpacity>
           ))}
         </ScrollView>
-        <TouchableOpacity style={s.sortBtn} onPress={() => setSortAscending(!sortAscending)}>
-          <Ionicons name={sortAscending ? 'arrow-up' : 'arrow-down'} size={18} color="#075E54" />
-        </TouchableOpacity>
       </View>
 
       {activeTab === 'balance_sheet' ? (
@@ -475,25 +482,51 @@ export default function DocumentsScreen() {
               {ledger.length === 0 ? (
                 <Text style={s.emptyText}>No activity in this period</Text>
               ) : (
-                ledger.map((line, i) => (
-                  <View key={i} style={s.row}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={s.rowTitle}>{line.description}</Text>
-                      <Text style={s.rowDate}>{fmtDate(line.date)}</Text>
-                    </View>
-                    <View style={{ alignItems: 'flex-end' }}>
-                      <Text style={[s.rowAmount, { color: line.amount < 0 ? '#059669' : '#1A1A1A' }]}>
-                        {line.amount < 0 ? '-' : '+'}{fmt(Math.abs(line.amount))}
-                      </Text>
-                      <Text style={s.rowSubtitle}>Bal: {fmt(line.running_balance)}</Text>
-                    </View>
-                  </View>
-                ))
+                // Invoice lines tappable (Aug 2026, Atif's feedback),
+                // matching every other tab's own tap-to-open-PDF
+                // behavior. Payment/purchase_bill/supplier_payment lines
+                // stay non-tappable -- no PDF exists for those yet.
+                ledger.map((line, i) => {
+                  const RowWrapper = line.type === 'invoice' && line.pdf_url ? TouchableOpacity : View;
+                  return (
+                    <RowWrapper key={i} style={s.row} {...(line.type === 'invoice' && line.pdf_url ? { onPress: () => openPdf(line.pdf_url) } : {})}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={s.rowTitle}>{line.description}</Text>
+                        <Text style={s.rowDate}>{fmtDate(line.date)}</Text>
+                      </View>
+                      <View style={{ alignItems: 'flex-end' }}>
+                        <Text style={[s.rowAmount, { color: line.amount < 0 ? '#059669' : '#1A1A1A' }]}>
+                          {line.amount < 0 ? '-' : '+'}{fmt(Math.abs(line.amount))}
+                        </Text>
+                        <Text style={s.rowSubtitle}>Bal: {fmt(line.running_balance)}</Text>
+                      </View>
+                    </RowWrapper>
+                  );
+                })
               )}
               <View style={s.ledgerSummary}>
                 <Text style={s.ledgerSummaryLabel}>Closing Balance</Text>
                 <Text style={s.ledgerSummaryValue}>{fmt(ledgerClosingBalance)}</Text>
               </View>
+
+              {/* Advances section (Aug 2026, Atif's design) -- deliberately
+                  NOT part of the running balance above, matching how
+                  advances stay separate everywhere else until consciously
+                  applied. Own section, own cards, informational only. */}
+              {ledgerAdvances.filter((a: any) => a.status === 'active' && a.amount_remaining > 0).length > 0 && (
+                <View style={{ marginTop: 20 }}>
+                  <Text style={[s.label, { marginBottom: 8 }]}>ADVANCES HELD</Text>
+                  {ledgerAdvances.filter((a: any) => a.status === 'active' && a.amount_remaining > 0).map((adv: any) => (
+                    <View key={adv.id} style={[s.row, s.advanceRow]}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={s.rowTitle}>{fmt(adv.amount_remaining)} remaining{adv.purpose ? ` — ${adv.purpose}` : ''}</Text>
+                        <Text style={s.rowSubtitle}>{adv.payment_mode || 'Advance'}</Text>
+                      </View>
+                      <Text style={s.rowDate}>{fmtDate(adv.received_date)}</Text>
+                    </View>
+                  ))}
+                </View>
+              )}
             </>
           )}
         </ScrollView>
@@ -516,10 +549,6 @@ const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F5F5F5' },
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#075E54', paddingHorizontal: 16, paddingVertical: 14 },
   headerTitle: { fontSize: 18, fontWeight: '700', color: '#FFFFFF' },
-  // Made horizontally scrollable (Aug 2026, Atif's feedback) -- flex:1
-  // equal division looked increasingly squeezed as tabs were added
-  // (Receipt, and Balance Sheet to follow), so each tab now takes its
-  // own natural content width and the row scrolls instead of shrinking.
   tabBarContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFFFFF', borderBottomWidth: 1, borderBottomColor: '#E0E0E0' },
   tabBar: { flexDirection: 'row', flexGrow: 0 },
   tab: { paddingVertical: 12, paddingHorizontal: 18, alignItems: 'center', borderBottomWidth: 2, borderBottomColor: 'transparent' },
@@ -547,6 +576,7 @@ const s = StyleSheet.create({
   inlineSubmitBtn: { flex: 1, paddingVertical: 10, borderRadius: 8, backgroundColor: '#075E54', alignItems: 'center' },
   inlineSubmitText: { fontSize: 13, fontWeight: '700', color: '#FFFFFF' },
   input: { borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 10, paddingHorizontal: 14, paddingVertical: 10, backgroundColor: '#FFFFFF' },
+  label: { fontSize: 12, fontWeight: '700', color: '#666', letterSpacing: 0.5 },
   chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   chip: { borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 20, paddingHorizontal: 14, paddingVertical: 8, backgroundColor: '#FFFFFF' },
   chipActive: { borderColor: '#075E54', backgroundColor: '#E8F5E9' },
