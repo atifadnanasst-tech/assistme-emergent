@@ -3110,10 +3110,28 @@ app.get('/api/customer/:customer_id/ledger', async (c) => {
       .eq('organisation_id', organisationId).eq('customer_id', customerId)
       .is('deleted_at', null).gte('payment_date', startDate).lte('payment_date', endDate);
 
+    // pdf_url per invoice line (Aug 2026, Atif's feedback) -- so invoice
+    // rows on this tab can be tappable too, matching every other tab.
+    // Same separate-lookup pattern as /api/documents, not an embedded
+    // join, per the earlier confirmed lesson that embedded joins can
+    // silently drop rows.
+    const ledgerInvoiceIds = (invoicesInRange || []).map(i => i.id);
+    let ledgerInvoicePdfMap = {};
+    if (ledgerInvoiceIds.length > 0) {
+      const { data: ledgerInvoiceAttachments } = await supabase.from('attachments')
+        .select('entity_id, public_url, created_at')
+        .eq('organisation_id', organisationId).eq('entity_type', 'invoice')
+        .in('entity_id', ledgerInvoiceIds).order('created_at', { ascending: false });
+      (ledgerInvoiceAttachments || []).forEach(a => {
+        if (!ledgerInvoicePdfMap[a.entity_id]) ledgerInvoicePdfMap[a.entity_id] = a.public_url;
+      });
+    }
+
     const lines = [
       ...(invoicesInRange || []).map(i => ({
         type: 'invoice', date: i.issue_date, description: i.invoice_number,
         amount: Number(i.total_amount || 0), invoice_id: i.id, invoice_number: i.invoice_number,
+        pdf_url: ledgerInvoicePdfMap[i.id] || null,
       })),
       ...(paymentsInRange || []).map(p => ({
         type: 'payment', date: p.payment_date, description: p.payment_method || 'Payment',
