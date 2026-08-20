@@ -3946,6 +3946,146 @@ async function generateReceiptPDF({ organisationId, customerId, receiptDate, tot
   }
 }
 
+// ─── generateLedgerPDF (Aug 2026, Balance Sheet subtask 3) ──
+// Deliberately a SEPARATE function, same reasoning as generateReceiptPDF
+// -- a chronological account statement's data shape is fundamentally
+// different from an itemized invoice/quote/challan or a single-payment
+// receipt. Reuses the same org-header + font-fix + signed-URL patterns
+// proven elsewhere in this file. Matches a row-based visual style (not
+// a strict PDFKit table) for consistency with the receipt PDF, and
+// because variable-length item-detail text under itemDetailLevel would
+// make fixed-column alignment fight real content.
+//
+// itemDetailLevel (Atif's explicit spec, Aug 2026): 'none' (just the
+// invoice number, current default), 'summary' (first 3 line items, with
+// a "+N more" note if the invoice has more), or 'full' (every line
+// item). A bare invoice number means little to a layman reading a
+// statement -- this lets the owner choose how much detail to include
+// at share time. Only invoice-type ledger lines get item detail;
+// payment/purchase_bill/supplier_payment lines never have line items.
+async function generateLedgerPDF({ organisationId, customerId, customerName, startDate, endDate, openingBalance, closingBalance, ledger, itemDetailLevel = 'none' }) {
+  try {
+    const biz = await getDocumentBrandingProfile(organisationId, supabase);
+
+    let itemsByInvoice = {};
+    if (itemDetailLevel !== 'none') {
+      const invoiceIds = ledger.filter(l => l.type === 'invoice' && l.invoice_id).map(l => l.invoice_id);
+      if (invoiceIds.length > 0) {
+        const { data: items } = await supabase.from('invoice_items')
+          .select('invoice_id, description, quantity, unit_price, sort_order')
+          .in('invoice_id', invoiceIds)
+          .order('sort_order', { ascending: true });
+        (items || []).forEach(item => {
+          if (!itemsByInvoice[item.invoice_id]) itemsByInvoice[item.invoice_id] = [];
+          itemsByInvoice[item.invoice_id].push(item);
+        });
+      }
+    }
+
+    const PDFDocument = (await import('pdfkit')).default;
+    const doc2 = new PDFDocument({ size: 'A4', margin: 50 });
+    doc2.registerFont('NotoSans', __dirname + '/../assets/fonts/NotoSans-Regular.ttf');
+    doc2.registerFont('NotoSans-Bold', __dirname + '/../assets/fonts/NotoSans-Bold.ttf');
+    const chunks = [];
+    doc2.on('data', chunk => chunks.push(chunk));
+    const pdfReady = new Promise((resolve) => doc2.on('end', resolve));
+
+    if (biz.logo_url) {
+      try {
+        const logoController = new AbortController();
+        const logoTimeout = setTimeout(() => logoController.abort(), 5000);
+        const logoRes = await fetch(biz.logo_url, { signal: logoController.signal });
+        clearTimeout(logoTimeout);
+        if (logoRes.ok) {
+          const logoBuffer = Buffer.from(await logoRes.arrayBuffer());
+          doc2.image(logoBuffer, 50, 45, { width: 60, height: 60, fit: [60, 60] });
+        }
+      } catch (e) { console.warn('[Ledger PDF] Logo fetch failed:', e.message); }
+    }
+
+    doc2.fontSize(20).font('NotoSans-Bold').text(biz.business_name || 'Business', 120, 50);
+    doc2.fontSize(9).font('NotoSans');
+    if (biz.gstin) doc2.text(`GSTIN: ${biz.gstin}`, 120, 75);
+    const addrParts = [biz.address_line1, biz.address_line2, biz.city, biz.state, biz.postal_code].filter(Boolean);
+    if (addrParts.length) doc2.text(addrParts.join(', '), 120, 88);
+    if (biz.phone) doc2.text(`Phone: ${biz.phone}`, 120, 101);
+
+    doc2.y = 130;
+    doc2.moveTo(50, 130).lineTo(545, 130).stroke();
+    doc2.moveDown(1.5);
+
+    doc2.fontSize(16).font('NotoSans-Bold').text('ACCOUNT STATEMENT', { align: 'center' });
+    doc2.moveDown(0.3);
+    doc2.fontSize(11).font('NotoSans').text(customerName || 'Customer', { align: 'center' });
+    doc2.fontSize(9).fillColor('#666666').text(`${startDate} to ${endDate}`, { align: 'center' });
+    doc2.fillColor('#000000');
+    doc2.moveDown(1.5);
+
+    const fmtSignedCurrency = (n) => `${n < 0 ? '-' : ''}₹${Math.abs(Number(n)).toFixed(2)}`;
+    doc2.font('NotoSans-Bold').fontSize(11).text(`Opening Balance: ${fmtSignedCurrency(openingBalance)}`);
+    doc2.moveDown(1);
+    doc2.moveTo(50, doc2.y).lineTo(545, doc2.y).strokeColor('#DDDDDD').stroke().strokeColor('#000000');
+    doc2.moveDown(0.5);
+
+    for (const line of ledger) {
+      if (doc2.y > 700) doc2.addPage();
+      const sign = line.amount < 0 ? '-' : '+';
+      doc2.font('NotoSans-Bold').fontSize(10).text(line.description, 50, doc2.y, { width: 340, continued: false });
+      doc2.font('NotoSans').fontSize(9).fillColor('#666666').text(line.date, 50, doc2.y);
+      doc2.fillColor('#000000');
+      const rightY = doc2.y - 22;
+      doc2.font('NotoSans-Bold').fontSize(10).text(`${sign}₹${Math.abs(line.amount).toFixed(2)}`, 400, rightY, { width: 145, align: 'right' });
+      doc2.font('NotoSans').fontSize(8).fillColor('#666666').text(`Bal: ${fmtSignedCurrency(line.running_balance)}`, 400, rightY + 13, { width: 145, align: 'right' });
+      doc2.fillColor('#000000');
+
+      if (line.type === 'invoice' && itemDetailLevel !== 'none' && itemsByInvoice[line.invoice_id]) {
+        const allItems = itemsByInvoice[line.invoice_id];
+        const itemsToShow = itemDetailLevel === 'summary' ? allItems.slice(0, 3) : allItems;
+        doc2.moveDown(0.3);
+        doc2.font('NotoSans').fontSize(8).fillColor('#888888');
+        itemsToShow.forEach(item => {
+          doc2.text(`  • ${item.description} (${item.quantity} × ₹${Number(item.unit_price).toFixed(2)})`, 60, doc2.y, { width: 480 });
+        });
+        if (itemDetailLevel === 'summary' && allItems.length > 3) {
+          doc2.text(`  +${allItems.length - 3} more`, 60, doc2.y, { width: 480 });
+        }
+        doc2.fillColor('#000000');
+      }
+      doc2.moveDown(0.7);
+    }
+
+    doc2.moveDown(0.5);
+    doc2.moveTo(50, doc2.y).lineTo(545, doc2.y).strokeColor('#DDDDDD').stroke().strokeColor('#000000');
+    doc2.moveDown(0.5);
+    doc2.font('NotoSans-Bold').fontSize(12).text(`Closing Balance: ${fmtSignedCurrency(closingBalance)}`);
+
+    doc2.end();
+    await pdfReady;
+    const pdfBuffer = Buffer.concat(chunks);
+
+    const sanitizeForFilename = (s) => (s || '').replace(/[^a-zA-Z0-9]+/g, '');
+    const custNamePart = sanitizeForFilename(customerName).slice(0, 30) || 'Customer';
+    const fileName = `Statement_${custNamePart}_${startDate}_to_${endDate}_${Date.now()}.pdf`;
+    const storagePath = `${organisationId}/${fileName}`;
+
+    const { error: uploadErr } = await supabase.storage.from('receipts').upload(storagePath, pdfBuffer, {
+      contentType: 'application/pdf', upsert: true,
+    });
+    if (uploadErr) { console.error('[Ledger PDF] Upload error:', uploadErr); return null; }
+
+    const NINETY_DAYS_SECONDS = 90 * 24 * 60 * 60;
+    const { data: signedUrlData, error: signErr } = await supabase.storage.from('receipts')
+      .createSignedUrl(storagePath, NINETY_DAYS_SECONDS);
+    if (signErr) { console.error('[Ledger PDF] Sign error:', signErr); return null; }
+
+    console.log(`[Ledger PDF] Generated: ${signedUrlData.signedUrl}`);
+    return signedUrlData.signedUrl;
+  } catch (err) {
+    console.error('[Ledger PDF] generateLedgerPDF error:', err);
+    return null;
+  }
+}
+
 
 // ══════════════════════════════════════════════════════════════
 // FLOW 3A — AI SPARK ROUTES
