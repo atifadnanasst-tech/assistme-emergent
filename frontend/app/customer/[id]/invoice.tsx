@@ -57,6 +57,16 @@ export default function NewInvoiceScreen() {
   const [poNumber, setPoNumber] = useState('');
   const [setAsDefault, setSetAsDefault] = useState(false);
   const [generateChallan, setGenerateChallan] = useState(false);
+  // Collect payment at invoice-creation time (Aug 2026, payment recording
+  // subtask 7). Deliberately simpler than Record Payment's full flow --
+  // a just-created invoice is always exactly one invoice, so no
+  // multi-select/auto-allocate/advance-shortfall complexity is needed
+  // here. "Advance" mode itself is intentionally left out of this
+  // specific flow -- applying an OLD advance to a BRAND NEW invoice is
+  // an edge case better handled via Record Payment afterward.
+  const [collectPaymentNow, setCollectPaymentNow] = useState(false);
+  const [collectionAmount, setCollectionAmount] = useState('');
+  const [collectionMode, setCollectionMode] = useState<string | null>(null);
   const [categoryOptions, setCategoryOptions] = useState<{ id: string; name: string }[]>([]);
   const [transportName, setTransportName] = useState('');
   const [bundleCount, setBundleCount] = useState('');
@@ -354,6 +364,28 @@ export default function NewInvoiceScreen() {
         if (!created.invoice_id) { Alert.alert('Error', 'Failed to create invoice'); return; }
         inv = created;
         setCreatedInvoice({ id: created.invoice_id, number: created.invoice_number });
+
+        // Collect payment now (Aug 2026, subtask 7) -- fires right after
+        // creation succeeds, using the SAME /api/payments endpoint every
+        // other payment path in the app already goes through. Non-fatal
+        // on failure -- the invoice itself is already safely created;
+        // the owner can always record the payment separately afterward.
+        if (collectPaymentNow) {
+          const collectAmt = parseFloat(collectionAmount);
+          if (!collectionMode) {
+            Alert.alert('Payment Mode Required', 'Invoice created, but select a payment mode to also record the payment.');
+          } else if (collectAmt && collectAmt > 0) {
+            try {
+              await fetch(`${backendUrl}/api/payments`, {
+                method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  customer_id: customerId, invoice_id: created.invoice_id, amount: collectAmt,
+                  payment_date: new Date().toISOString().split('T')[0], payment_mode: collectionMode,
+                }),
+              });
+            } catch (e) { console.warn('[INVOICE] Payment collection failed (non-fatal):', e); }
+          }
+        }
 
         // "Set as default" (Amazon-style) -- fire-and-forget, non-blocking.
         // Only persists customer-level defaults after the invoice itself
@@ -799,6 +831,29 @@ export default function NewInvoiceScreen() {
                   ))}
                 </View>
               )}
+            </View>
+          )}
+
+          <TouchableOpacity style={{ flexDirection: 'row', alignItems: 'center', marginTop: 16 }} onPress={() => { setCollectPaymentNow(!collectPaymentNow); if (!collectPaymentNow) setCollectionAmount(total.toString()); }}>
+            <Ionicons name={collectPaymentNow ? 'checkbox' : 'square-outline'} size={20} color="#075E54" />
+            <Text style={{ marginLeft: 8, fontSize: 14, color: '#333', fontWeight: '600' }}>Also collect payment now</Text>
+          </TouchableOpacity>
+          {collectPaymentNow && (
+            <View style={{ marginTop: 12 }}>
+              <Text style={s.miniLabel}>AMOUNT</Text>
+              <TextInput style={s.numInput} value={collectionAmount} onChangeText={setCollectionAmount} keyboardType="numeric" placeholder="0.00" />
+              <Text style={[s.miniLabel, { marginTop: 12 }]}>PAYMENT MODE <Text style={{ color: 'red' }}>*</Text></Text>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 4 }}>
+                {['Cash', 'UPI', 'Bank Transfer', 'Cheque', 'Other'].map(mode => (
+                  <TouchableOpacity
+                    key={mode}
+                    style={{ borderWidth: 1, borderColor: collectionMode === mode ? '#075E54' : '#E0E0E0', backgroundColor: collectionMode === mode ? '#E8F5E9' : '#FFFFFF', borderRadius: 20, paddingHorizontal: 14, paddingVertical: 8 }}
+                    onPress={() => setCollectionMode(collectionMode === mode ? null : mode)}
+                  >
+                    <Text style={{ fontSize: 13, color: collectionMode === mode ? '#075E54' : '#666', fontWeight: collectionMode === mode ? '700' : '400' }}>{mode}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
             </View>
           )}
         </View>
