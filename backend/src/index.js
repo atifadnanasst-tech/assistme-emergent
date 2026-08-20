@@ -2912,6 +2912,36 @@ app.post('/api/payments', async (c) => {
   }
 });
 
+// ─── GET /api/customer/:customer_id/unpaid-invoices (Aug 2026) ──
+// Payment recording subtask 2. Backs the optional "apply to a specific
+// invoice" picker on the Record Payment form. Same status filter
+// recordPayment() itself uses internally for auto-allocation, kept
+// consistent so the manual picker and the auto-allocate path agree on
+// what counts as "unpaid".
+app.get('/api/customer/:customer_id/unpaid-invoices', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+    const customerId = c.req.param('customer_id');
+
+    const { data: invoices } = await supabase
+      .from('invoices')
+      .select('id, invoice_number, total_amount, amount_paid, amount_due')
+      .eq('organisation_id', organisationId)
+      .eq('customer_id', customerId)
+      .eq('is_historical', false)
+      .not('status', 'in', '("paid","cancelled","draft")')
+      .is('deleted_at', null)
+      .order('issue_date', { ascending: true });
+
+    return c.json({ invoices: invoices || [] });
+  } catch (err) {
+    console.error('[GET /api/customer/:customer_id/unpaid-invoices] Error:', err.message);
+    return c.json({ error: 'internal_error' }, 500);
+  }
+});
+
 
 // ──────────────────────────────────────────────────────────────
 // calculateInvoiceTotals — SINGLE SOURCE OF TRUTH FOR ALL FINANCIAL MATH
