@@ -33,7 +33,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { authService } from '../lib/auth';
 import BottomSheet from '../components/primitives/BottomSheet';
 
-type TabType = 'invoice' | 'challan' | 'quote' | 'draft';
+type TabType = 'invoice' | 'challan' | 'quote' | 'draft' | 'receipt';
 
 interface InvoiceDoc {
   id: string; invoice_number: string; customer_id: string; customer_name: string;
@@ -47,6 +47,15 @@ interface QuoteDoc {
 interface DraftDoc {
   id: string; customer_id: string; customer_name: string;
   total_amount: number; created_at: string;
+}
+// Payment Received tab (Aug 2026). Unified payment + advance shape --
+// type distinguishes them for the visual treatment Atif asked for
+// ("all receipts can be seen in one place but card structure will
+// ensure it is seen a little differently").
+interface ReceiptDoc {
+  type: 'payment' | 'advance'; id: string; customer_id: string; customer_name: string;
+  amount: number; date: string; payment_mode: string | null;
+  invoice_number?: string | null; purpose?: string | null; status?: string;
 }
 
 const fmt = (n: number) => `₹${(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -62,6 +71,7 @@ export default function DocumentsScreen() {
   const [invoices, setInvoices] = useState<InvoiceDoc[]>([]);
   const [quotes, setQuotes] = useState<QuoteDoc[]>([]);
   const [drafts, setDrafts] = useState<DraftDoc[]>([]);
+  const [receipts, setReceipts] = useState<ReceiptDoc[]>([]);
 
   // Inline "Create Challan" mini-form state (Atif's spec: expand in place,
   // no navigation, no separate screen).
@@ -111,6 +121,7 @@ export default function DocumentsScreen() {
         setInvoices(data.invoices || []);
         setQuotes(data.quotes || []);
         setDrafts(data.drafts || []);
+        setReceipts(data.receipts || []);
       }
     } catch {} finally { setLoading(false); }
   };
@@ -186,6 +197,7 @@ export default function DocumentsScreen() {
     { key: 'challan', label: 'Challan', count: invoices.filter(i => i.has_challan).length },
     { key: 'quote', label: 'Quote', count: quotes.length },
     { key: 'draft', label: 'Draft', count: drafts.length },
+    { key: 'receipt', label: 'Receipt', count: receipts.length },
   ];
 
   const renderInvoiceRow = ({ item }: { item: InvoiceDoc }) => (
@@ -255,9 +267,29 @@ export default function DocumentsScreen() {
     </TouchableOpacity>
   );
 
-  const emptyLabel = { invoice: 'No invoices yet', challan: 'No invoices yet', quote: 'No quotes yet', draft: 'No drafts' }[activeTab];
+  const renderReceiptRow = ({ item }: { item: ReceiptDoc }) => (
+    <View style={[s.row, item.type === 'advance' && s.advanceRow]}>
+      <View style={{ flex: 1 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+          <Text style={s.rowTitle}>{fmt(item.amount)}</Text>
+          {item.type === 'advance' && (
+            <View style={s.advanceBadge}><Text style={s.advanceBadgeText}>ADVANCE</Text></View>
+          )}
+        </View>
+        {!isCustomerScoped && <Text style={s.rowSubtitle}>{item.customer_name}</Text>}
+        <Text style={s.rowSubtitle}>
+          {item.type === 'payment'
+            ? `${item.payment_mode || 'Payment'}${item.invoice_number ? ` — ${item.invoice_number}` : ''}`
+            : `${item.payment_mode || 'Advance'}${item.purpose ? ` — ${item.purpose}` : ''}${item.status === 'fully_applied' ? ' (fully applied)' : ''}`}
+        </Text>
+        <Text style={s.rowDate}>{fmtDate(item.date)}</Text>
+      </View>
+    </View>
+  );
 
-  const currentData = activeTab === 'invoice' ? invoices : activeTab === 'challan' ? invoices : activeTab === 'quote' ? quotes : drafts;
+  const emptyLabel = { invoice: 'No invoices yet', challan: 'No invoices yet', quote: 'No quotes yet', draft: 'No drafts', receipt: 'No payments received yet' }[activeTab];
+
+  const currentData = activeTab === 'invoice' ? invoices : activeTab === 'challan' ? invoices : activeTab === 'quote' ? quotes : activeTab === 'draft' ? drafts : receipts;
   const sortedData = sortAscending ? [...currentData].reverse() : currentData;
 
   return (
@@ -329,7 +361,7 @@ export default function DocumentsScreen() {
         <FlatList
           data={sortedData}
           keyExtractor={(item: any) => item.id}
-          renderItem={activeTab === 'invoice' ? renderInvoiceRow : activeTab === 'challan' ? renderChallanRow : activeTab === 'quote' ? renderQuoteRow : renderDraftRow}
+          renderItem={activeTab === 'invoice' ? renderInvoiceRow : activeTab === 'challan' ? renderChallanRow : activeTab === 'quote' ? renderQuoteRow : activeTab === 'draft' ? renderDraftRow : renderReceiptRow}
           ListEmptyComponent={<Text style={s.emptyText}>{emptyLabel}</Text>}
           contentContainerStyle={{ paddingBottom: 20 }}
         />
@@ -348,6 +380,9 @@ const s = StyleSheet.create({
   tabText: { fontSize: 13, fontWeight: '600', color: '#999' },
   tabTextActive: { color: '#075E54' },
   row: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFFFFF', paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#F0F0F0' },
+  advanceRow: { borderLeftWidth: 3, borderLeftColor: '#F59E0B' },
+  advanceBadge: { backgroundColor: '#FEF3C7', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
+  advanceBadgeText: { fontSize: 9, fontWeight: '700', color: '#92400E', letterSpacing: 0.3 },
   rowTitle: { fontSize: 15, fontWeight: '700', color: '#1A1A1A' },
   rowSubtitle: { fontSize: 13, color: '#555', marginTop: 2 },
   rowDate: { fontSize: 12, color: '#999', marginTop: 2 },
