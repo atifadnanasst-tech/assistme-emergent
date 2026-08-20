@@ -4,29 +4,18 @@
  * Created: Aug 2026 (Payment recording, subtask 3)
  *
  * Updated: Aug 2026 -- mutual exclusivity fixes, mandatory payment_mode
- * (NO default, per Atif's explicit design: a gate that pre-fills a
- * default is not a gate at all -- it lets the owner tap through without
- * ever consciously choosing, defeating the audit purpose entirely), and
- * a precise, per-rupee-accurate shortfall split when "Advance" mode is
- * selected but doesn't cover the full amount.
+ * (no default), precise per-rupee-accurate advance shortfall splitting.
  *
- * Bugs fixed this round (all confirmed via real Supabase data, not
- * assumed): (1) "Advance" tag (drawing FROM an advance) and "Record as
- * new Advance" (creating one) could be selected simultaneously -- input
- * and output confused as the same action. (2) "Record as new Advance"
- * and "Auto-allocate" could show simultaneously selected -- traced to
- * the Auto-allocate radio ICON only checking selectedInvoiceIds.size,
- * while the row's own background correctly also checked isAdvanceMode --
- * a real visual/logic mismatch. (3) The advance-application bookkeeping
- * only ever drew from ONE advance and silently capped the amount via
- * Math.min() when insufficient, while the REAL payment (via
- * /api/payments) went through in full regardless -- confirmed via SQL
- * that a ₹15,000 request against ₹12,000 available resulted in real
- * invoices being fully paid but only ₹10,000 of genuine advance backing
- * it, with zero warning. Now: shortfall is detected proactively (live,
- * as the amount is typed) and requires an explicit, ungated choice of
- * remainder tag before the button unlocks -- the split is applied with
- * per-rupee accuracy, not a lump "tag everything as X" approximation.
+ * Updated: Aug 2026 -- three-button structure (subtask 6), mirroring
+ * invoice.tsx's own Create/Share Here/WhatsApp pattern, but built as a
+ * genuinely reusable utility this time (see lib/shareReceipt.ts) rather
+ * than another one-off screen-local implementation, per Atif's explicit
+ * instruction for future-session ease. Record Payment records only
+ * (unchanged behavior); Share Here records + generates a receipt PDF +
+ * posts it as a chat card visible to both sides; Share on WhatsApp
+ * records + generates the receipt + opens WhatsApp with it. All three
+ * call the exact same recording logic underneath -- only what happens
+ * AFTER a successful recording differs.
  */
 
 import React, { useState, useEffect, useMemo } from 'react';
@@ -39,6 +28,7 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { authService } from '../../../lib/auth';
+import { shareReceipt, ReceiptAppliedToEntry } from '../../../lib/shareReceipt';
 
 interface UnpaidInvoice {
   id: string; invoice_number: string; total_amount: number; amount_paid: number; amount_due: number;
@@ -49,9 +39,6 @@ interface CustomerAdvance {
 }
 
 const PAYMENT_MODES = ['Cash', 'UPI', 'Bank Transfer', 'Cheque', 'Advance', 'Other'];
-// Remainder tag excludes "Advance" itself -- the shortfall by definition
-// isn't advance-backed, so tagging it "Advance" would just recreate the
-// exact bug this whole update fixes.
 const REMAINDER_MODES = PAYMENT_MODES.filter(m => m !== 'Advance');
 
 const fmt = (n: number) => `₹${(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -62,13 +49,15 @@ const toISODate = (d: Date) => {
 const formatDisplay = (d: Date) => d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
 const formatDateStr = (d: string) => new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
 
+type SubmitAction = 'record' | 'share' | 'whatsapp';
+
 export default function RecordPaymentScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ id: string }>();
   const customerId = params.id;
 
   const [loading, setLoading] = useState(true);
-  const [submitting, setSubmitting] = useState(false);
+  const [submitting, setSubmitting] = useState<SubmitAction | null>(null);
   const [unpaidInvoices, setUnpaidInvoices] = useState<UnpaidInvoice[]>([]);
   const [amount, setAmount] = useState('');
   const [paymentDate, setPaymentDate] = useState(new Date());
@@ -189,7 +178,28 @@ export default function RecordPaymentScreen() {
     }
   };
 
-  const handleSubmit = async () => {
+  const maybeShareReceipt = async (
+    token: string, backendUrl: string, action: SubmitAction,
+    totalAmount: number, modeForReceipt: string, appliedTo: ReceiptAppliedToEntry[], dateStr: string
+  ) => {
+    if (action === 'record' || totalAmount <= 0) return null;
+    const result = await shareReceipt({
+      token, backendUrl, customerId: customerId!, totalAmount,
+      paymentMode: modeForReceipt, appliedTo, receiptDate: dateStr,
+      channel: action === 'share' ? 'app' : 'whatsapp',
+    });
+    if (result.error) {
+      Alert.alert('Payment Recorded', 'The payment was recorded, but the receipt could not be shared. You can find it later.');
+      return null;
+    }
+    if (action === 'whatsapp' && result.whatsapp_url) {
+      const { Linking } = await import('react-native');
+      Linking.openURL(result.whatsapp_url).catch(() => {});
+    }
+    return result;
+  };
+
+  const handleSubmit = async (action: SubmitAction) => {
     if (!paymentMode) { Alert.alert('Payment Mode Required', 'Select how this payment was received.'); return; }
     if (shortfall > 0 && !remainderMode) {
       Alert.alert('Remainder Tag Required', `${fmt(shortfall)} isn't covered by available advance -- select how the rest was received.`);
@@ -201,11 +211,11 @@ export default function RecordPaymentScreen() {
     const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
     const dateStr = toISODate(paymentDate);
 
-    setSubmitting(true);
+    setSubmitting(action);
     try {
       if (isAdvanceMode) {
         const amt = parseFloat(amount);
-        if (!amt || amt <= 0) { Alert.alert('Error', 'Enter a valid amount'); setSubmitting(false); return; }
+        if (!amt || amt <= 0) { Alert.alert('Error', 'Enter a valid amount'); setSubmitting(null); return; }
         const res = await fetch(`${backendUrl}/api/customer/${customerId}/advance`, {
           method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -214,6 +224,7 @@ export default function RecordPaymentScreen() {
           }),
         });
         if (res.ok) {
+          await maybeShareReceipt(token, backendUrl, action, amt, paymentMode, [], dateStr);
           Alert.alert('Advance Recorded', `${fmt(amt)} held as an advance${advancePurpose ? ` for ${advancePurpose}` : ''}.`, [
             { text: 'OK', onPress: () => router.back() },
           ]);
@@ -223,9 +234,11 @@ export default function RecordPaymentScreen() {
       } else if (selectedInvoiceIds.size > 0) {
         const targets = unpaidInvoices.filter(inv => selectedInvoiceIds.has(inv.id));
         const resultLines: string[] = [];
+        const appliedTo: ReceiptAppliedToEntry[] = [];
         let anyFailed = false;
         let advanceRunningTotal = 0;
         let advanceAppliedTotal = 0;
+        let recordedTotal = 0;
         for (const inv of targets) {
           const wouldBeTotal = advanceRunningTotal + inv.amount_due;
           const tagForThisInvoice = paymentMode === 'Advance' && wouldBeTotal > totalAdvanceAvailable
@@ -243,6 +256,8 @@ export default function RecordPaymentScreen() {
           const data = await res.json();
           if (res.ok) {
             resultLines.push(`${fmt(inv.amount_due)} applied to ${inv.invoice_number} — fully paid`);
+            appliedTo.push({ invoice_number: inv.invoice_number, amount_applied: inv.amount_due, remaining_due: 0 });
+            recordedTotal += inv.amount_due;
             if (tagForThisInvoice === paymentMode && paymentMode === 'Advance') {
               advanceAppliedTotal += Number(data.total_applied || inv.amount_due);
             }
@@ -252,19 +267,22 @@ export default function RecordPaymentScreen() {
           }
         }
         if (paymentMode === 'Advance') await applyFromAdvances(token, backendUrl, advanceAppliedTotal);
+        await maybeShareReceipt(token, backendUrl, action, recordedTotal, paymentMode, appliedTo, dateStr);
         Alert.alert(anyFailed ? 'Payment Partially Recorded' : 'Payment Recorded', resultLines.join('\n'), [
           { text: 'OK', onPress: () => router.back() },
         ]);
       } else {
         const amt = parseFloat(amount);
-        if (!amt || amt <= 0) { Alert.alert('Error', 'Enter a valid amount'); setSubmitting(false); return; }
+        if (!amt || amt <= 0) { Alert.alert('Error', 'Enter a valid amount'); setSubmitting(null); return; }
 
         const segments: { amt: number; mode: string }[] = shortfall > 0
           ? [{ amt: Math.round((amt - shortfall) * 100) / 100, mode: paymentMode }, { amt: shortfall, mode: remainderMode! }]
           : [{ amt, mode: paymentMode }];
 
         const allLines: string[] = [];
+        const appliedTo: ReceiptAppliedToEntry[] = [];
         let advanceAppliedTotal = 0;
+        let recordedTotal = 0;
         let anyFailed = false;
         for (const seg of segments) {
           if (seg.amt <= 0) continue;
@@ -278,11 +296,13 @@ export default function RecordPaymentScreen() {
           const data = await res.json();
           if (res.ok) {
             if (seg.mode === 'Advance') advanceAppliedTotal += Number(data.total_applied || seg.amt);
+            recordedTotal += seg.amt;
             const recorded = (data.events || []).filter((e: any) => e.type === 'payment_recorded');
             recorded.forEach((e: any) => {
               allLines.push(e.remaining_due > 0.01
                 ? `${fmt(e.amount_applied)} applied to ${e.invoice_number} — ${fmt(e.remaining_due)} still pending`
                 : `${fmt(e.amount_applied)} applied to ${e.invoice_number} — fully paid`);
+              appliedTo.push({ invoice_number: e.invoice_number, amount_applied: e.amount_applied, remaining_due: e.remaining_due || 0 });
             });
           } else {
             anyFailed = true;
@@ -294,13 +314,14 @@ export default function RecordPaymentScreen() {
           }
         }
         if (advanceAppliedTotal > 0) await applyFromAdvances(token, backendUrl, advanceAppliedTotal);
+        await maybeShareReceipt(token, backendUrl, action, recordedTotal, paymentMode, appliedTo, dateStr);
         Alert.alert(anyFailed ? 'Payment Partially Recorded' : 'Payment Recorded', allLines.join('\n') || 'Payment recorded successfully.', [
           { text: 'OK', onPress: () => router.back() },
         ]);
       }
     } catch {
       Alert.alert('Error', 'Could not record payment. Please try again.');
-    } finally { setSubmitting(false); }
+    } finally { setSubmitting(null); }
   };
 
   const canSubmit = !!paymentMode && (shortfall === 0 || !!remainderMode);
@@ -451,9 +472,17 @@ export default function RecordPaymentScreen() {
             <Text style={s.emptyText}>No unpaid invoices — a payment here will need Auto-allocate, and will simply reduce the customer's outstanding balance.</Text>
           )}
 
-          <TouchableOpacity style={[s.submitBtn, !canSubmit && s.submitBtnDisabled]} onPress={handleSubmit} disabled={submitting || !canSubmit}>
-            {submitting ? <ActivityIndicator size="small" color="#FFF" /> : <Text style={s.submitText}>Record Payment</Text>}
-          </TouchableOpacity>
+          <View style={s.buttonRow}>
+            <TouchableOpacity style={[s.recordBtn, !canSubmit && s.btnDisabled]} onPress={() => handleSubmit('record')} disabled={!!submitting || !canSubmit}>
+              {submitting === 'record' ? <ActivityIndicator size="small" color="#333" /> : <Text style={s.recordBtnText}>Record</Text>}
+            </TouchableOpacity>
+            <TouchableOpacity style={[s.shareBtn, !canSubmit && s.btnDisabled]} onPress={() => handleSubmit('share')} disabled={!!submitting || !canSubmit}>
+              {submitting === 'share' ? <ActivityIndicator size="small" color="#FFF" /> : <Text style={s.shareBtnText}>Share Here</Text>}
+            </TouchableOpacity>
+            <TouchableOpacity style={[s.waBtn, !canSubmit && s.btnDisabled]} onPress={() => handleSubmit('whatsapp')} disabled={!!submitting || !canSubmit}>
+              {submitting === 'whatsapp' ? <ActivityIndicator size="small" color="#FFF" /> : <Text style={s.waBtnText}>WhatsApp</Text>}
+            </TouchableOpacity>
+          </View>
         </ScrollView>
       )}
     </SafeAreaView>
@@ -480,7 +509,12 @@ const s = StyleSheet.create({
   emptyText: { fontSize: 13, color: '#999', marginTop: 4, marginBottom: 8, fontStyle: 'italic' },
   shortfallBox: { marginTop: 8, backgroundColor: '#FEF3C7', borderRadius: 10, padding: 12, borderWidth: 1, borderColor: '#FCD34D' },
   shortfallText: { fontSize: 13, color: '#92400E', fontWeight: '600' },
-  submitBtn: { marginTop: 24, backgroundColor: '#075E54', paddingVertical: 14, borderRadius: 10, alignItems: 'center' },
-  submitBtnDisabled: { backgroundColor: '#CCC' },
-  submitText: { fontSize: 15, fontWeight: '700', color: '#FFFFFF' },
+  buttonRow: { flexDirection: 'row', gap: 8, marginTop: 24 },
+  recordBtn: { flex: 1, backgroundColor: '#F0F0F0', paddingVertical: 14, borderRadius: 10, alignItems: 'center' },
+  recordBtnText: { fontSize: 13, fontWeight: '700', color: '#333' },
+  shareBtn: { flex: 1, backgroundColor: '#075E54', paddingVertical: 14, borderRadius: 10, alignItems: 'center' },
+  shareBtnText: { fontSize: 13, fontWeight: '700', color: '#FFFFFF' },
+  waBtn: { flex: 1, backgroundColor: '#25D366', paddingVertical: 14, borderRadius: 10, alignItems: 'center' },
+  waBtnText: { fontSize: 13, fontWeight: '700', color: '#FFFFFF' },
+  btnDisabled: { opacity: 0.4 },
 });
