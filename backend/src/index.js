@@ -3587,6 +3587,134 @@ async function generateDocumentPDF({ documentId, organisationId, documentType, d
   }
 }
 
+// ─── generateReceiptPDF (Aug 2026, Payment recording subtask 5) ──
+// Deliberately a SEPARATE function from generateDocumentPDF, not another
+// pdfVariant on it -- a receipt's data shape (payment amount/mode/date,
+// which invoice(s) it applied to) is fundamentally different from an
+// itemized invoice/quote/challan, and force-fitting it into the existing
+// invoice-shaped fetch logic would risk the proven, heavily-tested
+// function it would have to share. Reuses getDocumentBrandingProfile()
+// for the same org-identity source of truth, and the same font-fix +
+// signed-URL patterns already proven elsewhere in this file.
+//
+// NO receipt number yet (Atif's explicit call -- logged to backlog for
+// post-V1, every document should eventually have one). Bank/UPI details
+// deliberately OMITTED -- we don't yet capture WHICH specific account a
+// payment was received into, only a generic mode label; listing every
+// account the owner has would be misleading on a document meant to
+// prove payment to one specific place. Revisit once that capture exists.
+async function generateReceiptPDF({ organisationId, customerId, receiptDate, totalAmount, paymentMode, appliedTo }) {
+  try {
+    const { data: customer } = await supabase.from('customers')
+      .select('name, phone, tax_id, company').eq('id', customerId).single();
+    const biz = await getDocumentBrandingProfile(organisationId, supabase);
+
+    const PDFDocument = (await import('pdfkit')).default;
+    const doc2 = new PDFDocument({ size: 'A4', margin: 50 });
+    doc2.registerFont('NotoSans', __dirname + '/../assets/fonts/NotoSans-Regular.ttf');
+    doc2.registerFont('NotoSans-Bold', __dirname + '/../assets/fonts/NotoSans-Bold.ttf');
+    const chunks = [];
+    doc2.on('data', chunk => chunks.push(chunk));
+    const pdfReady = new Promise((resolve) => doc2.on('end', resolve));
+
+    if (biz.logo_url) {
+      try {
+        const logoController = new AbortController();
+        const logoTimeout = setTimeout(() => logoController.abort(), 5000);
+        const logoRes = await fetch(biz.logo_url, { signal: logoController.signal });
+        clearTimeout(logoTimeout);
+        if (logoRes.ok) {
+          const logoBuffer = Buffer.from(await logoRes.arrayBuffer());
+          doc2.image(logoBuffer, 50, 45, { width: 60, height: 60, fit: [60, 60] });
+        }
+      } catch (e) { console.warn('[Receipt PDF] Logo fetch failed:', e.message); }
+    }
+
+    doc2.fontSize(20).font('NotoSans-Bold').text(biz.business_name || 'Business', 120, 50);
+    doc2.fontSize(9).font('NotoSans');
+    if (biz.gstin) doc2.text(`GSTIN: ${biz.gstin}`, 120, 75);
+    const addrParts = [biz.address_line1, biz.address_line2, biz.city, biz.state, biz.postal_code].filter(Boolean);
+    if (addrParts.length) doc2.text(addrParts.join(', '), 120, 88);
+    if (biz.phone) doc2.text(`Phone: ${biz.phone}`, 120, 101);
+
+    doc2.y = 130;
+    doc2.moveTo(50, 130).lineTo(545, 130).stroke();
+    doc2.moveDown(1.5);
+
+    doc2.fontSize(16).font('NotoSans-Bold').text('PAYMENT RECEIPT', { align: 'center' });
+    doc2.moveDown(1);
+
+    doc2.fontSize(10).font('NotoSans');
+    doc2.text(`Date: ${receiptDate}`, { align: 'right' });
+    doc2.moveDown(1);
+
+    doc2.font('NotoSans-Bold').text('RECEIVED FROM:');
+    doc2.font('NotoSans').text(customer?.company || customer?.name || 'Customer');
+    if (customer?.phone) doc2.text(customer.phone);
+    doc2.moveDown(1.5);
+
+    doc2.font('NotoSans-Bold').fontSize(14).text(`Amount Received: ₹${totalAmount.toFixed(2)}`);
+    doc2.moveDown(0.5);
+    doc2.font('NotoSans').fontSize(10).text(`Payment Mode: ${paymentMode}`);
+    doc2.moveDown(1);
+
+    if (appliedTo && appliedTo.length > 0) {
+      doc2.font('NotoSans-Bold').fontSize(11).text('Applied To:');
+      doc2.font('NotoSans').fontSize(10);
+      appliedTo.forEach(item => {
+        doc2.text(`${item.invoice_number}: ₹${Number(item.amount_applied).toFixed(2)}${item.remaining_due > 0.01 ? ` (₹${Number(item.remaining_due).toFixed(2)} still due)` : ' (fully paid)'}`);
+      });
+      doc2.moveDown(2);
+    } else {
+      doc2.font('NotoSans').fontSize(10).text('Held as an advance -- not yet applied to a specific invoice.');
+      doc2.moveDown(2);
+    }
+
+    // Bank/UPI details deliberately omitted -- see function header comment.
+
+    if (biz.signature_url) {
+      try {
+        const sigController = new AbortController();
+        const sigTimeout = setTimeout(() => sigController.abort(), 5000);
+        const sigRes = await fetch(biz.signature_url, { signal: sigController.signal });
+        clearTimeout(sigTimeout);
+        if (sigRes.ok) {
+          const sigBuffer = Buffer.from(await sigRes.arrayBuffer());
+          const sigY = doc2.y;
+          doc2.image(sigBuffer, 400, sigY, { width: 100, fit: [100, 50] });
+          doc2.fontSize(8).text('Authorized Signatory', 400, sigY + 55, { width: 100, align: 'center' });
+        }
+      } catch (e) { console.warn('[Receipt PDF] Signature fetch failed:', e.message); }
+    }
+
+    doc2.end();
+    await pdfReady;
+    const pdfBuffer = Buffer.concat(chunks);
+
+    const sanitizeForFilename = (s) => (s || '').replace(/[^a-zA-Z0-9]+/g, '');
+    const custNamePart = sanitizeForFilename(customer?.name).slice(0, 30) || 'Customer';
+    const datePart = receiptDate.replace(/-/g, '');
+    const fileName = `Receipt_${custNamePart}_${datePart}_${Date.now()}.pdf`;
+    const storagePath = `${organisationId}/${fileName}`;
+
+    const { error: uploadErr } = await supabase.storage.from('receipts').upload(storagePath, pdfBuffer, {
+      contentType: 'application/pdf', upsert: true,
+    });
+    if (uploadErr) { console.error('[Receipt PDF] Upload error:', uploadErr); return null; }
+
+    const NINETY_DAYS_SECONDS = 90 * 24 * 60 * 60;
+    const { data: signedUrlData, error: signErr } = await supabase.storage.from('receipts')
+      .createSignedUrl(storagePath, NINETY_DAYS_SECONDS);
+    if (signErr) { console.error('[Receipt PDF] Sign error:', signErr); return null; }
+
+    console.log(`[Receipt PDF] Generated: ${signedUrlData.signedUrl}`);
+    return signedUrlData.signedUrl;
+  } catch (err) {
+    console.error('[Receipt PDF] generateReceiptPDF error:', err);
+    return null;
+  }
+}
+
 
 // ══════════════════════════════════════════════════════════════
 // FLOW 3A — AI SPARK ROUTES
