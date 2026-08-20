@@ -61,6 +61,11 @@ export default function RecordPaymentScreen() {
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [paymentMode, setPaymentMode] = useState<string | null>(null);
   const [selectedInvoiceIds, setSelectedInvoiceIds] = useState<Set<string>>(new Set());
+  // Advance mode (Aug 2026, Atif's design) -- mutually exclusive with
+  // invoice selection. Money held for the customer, NOT a payment against
+  // anything -- goes to POST /customer/:id/advance, never /api/payments.
+  const [isAdvanceMode, setIsAdvanceMode] = useState(false);
+  const [advancePurpose, setAdvancePurpose] = useState('');
 
   const getToken = async () => {
     const token = await authService.getAccessToken();
@@ -89,6 +94,7 @@ export default function RecordPaymentScreen() {
   // mode and selects that row; once in select mode, plain taps toggle
   // further invoices. Amount auto-sums their exact dues -- see header note.
   const toggleInvoiceSelection = (inv: UnpaidInvoice) => {
+    setIsAdvanceMode(false);
     setSelectedInvoiceIds(prev => {
       const next = new Set(prev);
       if (next.has(inv.id)) next.delete(inv.id); else next.add(inv.id);
@@ -112,7 +118,24 @@ export default function RecordPaymentScreen() {
 
     setSubmitting(true);
     try {
-      if (selectedInvoiceIds.size > 0) {
+      if (isAdvanceMode) {
+        const amt = parseFloat(amount);
+        if (!amt || amt <= 0) { Alert.alert('Error', 'Enter a valid amount'); setSubmitting(false); return; }
+        const res = await fetch(`${backendUrl}/api/customer/${customerId}/advance`, {
+          method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            amount: amt, purpose: advancePurpose || undefined,
+            received_date: dateStr, payment_mode: paymentMode || undefined,
+          }),
+        });
+        if (res.ok) {
+          Alert.alert('Advance Recorded', `${fmt(amt)} held as an advance${advancePurpose ? ` for ${advancePurpose}` : ''}.`, [
+            { text: 'OK', onPress: () => router.back() },
+          ]);
+        } else {
+          Alert.alert('Error', 'Could not record advance. Please try again.');
+        }
+      } else if (selectedInvoiceIds.size > 0) {
         // One call per selected invoice, each with its own exact due --
         // reuses the existing endpoint unchanged, no backend split logic.
         const targets = unpaidInvoices.filter(inv => selectedInvoiceIds.has(inv.id));
@@ -233,8 +256,24 @@ export default function RecordPaymentScreen() {
           <Text style={s.label}>APPLY TO</Text>
           <Text style={s.helperText}>Tap for Auto-allocate, or long-press an invoice to select multiple.</Text>
           <TouchableOpacity
-            style={[s.invoiceRow, selectedInvoiceIds.size === 0 && s.invoiceRowActive]}
-            onPress={() => setSelectedInvoiceIds(new Set())}
+            style={[s.invoiceRow, isAdvanceMode && s.invoiceRowActive]}
+            onPress={() => { setIsAdvanceMode(true); setSelectedInvoiceIds(new Set()); }}
+          >
+            <Ionicons name={isAdvanceMode ? 'radio-button-on' : 'radio-button-off'} size={20} color="#075E54" />
+            <View style={{ marginLeft: 10, flex: 1 }}>
+              <Text style={s.invoiceRowTitle}>Advance (hold for later)</Text>
+              <Text style={s.invoiceRowSubtitle}>Not applied to any invoice yet -- apply it when the relevant one exists</Text>
+            </View>
+          </TouchableOpacity>
+          {isAdvanceMode && (
+            <View style={{ marginBottom: 8 }}>
+              <Text style={[s.label, { marginTop: 4 }]}>PURPOSE (OPTIONAL)</Text>
+              <TextInput style={s.input} value={advancePurpose} onChangeText={setAdvancePurpose} placeholder="e.g. For Product X order" placeholderTextColor="#999" />
+            </View>
+          )}
+          <TouchableOpacity
+            style={[s.invoiceRow, !isAdvanceMode && selectedInvoiceIds.size === 0 && s.invoiceRowActive]}
+            onPress={() => { setIsAdvanceMode(false); setSelectedInvoiceIds(new Set()); }}
           >
             <Ionicons name={selectedInvoiceIds.size === 0 ? 'radio-button-on' : 'radio-button-off'} size={20} color="#075E54" />
             <View style={{ marginLeft: 10, flex: 1 }}>
