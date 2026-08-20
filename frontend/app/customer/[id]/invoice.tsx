@@ -9,6 +9,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../../contexts/AuthContext';
 import { supabase } from '../../../lib/supabase';
 import { authService } from '../../../lib/auth';
+import { shareReceipt } from '../../../lib/shareReceipt';
 import AddressPickerSheet from '../../../components/primitives/AddressPickerSheet';
 import TransportPickerSheet from '../../../components/primitives/TransportPickerSheet';
 
@@ -340,6 +341,18 @@ export default function NewInvoiceScreen() {
       // invoices; corrections go through a credit/debit note instead, not
       // silently rewriting the original).
       let inv: { invoice_id: string; invoice_number: string };
+      // Bug fixed Aug 2026 (Atif's live testing): "collect payment now"
+      // recorded the real payment correctly, but never generated or
+      // shared a receipt card at all -- the two features (subtask 7 and
+      // subtask 6) were built separately and never wired together. Only
+      // for Share Here (channel='app') -- WhatsApp deliberately stays
+      // invoice-only per Atif's own call, since combining two separate
+      // PDFs into one WhatsApp message adds real complexity for
+      // comparatively little benefit; the receipt card, once posted,
+      // can itself be shared to WhatsApp from the chat afterward.
+      let paymentWasRecorded = false;
+      let recordedPaymentAmount = 0;
+      let recordedPaymentMode = '';
 
       if (createdInvoice) {
         console.log('[INVOICE] Reusing already-created invoice:', createdInvoice.id);
@@ -386,13 +399,14 @@ export default function NewInvoiceScreen() {
             Alert.alert('Payment Mode Required', 'Invoice created, but select a payment mode to also record the payment.');
           } else if (collectAmt && collectAmt > 0) {
             try {
-              await fetch(`${backendUrl}/api/payments`, {
+              const payRes = await fetch(`${backendUrl}/api/payments`, {
                 method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                   customer_id: customerId, invoice_id: created.invoice_id, amount: collectAmt,
                   payment_date: new Date().toISOString().split('T')[0], payment_mode: collectionMode,
                 }),
               });
+              if (payRes.ok) { paymentWasRecorded = true; recordedPaymentAmount = collectAmt; recordedPaymentMode = collectionMode; }
             } catch (e) { console.warn('[INVOICE] Payment collection failed (non-fatal):', e); }
           }
         }
@@ -463,6 +477,16 @@ export default function NewInvoiceScreen() {
         
         const shareRes = await r3.json();
         console.log('[INVOICE] Share result:', shareRes);
+
+        if (paymentWasRecorded) {
+          await shareReceipt({
+            token, backendUrl, customerId: customerId!, totalAmount: recordedPaymentAmount,
+            paymentMode: recordedPaymentMode,
+            appliedTo: [{ invoice_number: inv.invoice_number, amount_applied: recordedPaymentAmount, remaining_due: Math.max(0, total - recordedPaymentAmount) }],
+            receiptDate: new Date().toISOString().split('T')[0],
+            channel: 'app',
+          }).catch((e) => console.warn('[INVOICE] Receipt card failed (non-fatal):', e));
+        }
         Alert.alert('Success', 'Invoice shared in chat ✓');
         router.back();
       } else if (action === 'whatsapp') {
