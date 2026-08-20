@@ -2,26 +2,37 @@
  * AssistMe - Record Payment Screen
  * Location: /frontend/app/customer/[id]/record-payment.tsx
  * Created: Aug 2026 (Payment recording, subtask 3)
+ * Updated: Aug 2026 -- real date picker, multi-select invoices with
+ * auto-summing amount, per Atif's live-testing feedback.
  *
  * Backs the "Record payment" menu item in the customer chat's 3-dot menu,
- * previously wired to an empty action. Calls POST /api/payments, now
- * rewired (subtask 1) to the canonical recordPayment() service -- the
- * same function Spark's own record_payment flow already uses live.
+ * previously wired to an empty action. Calls POST /api/payments, rewired
+ * (subtask 1) to the canonical recordPayment() service -- the same
+ * function Spark's own record_payment flow already uses live.
  *
- * Invoice targeting is optional, matching recordPayment()'s own flexible
- * behavior: pick one specific invoice, or leave on "Auto-allocate" to
- * apply the payment across unpaid invoices oldest-first, identical to
- * how Spark itself behaves.
+ * Multi-select design: when one or more specific invoices are selected
+ * (long-press to enter select mode, tap to toggle further), the amount
+ * field becomes an auto-computed sum of their exact dues -- not a free
+ * total requiring a guessed split. Backend stays completely untouched:
+ * one call to the existing endpoint per selected invoice, each with that
+ * invoice's own due amount. Auto-allocate mode (no invoices selected)
+ * keeps the amount freely editable, unchanged from before.
+ *
+ * DEFERRED (Atif's explicit instruction, bundled into a future dedicated
+ * Spark session): bank-account balance tracking on UPI/Bank Transfer,
+ * Spark's own record-payment behavior, the stubbed Edit button on Spark's
+ * payment card, Spark-driven invoice creation.
  */
 
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, TextInput, ActivityIndicator,
-  ScrollView, Alert,
+  ScrollView, Alert, Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import { authService } from '../../../lib/auth';
 
 interface UnpaidInvoice {
@@ -31,11 +42,11 @@ interface UnpaidInvoice {
 const PAYMENT_MODES = ['Cash', 'UPI', 'Bank Transfer', 'Cheque', 'Other'];
 
 const fmt = (n: number) => `₹${(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-const todayIST = () => {
-  const now = new Date();
-  const ist = new Date(now.getTime() + (5.5 * 60 * 60 * 1000));
+const toISODate = (d: Date) => {
+  const ist = new Date(d.getTime() + (5.5 * 60 * 60 * 1000));
   return ist.toISOString().split('T')[0];
 };
+const formatDisplay = (d: Date) => d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
 
 export default function RecordPaymentScreen() {
   const router = useRouter();
@@ -46,9 +57,10 @@ export default function RecordPaymentScreen() {
   const [submitting, setSubmitting] = useState(false);
   const [unpaidInvoices, setUnpaidInvoices] = useState<UnpaidInvoice[]>([]);
   const [amount, setAmount] = useState('');
-  const [paymentDate, setPaymentDate] = useState(todayIST());
+  const [paymentDate, setPaymentDate] = useState(new Date());
+  const [showDatePicker, setShowDatePicker] = useState(false);
   const [paymentMode, setPaymentMode] = useState<string | null>(null);
-  const [selectedInvoiceId, setSelectedInvoiceId] = useState<string | null>(null);
+  const [selectedInvoiceIds, setSelectedInvoiceIds] = useState<Set<string>>(new Set());
 
   const getToken = async () => {
     const token = await authService.getAccessToken();
@@ -73,51 +85,88 @@ export default function RecordPaymentScreen() {
     })();
   }, [customerId]);
 
-  // When a specific invoice is selected, pre-fill the amount with its
-  // remaining due -- the common case (paying off exactly what's owed on
-  // that invoice), still fully editable for a partial payment.
-  const handleSelectInvoice = (inv: UnpaidInvoice | null) => {
-    setSelectedInvoiceId(inv ? inv.id : null);
-    if (inv) setAmount(inv.amount_due.toString());
+  // Multi-select (Aug 2026, Atif's feedback): long-press enters select
+  // mode and selects that row; once in select mode, plain taps toggle
+  // further invoices. Amount auto-sums their exact dues -- see header note.
+  const toggleInvoiceSelection = (inv: UnpaidInvoice) => {
+    setSelectedInvoiceIds(prev => {
+      const next = new Set(prev);
+      if (next.has(inv.id)) next.delete(inv.id); else next.add(inv.id);
+      return next;
+    });
   };
 
+  useEffect(() => {
+    if (selectedInvoiceIds.size === 0) return; // leave amount as-is for Auto-allocate mode
+    const sum = unpaidInvoices
+      .filter(inv => selectedInvoiceIds.has(inv.id))
+      .reduce((s, inv) => s + inv.amount_due, 0);
+    setAmount(sum.toString());
+  }, [selectedInvoiceIds, unpaidInvoices]);
+
   const handleSubmit = async () => {
-    const amt = parseFloat(amount);
-    if (!amt || amt <= 0) { Alert.alert('Error', 'Enter a valid amount'); return; }
+    const token = await getToken();
+    if (!token) return;
+    const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+    const dateStr = toISODate(paymentDate);
+
     setSubmitting(true);
     try {
-      const token = await getToken();
-      if (!token) return;
-      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
-      const res = await fetch(`${backendUrl}/api/payments`, {
-        method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          customer_id: customerId,
-          invoice_id: selectedInvoiceId || undefined,
-          amount: amt,
-          payment_date: paymentDate,
-          payment_mode: paymentMode || undefined,
-        }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        const recorded = (data.events || []).filter((e: any) => e.type === 'payment_recorded');
-        const lines = recorded.map((e: any) =>
-          e.remaining_due > 0.01
-            ? `${fmt(e.amount_applied)} applied to ${e.invoice_number} — ${fmt(e.remaining_due)} still pending`
-            : `${fmt(e.amount_applied)} applied to ${e.invoice_number} — fully paid`
-        );
-        Alert.alert('Payment Recorded', lines.join('\n') || 'Payment recorded successfully.', [
+      if (selectedInvoiceIds.size > 0) {
+        // One call per selected invoice, each with its own exact due --
+        // reuses the existing endpoint unchanged, no backend split logic.
+        const targets = unpaidInvoices.filter(inv => selectedInvoiceIds.has(inv.id));
+        const resultLines: string[] = [];
+        let anyFailed = false;
+        for (const inv of targets) {
+          const res = await fetch(`${backendUrl}/api/payments`, {
+            method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              customer_id: customerId, invoice_id: inv.id, amount: inv.amount_due,
+              payment_date: dateStr, payment_mode: paymentMode || undefined,
+            }),
+          });
+          const data = await res.json();
+          if (res.ok) {
+            resultLines.push(`${fmt(inv.amount_due)} applied to ${inv.invoice_number} — fully paid`);
+          } else {
+            anyFailed = true;
+            resultLines.push(`${inv.invoice_number}: failed (${data.error || 'error'})`);
+          }
+        }
+        Alert.alert(anyFailed ? 'Payment Partially Recorded' : 'Payment Recorded', resultLines.join('\n'), [
           { text: 'OK', onPress: () => router.back() },
         ]);
       } else {
-        const errorMessages: Record<string, string> = {
-          no_unpaid_invoices: 'This customer has no unpaid invoices to apply a payment to.',
-          amount_exceeds_due: `Amount exceeds what's due${data.detail?.max_payable ? ` (max: ${fmt(data.detail.max_payable)})` : ''}.`,
-          invoice_already_paid: 'That invoice is already fully paid.',
-          invoice_not_found: 'That invoice could not be found.',
-        };
-        Alert.alert('Error', errorMessages[data.error] || 'Could not record payment. Please try again.');
+        const amt = parseFloat(amount);
+        if (!amt || amt <= 0) { Alert.alert('Error', 'Enter a valid amount'); setSubmitting(false); return; }
+        const res = await fetch(`${backendUrl}/api/payments`, {
+          method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            customer_id: customerId, amount: amt,
+            payment_date: dateStr, payment_mode: paymentMode || undefined,
+          }),
+        });
+        const data = await res.json();
+        if (res.ok) {
+          const recorded = (data.events || []).filter((e: any) => e.type === 'payment_recorded');
+          const lines = recorded.map((e: any) =>
+            e.remaining_due > 0.01
+              ? `${fmt(e.amount_applied)} applied to ${e.invoice_number} — ${fmt(e.remaining_due)} still pending`
+              : `${fmt(e.amount_applied)} applied to ${e.invoice_number} — fully paid`
+          );
+          Alert.alert('Payment Recorded', lines.join('\n') || 'Payment recorded successfully.', [
+            { text: 'OK', onPress: () => router.back() },
+          ]);
+        } else {
+          const errorMessages: Record<string, string> = {
+            no_unpaid_invoices: 'This customer has no unpaid invoices to apply a payment to.',
+            amount_exceeds_due: `Amount exceeds what's due${data.detail?.max_payable ? ` (max: ${fmt(data.detail.max_payable)})` : ''}.`,
+            invoice_already_paid: 'That invoice is already fully paid.',
+            invoice_not_found: 'That invoice could not be found.',
+          };
+          Alert.alert('Error', errorMessages[data.error] || 'Could not record payment. Please try again.');
+        }
       }
     } catch {
       Alert.alert('Error', 'Could not record payment. Please try again.');
@@ -139,10 +188,34 @@ export default function RecordPaymentScreen() {
       ) : (
         <ScrollView contentContainerStyle={{ padding: 16 }} keyboardShouldPersistTaps="handled">
           <Text style={s.label}>AMOUNT <Text style={{ color: 'red' }}>*</Text></Text>
-          <TextInput style={s.input} value={amount} onChangeText={setAmount} keyboardType="numeric" placeholder="0.00" placeholderTextColor="#999" />
+          <TextInput
+            style={[s.input, selectedInvoiceIds.size > 0 && s.inputReadOnly]}
+            value={amount}
+            onChangeText={selectedInvoiceIds.size === 0 ? setAmount : undefined}
+            editable={selectedInvoiceIds.size === 0}
+            keyboardType="numeric" placeholder="0.00" placeholderTextColor="#999"
+          />
+          {selectedInvoiceIds.size > 0 && (
+            <Text style={s.helperText}>Auto-summed from {selectedInvoiceIds.size} selected invoice{selectedInvoiceIds.size > 1 ? 's' : ''}</Text>
+          )}
 
           <Text style={s.label}>PAYMENT DATE</Text>
-          <TextInput style={s.input} value={paymentDate} onChangeText={setPaymentDate} placeholder="YYYY-MM-DD" placeholderTextColor="#999" />
+          <TouchableOpacity style={s.input} onPress={() => setShowDatePicker(true)}>
+            <Text style={{ fontSize: 15, color: '#1A1A1A' }}>{formatDisplay(paymentDate)}</Text>
+          </TouchableOpacity>
+          {showDatePicker && (
+            <DateTimePicker
+              value={paymentDate}
+              mode="date"
+              maximumDate={new Date()}
+              display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+              onChange={(event: any, date?: Date) => {
+                if (Platform.OS === 'android') setShowDatePicker(false);
+                if (date) setPaymentDate(date);
+              }}
+              themeVariant="light"
+            />
+          )}
 
           <Text style={s.label}>PAYMENT MODE (OPTIONAL)</Text>
           <View style={s.chipRow}>
@@ -158,8 +231,12 @@ export default function RecordPaymentScreen() {
           </View>
 
           <Text style={s.label}>APPLY TO</Text>
-          <TouchableOpacity style={[s.invoiceRow, !selectedInvoiceId && s.invoiceRowActive]} onPress={() => handleSelectInvoice(null)}>
-            <Ionicons name={!selectedInvoiceId ? 'radio-button-on' : 'radio-button-off'} size={20} color="#075E54" />
+          <Text style={s.helperText}>Tap for Auto-allocate, or long-press an invoice to select multiple.</Text>
+          <TouchableOpacity
+            style={[s.invoiceRow, selectedInvoiceIds.size === 0 && s.invoiceRowActive]}
+            onPress={() => setSelectedInvoiceIds(new Set())}
+          >
+            <Ionicons name={selectedInvoiceIds.size === 0 ? 'radio-button-on' : 'radio-button-off'} size={20} color="#075E54" />
             <View style={{ marginLeft: 10, flex: 1 }}>
               <Text style={s.invoiceRowTitle}>Auto-allocate</Text>
               <Text style={s.invoiceRowSubtitle}>Applies across unpaid invoices, oldest first</Text>
@@ -168,10 +245,11 @@ export default function RecordPaymentScreen() {
           {unpaidInvoices.map(inv => (
             <TouchableOpacity
               key={inv.id}
-              style={[s.invoiceRow, selectedInvoiceId === inv.id && s.invoiceRowActive]}
-              onPress={() => handleSelectInvoice(inv)}
+              style={[s.invoiceRow, selectedInvoiceIds.has(inv.id) && s.invoiceRowActive]}
+              onPress={() => selectedInvoiceIds.size > 0 && toggleInvoiceSelection(inv)}
+              onLongPress={() => toggleInvoiceSelection(inv)}
             >
-              <Ionicons name={selectedInvoiceId === inv.id ? 'radio-button-on' : 'radio-button-off'} size={20} color="#075E54" />
+              <Ionicons name={selectedInvoiceIds.has(inv.id) ? 'checkbox' : 'square-outline'} size={20} color="#075E54" />
               <View style={{ marginLeft: 10, flex: 1 }}>
                 <Text style={s.invoiceRowTitle}>{inv.invoice_number}</Text>
                 <Text style={s.invoiceRowSubtitle}>{fmt(inv.amount_due)} due of {fmt(inv.total_amount)}</Text>
@@ -197,6 +275,8 @@ const s = StyleSheet.create({
   headerTitle: { fontSize: 18, fontWeight: '700', color: '#FFFFFF' },
   label: { fontSize: 12, fontWeight: '700', color: '#666', marginTop: 18, marginBottom: 6, letterSpacing: 0.5 },
   input: { borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 10, paddingHorizontal: 14, paddingVertical: 12, fontSize: 15, color: '#1A1A1A', backgroundColor: '#FFFFFF' },
+  inputReadOnly: { backgroundColor: '#F0F0F0' },
+  helperText: { fontSize: 12, color: '#999', marginTop: 4, marginBottom: 8 },
   chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   chip: { borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 20, paddingHorizontal: 14, paddingVertical: 8, backgroundColor: '#FFFFFF' },
   chipActive: { borderColor: '#075E54', backgroundColor: '#E8F5E9' },
