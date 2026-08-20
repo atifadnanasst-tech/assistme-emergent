@@ -25,15 +25,17 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator,
-  Linking, Alert, TextInput, ScrollView,
+  Linking, Alert, TextInput, ScrollView, Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { authService } from '../lib/auth';
 import BottomSheet from '../components/primitives/BottomSheet';
+import DateTimePicker from '@react-native-community/datetimepicker';
+import { getMonthBounds, getFYQuarterBounds } from '../lib/periodBounds';
 
-type TabType = 'invoice' | 'challan' | 'quote' | 'draft' | 'receipt';
+type TabType = 'invoice' | 'challan' | 'quote' | 'draft' | 'receipt' | 'balance_sheet';
 
 interface InvoiceDoc {
   id: string; invoice_number: string; customer_id: string; customer_name: string;
@@ -57,6 +59,14 @@ interface ReceiptDoc {
   amount: number; date: string; payment_mode: string | null;
   invoice_number?: string | null; purpose?: string | null; status?: string;
 }
+// Balance Sheet tab (Aug 2026). Customer-scoped only -- a running
+// balance across multiple customers mixed together wouldn't mean
+// anything coherent, unlike every other tab here.
+interface LedgerLine {
+  type: 'invoice' | 'payment'; date: string; description: string;
+  amount: number; running_balance: number; invoice_id?: string | null;
+}
+type PeriodMode = 'month' | 'quarter' | 'custom';
 
 const fmt = (n: number) => `₹${(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const fmtDate = (d: string) => d ? new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
@@ -72,6 +82,47 @@ export default function DocumentsScreen() {
   const [quotes, setQuotes] = useState<QuoteDoc[]>([]);
   const [drafts, setDrafts] = useState<DraftDoc[]>([]);
   const [receipts, setReceipts] = useState<ReceiptDoc[]>([]);
+
+  // Balance Sheet state (Aug 2026, customer-scoped only).
+  const [periodMode, setPeriodMode] = useState<PeriodMode>('month');
+  const [refDate, setRefDate] = useState(new Date());
+  const [customStart, setCustomStart] = useState(new Date());
+  const [customEnd, setCustomEnd] = useState(new Date());
+  const [showStartPicker, setShowStartPicker] = useState(false);
+  const [showEndPicker, setShowEndPicker] = useState(false);
+  const [ledger, setLedger] = useState<LedgerLine[]>([]);
+  const [ledgerOpeningBalance, setLedgerOpeningBalance] = useState(0);
+  const [ledgerClosingBalance, setLedgerClosingBalance] = useState(0);
+  const [loadingLedger, setLoadingLedger] = useState(false);
+
+  const currentPeriodBounds = periodMode === 'month' ? getMonthBounds(refDate)
+    : periodMode === 'quarter' ? getFYQuarterBounds(refDate)
+    : { start: customStart, end: customEnd, label: 'Custom Range' };
+
+  const loadLedger = async () => {
+    if (!isCustomerScoped) return;
+    setLoadingLedger(true);
+    try {
+      const token = await getToken();
+      if (!token) return;
+      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+      const startStr = currentPeriodBounds.start.toISOString().split('T')[0];
+      const endStr = currentPeriodBounds.end.toISOString().split('T')[0];
+      const res = await fetch(`${backendUrl}/api/customer/${params.customer_id}/ledger?start=${startStr}&end=${endStr}`, {
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setLedger(data.ledger || []);
+        setLedgerOpeningBalance(data.opening_balance || 0);
+        setLedgerClosingBalance(data.closing_balance || 0);
+      }
+    } catch {} finally { setLoadingLedger(false); }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'balance_sheet') loadLedger();
+  }, [activeTab, periodMode, refDate, customStart, customEnd]);
 
   // Inline "Create Challan" mini-form state (Atif's spec: expand in place,
   // no navigation, no separate screen).
@@ -198,6 +249,9 @@ export default function DocumentsScreen() {
     { key: 'quote', label: 'Quote', count: quotes.length },
     { key: 'draft', label: 'Draft', count: drafts.length },
     { key: 'receipt', label: 'Receipt', count: receipts.length },
+    // Customer-scoped only -- a running balance mixing multiple
+    // customers together wouldn't mean anything coherent.
+    ...(isCustomerScoped ? [{ key: 'balance_sheet' as TabType, label: 'Balance Sheet', count: 0 }] : []),
   ];
 
   const renderInvoiceRow = ({ item }: { item: InvoiceDoc }) => (
@@ -363,7 +417,87 @@ export default function DocumentsScreen() {
         </TouchableOpacity>
       </View>
 
-      {loading ? (
+      {activeTab === 'balance_sheet' ? (
+        <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 32 }}>
+          <View style={s.chipRow}>
+            {(['month', 'quarter', 'custom'] as PeriodMode[]).map(m => (
+              <TouchableOpacity
+                key={m}
+                style={[s.chip, periodMode === m && s.chipActive]}
+                onPress={() => setPeriodMode(m)}
+              >
+                <Text style={[s.chipText, periodMode === m && s.chipTextActive]}>{m === 'month' ? 'Month' : m === 'quarter' ? 'Quarter' : 'Custom'}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          {periodMode !== 'custom' && (
+            <View style={s.stepperRow}>
+              <TouchableOpacity onPress={() => setRefDate(prev => new Date(prev.getFullYear(), prev.getMonth() + (periodMode === 'month' ? -1 : -3), 1))}>
+                <Ionicons name="chevron-back" size={22} color="#075E54" />
+              </TouchableOpacity>
+              <Text style={s.stepperLabel}>{currentPeriodBounds.label}</Text>
+              <TouchableOpacity onPress={() => setRefDate(prev => new Date(prev.getFullYear(), prev.getMonth() + (periodMode === 'month' ? 1 : 3), 1))}>
+                <Ionicons name="chevron-forward" size={22} color="#075E54" />
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {periodMode === 'custom' && (
+            <View style={{ flexDirection: 'row', gap: 10, marginBottom: 12 }}>
+              <TouchableOpacity style={[s.input, { flex: 1 }]} onPress={() => setShowStartPicker(true)}>
+                <Text style={{ fontSize: 13, color: '#666' }}>From</Text>
+                <Text style={{ fontSize: 15, color: '#1A1A1A' }}>{customStart.toLocaleDateString('en-IN')}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[s.input, { flex: 1 }]} onPress={() => setShowEndPicker(true)}>
+                <Text style={{ fontSize: 13, color: '#666' }}>To</Text>
+                <Text style={{ fontSize: 15, color: '#1A1A1A' }}>{customEnd.toLocaleDateString('en-IN')}</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+          {showStartPicker && (
+            <DateTimePicker value={customStart} mode="date" display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+              onChange={(e: any, d?: Date) => { if (Platform.OS === 'android') setShowStartPicker(false); if (d) setCustomStart(d); }} themeVariant="light" />
+          )}
+          {showEndPicker && (
+            <DateTimePicker value={customEnd} mode="date" display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+              onChange={(e: any, d?: Date) => { if (Platform.OS === 'android') setShowEndPicker(false); if (d) setCustomEnd(d); }} themeVariant="light" />
+          )}
+
+          {loadingLedger ? (
+            <ActivityIndicator style={{ marginTop: 24 }} color="#075E54" />
+          ) : (
+            <>
+              <View style={s.ledgerSummary}>
+                <Text style={s.ledgerSummaryLabel}>Opening Balance</Text>
+                <Text style={s.ledgerSummaryValue}>{fmt(ledgerOpeningBalance)}</Text>
+              </View>
+              {ledger.length === 0 ? (
+                <Text style={s.emptyText}>No activity in this period</Text>
+              ) : (
+                ledger.map((line, i) => (
+                  <View key={i} style={s.row}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={s.rowTitle}>{line.description}</Text>
+                      <Text style={s.rowDate}>{fmtDate(line.date)}</Text>
+                    </View>
+                    <View style={{ alignItems: 'flex-end' }}>
+                      <Text style={[s.rowAmount, { color: line.amount < 0 ? '#059669' : '#1A1A1A' }]}>
+                        {line.amount < 0 ? '-' : '+'}{fmt(Math.abs(line.amount))}
+                      </Text>
+                      <Text style={s.rowSubtitle}>Bal: {fmt(line.running_balance)}</Text>
+                    </View>
+                  </View>
+                ))
+              )}
+              <View style={s.ledgerSummary}>
+                <Text style={s.ledgerSummaryLabel}>Closing Balance</Text>
+                <Text style={s.ledgerSummaryValue}>{fmt(ledgerClosingBalance)}</Text>
+              </View>
+            </>
+          )}
+        </ScrollView>
+      ) : loading ? (
         <ActivityIndicator style={{ marginTop: 40 }} color="#075E54" />
       ) : (
         <FlatList
@@ -412,4 +546,15 @@ const s = StyleSheet.create({
   inlineCancelText: { fontSize: 13, fontWeight: '600', color: '#666' },
   inlineSubmitBtn: { flex: 1, paddingVertical: 10, borderRadius: 8, backgroundColor: '#075E54', alignItems: 'center' },
   inlineSubmitText: { fontSize: 13, fontWeight: '700', color: '#FFFFFF' },
+  input: { borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 10, paddingHorizontal: 14, paddingVertical: 10, backgroundColor: '#FFFFFF' },
+  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  chip: { borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 20, paddingHorizontal: 14, paddingVertical: 8, backgroundColor: '#FFFFFF' },
+  chipActive: { borderColor: '#075E54', backgroundColor: '#E8F5E9' },
+  chipText: { fontSize: 13, color: '#666' },
+  chipTextActive: { color: '#075E54', fontWeight: '700' },
+  stepperRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 12, marginBottom: 12 },
+  stepperLabel: { fontSize: 15, fontWeight: '700', color: '#1A1A1A' },
+  ledgerSummary: { flexDirection: 'row', justifyContent: 'space-between', backgroundColor: '#F0F9F5', borderRadius: 10, padding: 14, marginVertical: 10 },
+  ledgerSummaryLabel: { fontSize: 13, fontWeight: '600', color: '#666' },
+  ledgerSummaryValue: { fontSize: 15, fontWeight: '700', color: '#075E54' },
 });
