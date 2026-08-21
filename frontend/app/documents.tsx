@@ -95,6 +95,12 @@ export default function DocumentsScreen() {
   const [ledgerClosingBalance, setLedgerClosingBalance] = useState(0);
   const [loadingLedger, setLoadingLedger] = useState(false);
   const [ledgerAdvances, setLedgerAdvances] = useState<any[]>([]);
+  const [ledgerCustomerName, setLedgerCustomerName] = useState<string | null>(null);
+
+  // Share Statement (Aug 2026, Balance Sheet subtask 4).
+  const [statementSheetVisible, setStatementSheetVisible] = useState(false);
+  const [statementDetailLevel, setStatementDetailLevel] = useState<'none' | 'summary' | 'full'>('none');
+  const [sharingStatement, setSharingStatement] = useState<'app' | 'whatsapp' | null>(null);
 
   const currentPeriodBounds = periodMode === 'month' ? getMonthBounds(refDate)
     : periodMode === 'quarter' ? getFYQuarterBounds(refDate)
@@ -118,6 +124,7 @@ export default function DocumentsScreen() {
         setLedgerOpeningBalance(data.opening_balance || 0);
         setLedgerClosingBalance(data.closing_balance || 0);
         setLedgerAdvances(data.advances || []);
+        setLedgerCustomerName(data.customer_name || null);
       }
     } catch {} finally { setLoadingLedger(false); }
   };
@@ -209,6 +216,35 @@ export default function DocumentsScreen() {
       if (next.has(id)) next.delete(id); else next.add(id);
       return next;
     });
+  };
+
+  const shareStatement = async (channel: 'app' | 'whatsapp') => {
+    if (!params.customer_id) return;
+    setSharingStatement(channel);
+    try {
+      const token = await getToken();
+      if (!token) return;
+      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+      const startStr = currentPeriodBounds.start.toISOString().split('T')[0];
+      const endStr = currentPeriodBounds.end.toISOString().split('T')[0];
+      const res = await fetch(`${backendUrl}/api/customer/${params.customer_id}/statement`, {
+        method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ start: startStr, end: endStr, item_detail_level: statementDetailLevel, channel }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setStatementSheetVisible(false);
+        if (channel === 'whatsapp' && data.whatsapp_url) {
+          Linking.openURL(data.whatsapp_url).catch(() => {});
+        } else if (channel === 'app') {
+          Alert.alert('Statement Shared', 'The statement has been shared in the chat.');
+        }
+      } else {
+        Alert.alert('Error', 'Could not generate the statement. Please try again.');
+      }
+    } catch {
+      Alert.alert('Error', 'Could not generate the statement. Please try again.');
+    } finally { setSharingStatement(null); }
   };
 
   const openPdf = (url: string | null) => {
@@ -414,6 +450,35 @@ export default function DocumentsScreen() {
         </BottomSheet>
       )}
 
+      {isCustomerScoped && (
+        <BottomSheet visible={statementSheetVisible} onDismiss={() => setStatementSheetVisible(false)} scrollable={false}>
+          <Text style={{ fontSize: 18, fontWeight: '700', color: '#1A1A1A', marginBottom: 4 }}>
+            {ledgerCustomerName ? `Share Statement with ${ledgerCustomerName}` : 'Share Statement'}
+          </Text>
+          <Text style={{ fontSize: 13, color: '#999', marginBottom: 4 }}>{currentPeriodBounds.label}</Text>
+          <Text style={[s.label, { marginTop: 14, marginBottom: 8 }]}>INCLUDE LINE ITEMS</Text>
+          <View style={s.chipRow}>
+            {([['none', 'None'], ['summary', 'First 3'], ['full', 'Full']] as [typeof statementDetailLevel, string][]).map(([val, label]) => (
+              <TouchableOpacity
+                key={val}
+                style={[s.chip, statementDetailLevel === val && s.chipActive]}
+                onPress={() => setStatementDetailLevel(val)}
+              >
+                <Text style={[s.chipText, statementDetailLevel === val && s.chipTextActive]}>{label}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          <View style={{ flexDirection: 'row', gap: 8, marginTop: 20 }}>
+            <TouchableOpacity style={s.shareHereBtn} onPress={() => shareStatement('app')} disabled={!!sharingStatement}>
+              {sharingStatement === 'app' ? <ActivityIndicator size="small" color="#FFF" /> : <Text style={s.shareHereBtnText}>Share Here</Text>}
+            </TouchableOpacity>
+            <TouchableOpacity style={s.shareWaBtn} onPress={() => shareStatement('whatsapp')} disabled={!!sharingStatement}>
+              {sharingStatement === 'whatsapp' ? <ActivityIndicator size="small" color="#FFF" /> : <Text style={s.shareWaBtnText}>WhatsApp</Text>}
+            </TouchableOpacity>
+          </View>
+        </BottomSheet>
+      )}
+
       <View style={s.tabBarContainer}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.tabBar}>
           {tabs.map(t => (
@@ -527,6 +592,11 @@ export default function DocumentsScreen() {
                   ))}
                 </View>
               )}
+
+              <TouchableOpacity style={s.shareStatementBtn} onPress={() => setStatementSheetVisible(true)}>
+                <Ionicons name="share-social" size={16} color="#FFFFFF" />
+                <Text style={s.shareStatementBtnText}>{ledgerCustomerName ? `Share Statement with ${ledgerCustomerName}` : 'Share Statement'}</Text>
+              </TouchableOpacity>
             </>
           )}
         </ScrollView>
@@ -587,4 +657,10 @@ const s = StyleSheet.create({
   ledgerSummary: { flexDirection: 'row', justifyContent: 'space-between', backgroundColor: '#F0F9F5', borderRadius: 10, padding: 14, marginVertical: 10 },
   ledgerSummaryLabel: { fontSize: 13, fontWeight: '600', color: '#666' },
   ledgerSummaryValue: { fontSize: 15, fontWeight: '700', color: '#075E54' },
+  shareStatementBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 20, backgroundColor: '#075E54', paddingVertical: 14, borderRadius: 10 },
+  shareStatementBtnText: { fontSize: 14, fontWeight: '700', color: '#FFFFFF' },
+  shareHereBtn: { flex: 1, backgroundColor: '#075E54', paddingVertical: 14, borderRadius: 10, alignItems: 'center' },
+  shareHereBtnText: { fontSize: 14, fontWeight: '700', color: '#FFFFFF' },
+  shareWaBtn: { flex: 1, backgroundColor: '#25D366', paddingVertical: 14, borderRadius: 10, alignItems: 'center' },
+  shareWaBtnText: { fontSize: 14, fontWeight: '700', color: '#FFFFFF' },
 });

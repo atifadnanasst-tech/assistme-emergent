@@ -1925,8 +1925,8 @@ export default function CustomerChatScreen() {
       <View style={styles.invoiceCardContainer}>
         <View style={styles.invoiceCard}>
           <View style={styles.invoiceHeader}>
-            <Text style={styles.invoiceNumber}>{cd.is_receipt ? 'Payment Receipt' : `${cd.is_quote ? 'Quote' : 'Invoice'} #${cd.invoice_number || '---'}`}</Text>
-            {!cd.is_receipt && <Text style={[styles.invoiceStatus, { color: statusColor }]}>{statusText}</Text>}
+            <Text style={styles.invoiceNumber}>{cd.is_statement ? 'Account Statement' : cd.is_receipt ? 'Payment Receipt' : `${cd.is_quote ? 'Quote' : 'Invoice'} #${cd.invoice_number || '---'}`}</Text>
+            {!cd.is_receipt && !cd.is_statement && <Text style={[styles.invoiceStatus, { color: statusColor }]}>{statusText}</Text>}
           </View>
           {cd.items_summary && <Text style={styles.invoiceItems}>{cd.items_summary}</Text>}
           {cd.due_date && <Text style={styles.invoiceItems}>Due {new Date(cd.due_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}</Text>}
@@ -1944,6 +1944,13 @@ export default function CustomerChatScreen() {
             <TouchableOpacity onPress={() => {
               const rawPhone = customer?.phone?.replace(/[^0-9]/g, '') || '';
               const phone = rawPhone.startsWith('91') ? rawPhone : rawPhone ? '91' + rawPhone : '';
+              if (cd.is_statement) {
+                const pdfText = cd.pdf_url ? '\n\nView Statement: ' + cd.pdf_url : '';
+                const statementMsg = 'Dear ' + (customer?.name || 'Customer') + ',\n\nPlease find your account statement (' + (cd.items_summary || '') + ').' + pdfText;
+                const statementWaUrl = phone ? 'https://wa.me/' + phone + '?text=' + encodeURIComponent(statementMsg) : 'https://wa.me/?text=' + encodeURIComponent(statementMsg);
+                Linking.openURL(statementWaUrl).catch(() => {});
+                return;
+              }
               if (cd.is_receipt) {
                 const pdfText = cd.pdf_url ? '\n\nView Receipt: ' + cd.pdf_url : '';
                 const receiptMsg = 'Dear ' + (customer?.name || 'Customer') + ',\n\nThank you! We have received your payment of ' + formatCurrency(cd.total_amount || 0) + '.' + pdfText;
