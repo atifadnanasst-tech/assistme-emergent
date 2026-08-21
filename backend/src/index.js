@@ -2942,6 +2942,115 @@ app.get('/api/customer/:customer_id/unpaid-invoices', async (c) => {
   }
 });
 
+// ─── POST /api/quotes (Aug 2026, Create Quote surface) ──────
+// Manual-creation endpoint, calling createQuoteRecord() -- the copied,
+// callable version of Spark's own proven create_quote logic. Spark's
+// own handler is completely unaffected by this endpoint's existence.
+app.post('/api/quotes', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+
+    const body = await c.req.json();
+    const { customer_id, items, due_date, invoice_type, po_number } = body;
+
+    if (!customer_id || !Array.isArray(items) || items.length === 0) {
+      return c.json({ error: 'missing_fields' }, 400);
+    }
+
+    const customer = await validateCustomer(customer_id, organisationId);
+    if (!customer) return c.json({ error: 'customer_not_found' }, 404);
+
+    const result = await createQuoteRecord({
+      organisationId, customerId: customer_id, items, dueDate: due_date,
+      invoiceType: invoice_type, poNumber: po_number,
+    });
+
+    if (result.error) return c.json({ error: 'server_error', detail: result.error }, 500);
+
+    return c.json(result);
+  } catch (err) {
+    console.error('[POST /api/quotes] Error:', err.message);
+    return c.json({ error: 'internal_error' }, 500);
+  }
+});
+
+// ─── POST /api/quotes/:quote_id/share (Aug 2026) ─────────────
+// Copied and adapted from POST /api/invoices/:invoice_id/share -- that
+// endpoint is hard-coded to invoices/invoice_items throughout (table
+// names, foreign keys), not generic enough to reuse directly for
+// quotations/quotation_items. Reuses mirrorCardToReceiverOrg() directly,
+// which genuinely is generic/callable already.
+app.post('/api/quotes/:quote_id/share', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId, userId } = auth;
+    const quoteId = c.req.param('quote_id');
+    const body = await c.req.json();
+    const channel = body.channel || 'app';
+
+    const { data: quote } = await supabase.from('quotations').select('*').eq('id', quoteId).eq('organisation_id', organisationId).single();
+    if (!quote) return c.json({ error: 'quote_not_found' }, 404);
+
+    const { data: customer } = await supabase.from('customers').select('id, name, phone').eq('id', quote.customer_id).single();
+
+    const { data: items } = await supabase.from('quotation_items').select('description, quantity').eq('quotation_id', quoteId).limit(3);
+    const itemsSummary = (items || []).map(i => `${i.description} × ${i.quantity}`).join(', ');
+
+    const { data: attachment } = await supabase.from('attachments').select('public_url')
+      .eq('entity_type', 'quotation').eq('entity_id', quoteId).order('created_at', { ascending: false }).limit(1).maybeSingle();
+
+    if (channel === 'app') {
+      const { data: conv } = await supabase.from('conversations').select('id')
+        .eq('organisation_id', organisationId).eq('entity_type', 'customer')
+        .eq('entity_id', quote.customer_id).eq('status', 'active').maybeSingle();
+
+      if (!conv) return c.json({ shared: false, message_id: null, error: 'no_conversation' });
+
+      const { data: msg, error: msgErr } = await supabase.from('messages').insert({
+        organisation_id: organisationId, conversation_id: conv.id,
+        role: 'tool', content: `Quote ${quote.quote_number} created`,
+        metadata: {
+          sender_type: 'system', visibility: 'both', message_type: 'invoice_card',
+          read_by_owner: true, preview_text: `Quote ${quote.quote_number} - ₹${quote.total_amount}`,
+          card_type: 'invoice_card',
+          card_data: {
+            invoice_id: quoteId, invoice_number: quote.quote_number,
+            total_amount: quote.total_amount, due_date: quote.expiry_date,
+            status: quote.status, items_summary: itemsSummary,
+            pdf_url: attachment?.public_url || null, is_quote: true,
+          },
+        },
+        tokens_input: 0, tokens_output: 0,
+      }).select('id, metadata, content').single();
+
+      if (msgErr) return c.json({ shared: false, error: msgErr.message }, 500);
+
+      await mirrorCardToReceiverOrg({
+        supabase, senderOrgId: organisationId, senderUserId: userId,
+        customerPhone: customer?.phone, originalMetadata: msg?.metadata || {},
+        originalContent: msg?.content || '',
+      });
+
+      return c.json({ shared: true, message_id: msg.id, pdf_url: attachment?.public_url || null });
+    }
+
+    if (channel === 'whatsapp') {
+      const rawPhone = (customer?.phone || '').replace(/[^0-9]/g, '');
+      const phone = rawPhone.startsWith('91') ? rawPhone : rawPhone ? '91' + rawPhone : '';
+      const waUrl = `https://wa.me/${phone}?text=${encodeURIComponent(`Quote ${quote.quote_number}: ₹${quote.total_amount}${attachment?.public_url ? `\n\nDownload: ${attachment.public_url}` : ''}`)}`;
+      return c.json({ whatsapp_url: waUrl, pdf_url: attachment?.public_url || null });
+    }
+
+    return c.json({ pdf_url: attachment?.public_url || null });
+  } catch (err) {
+    console.error('[POST /api/quotes/:quote_id/share] Error:', err.message);
+    return c.json({ error: 'internal_error' }, 500);
+  }
+});
+
 // ─── POST /api/customer/:customer_id/advance (Aug 2026) ─────
 // Payment recording subtask 2 -- advances. Deliberately a plain insert
 // into customer_advances, NOT recordPayment() -- an advance is money
