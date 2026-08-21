@@ -1235,6 +1235,24 @@ export default function CustomerChatScreen() {
         caption: message.content !== message.metadata?.attachment?.name ? message.content : undefined,
         created_at: message.created_at,
       };
+    } else if (msgType === 'invoice_card') {
+      // Bug fixed Aug 2026 (Atif's testing): quotation/invoice cards fell
+      // into the generic text fallback below, forwarding only the card's
+      // short status sentence ("Quote Q-005 created") with no actual
+      // quote number, items, or amount -- Spark had nothing structured
+      // to act on, so "invoice banao" became a bare create_invoice with
+      // zero items instead of a proper convert_quote_to_invoice. Now
+      // explicitly includes the document number and amount, matching
+      // convert_quote_to_invoice's own prompt instruction ("Set
+      // quote_number if mentioned").
+      const cd = message.card_data || {};
+      const docLabel = cd.is_quote ? 'Quote' : 'Invoice';
+      const amountText = cd.total_amount != null ? ` for ₹${cd.total_amount}` : '';
+      payload = {
+        type: 'text',
+        text: `${docLabel} ${cd.invoice_number || ''}${amountText}`.trim(),
+        created_at: message.created_at,
+      };
     } else {
       payload = {
         type: 'text',
