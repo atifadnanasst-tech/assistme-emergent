@@ -3900,6 +3900,99 @@ async function generateDocumentPDF({ documentId, organisationId, documentType, d
   }
 }
 
+// ─── createQuoteRecord (Aug 2026, Create Quote surface) ─────
+// Copied from Spark's own create_quote handler (case 'create_quote' in
+// the Spark execute-plan endpoint), NOT refactored out of it -- Spark's
+// handler stays completely untouched; this is a separate, callable
+// version of the same proven logic for the new manual Create Quote
+// surface. Reuses calculateInvoiceTotals() (the single source of truth
+// for all financial math per project doctrine) and generateDocumentPDF()
+// (already natively supports documentType: 'quotation') directly --
+// those two pieces were genuinely callable already. The quote-number
+// generation + quotations/quotation_items insert logic was NOT
+// previously a named function, so it's copied here verbatim, matching
+// Spark's own exact logic (simple count-based numbering, not the
+// retry-on-collision scheme invoices use -- quotations has no unique
+// constraint on quote_number, unlike invoices which got one specifically
+// to fix a real confirmed race condition; matching what's proven, not
+// "improving" it unilaterally as part of this task).
+async function createQuoteRecord({ organisationId, customerId, items, dueDate, invoiceType, poNumber, freight, freightTaxable, freightTaxRate, applyGst, overallDiscount }) {
+  const { count: qtCount } = await supabase
+    .from('quotations').select('*', { count: 'exact', head: true })
+    .eq('organisation_id', organisationId);
+  const quoteNumber = `Q-${((qtCount || 0) + 1).toString().padStart(3, '0')}`;
+
+  const itemsForCalc = (items || []).map(i => ({
+    product_id: i.product_id || null,
+    product_name: i.product_name || 'Item',
+    quantity: i.quantity || 1,
+    unit_price: i.unit_price != null ? i.unit_price : null,
+    tax_rate: i.tax_rate != null ? i.tax_rate : null,
+    discount_pct: i.discount_pct || 0,
+  }));
+
+  const totals = await calculateInvoiceTotals(
+    supabase, organisationId, customerId, itemsForCalc,
+    {
+      freight: freight || 0,
+      freight_taxable: freightTaxable || false,
+      freight_tax_rate: freightTaxRate || 18,
+      apply_gst: applyGst !== false,
+      overall_discount: overallDiscount || 0,
+      invoice_type: invoiceType || 'Tax Invoice',
+    }
+  );
+
+  const { data: newQuote, error: qtErr } = await supabase
+    .from('quotations').insert({
+      organisation_id: organisationId,
+      customer_id: customerId,
+      quote_number: quoteNumber,
+      status: 'sent',
+      issue_date: getISTDateString(),
+      expiry_date: dueDate || getISTDateString(30),
+      currency: 'INR',
+      subtotal: totals.subtotal,
+      discount_amount: totals.total_discount,
+      tax_amount: totals.total_tax,
+      total_amount: totals.grand_total,
+    }).select('id').single();
+
+  if (qtErr) {
+    console.error('[Quote] Create failed:', qtErr);
+    return { error: qtErr.message };
+  }
+
+  for (let idx = 0; idx < totals.line_items.length; idx++) {
+    const li = totals.line_items[idx];
+    await supabase.from('quotation_items').insert({
+      organisation_id: organisationId,
+      quotation_id: newQuote.id,
+      product_id: li.product_id || null,
+      description: li.product_name || 'Item',
+      quantity: li.quantity,
+      unit_price: li.unit_price,
+      discount_pct: li.discount_pct,
+      tax_rate: li.tax_rate,
+      line_total: li.line_total,
+      sort_order: idx + 1,
+    });
+  }
+
+  let pdfUrl = null;
+  try {
+    pdfUrl = await generateDocumentPDF({
+      documentId: newQuote.id, organisationId, documentType: 'quotation',
+      documentNumber: quoteNumber, title: 'QUOTATION',
+      storageBucket: 'quotes', entityType: 'quotation',
+    });
+  } catch (pdfErr) {
+    console.warn('[Quote] PDF generation failed:', pdfErr.message);
+  }
+
+  return { quote_id: newQuote.id, quote_number: quoteNumber, total_amount: totals.grand_total, pdf_url: pdfUrl };
+}
+
 // ─── generateReceiptPDF (Aug 2026, Payment recording subtask 5) ──
 // Deliberately a SEPARATE function from generateDocumentPDF, not another
 // pdfVariant on it -- a receipt's data shape (payment amount/mode/date,
