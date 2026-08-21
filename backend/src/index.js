@@ -3500,6 +3500,46 @@ app.post('/api/customer/:customer_id/receipt', async (c) => {
 // NEVER compute totals inline anywhere. Always call this function.
 // Does NOT write to DB. Pure async calculation only.
 // ──────────────────────────────────────────────────────────────
+// ──────────────────────────────────────────────────────────────
+// generateInvoiceNumber -- extracted Aug 2026 (Atif's live testing) from
+// a local closure inside the manual POST /api/invoices handler into a
+// real, top-level, callable function. Found via a genuine production
+// failure: Spark's OWN create_invoice handler, and convert_quote_to_
+// invoice, both had their own separate, NAIVE "count + 1" number
+// generation with no collision handling at all -- while the manual
+// screen's own version had already been fixed with this exact
+// scan-for-max + retry-on-23505 pattern for a real prior race
+// condition. Both Spark paths were failing outright with duplicate-key
+// errors ("INV-119 already exists") the moment a collision occurred,
+// with no recovery. This is now the single source of truth for
+// generating a collision-safe invoice number; MAX_INVOICE_NUMBER_RETRIES
+// is exported alongside for callers that need to build their own retry
+// loop around it.
+const MAX_INVOICE_NUMBER_RETRIES = 5;
+async function generateInvoiceNumber(organisationId, invoiceType) {
+  const numberPrefix = invoiceType === 'Internal' ? 'INT-' : 'INV-';
+  const { data: existingInvoices } = await supabase
+    .from('invoices')
+    .select('invoice_number')
+    .eq('organisation_id', organisationId)
+    .order('created_at', { ascending: false })
+    .limit(100);
+
+  let maxNum = 0;
+  if (existingInvoices && existingInvoices.length > 0) {
+    const prefixRegex = new RegExp('^' + numberPrefix + '(\\d+)');
+    existingInvoices.forEach(inv => {
+      if (!inv.invoice_number) return;
+      const match = inv.invoice_number.match(prefixRegex);
+      if (match) {
+        const num = parseInt(match[1]);
+        if (num > maxNum) maxNum = num;
+      }
+    });
+  }
+  return numberPrefix + (maxNum + 1).toString().padStart(3, '0');
+}
+
 async function calculateInvoiceTotals(supabaseClient, organisationId, customerId, items, options = {}) {
   /*
    * items: array of {
@@ -5212,14 +5252,11 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
       try {
         switch (action.action_type) {
           case 'create_invoice': {
-            // Get next invoice number
-            const { count: invCount } = await supabase
-              .from('invoices').select('*', { count: 'exact', head: true })
-              .eq('organisation_id', organisationId);
-            const invoiceNumber = 'INV-' + ((invCount || 0) + 1).toString().padStart(3, '0');
-
+            // Bug fixed Aug 2026 (Atif's live testing): naive count-based
+            // number with zero collision handling -- now uses the
+            // shared, top-level generateInvoiceNumber() and retries.
+            let invoiceNumber = await generateInvoiceNumber(organisationId, params.invoice_type || 'Tax Invoice');
             const itemsArr = Array.isArray(params.items) ? params.items : [];
-
             // Build items array for calculateInvoiceTotals
             const itemsForCalc = itemsArr.length > 0
               ? itemsArr.map(i => ({
@@ -5233,7 +5270,6 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
               : params.product_name
                 ? [{ product_id: null, product_name: params.product_name, quantity: params.quantity || 1, unit_price: params.unit_price || null, tax_rate: null, discount_pct: 0 }]
                 : [];
-
             // Single source of truth for all financial math
             const totals = await calculateInvoiceTotals(
               supabase,
@@ -5249,33 +5285,44 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
                 invoice_type: params.invoice_type || 'Tax Invoice',
               }
             );
-
-            const { data: newInvoice, error: invErr } = await supabase
-              .from('invoices').insert({
-                organisation_id: organisationId,
-                customer_id: customerId,
-                invoice_number: invoiceNumber,
-                status: 'sent',
-                issue_date: getISTDateString(),
-                due_date: params.due_date || getISTDateString(7),
-                currency: 'INR',
-                subtotal: totals.subtotal,
-                tax_amount: totals.total_tax,
-                total_amount: totals.grand_total,
-                discount_amount: totals.total_discount,
-                amount_due: totals.grand_total,
-                amount_paid: 0,
-                custom_fields: {
-                  invoice_type: totals.invoice_type,
-                  cgst_amount: totals.cgst,
-                  sgst_amount: totals.sgst,
-                  igst_amount: totals.igst,
-                  freight_amount: totals.freight_amount,
-                  freight_tax: totals.freight_tax,
-                  round_off: totals.round_off,
-                  is_interstate: totals.is_interstate,
-                },
-              }).select('id').single();
+            let newInvoice = null, invErr = null;
+            for (let attempt = 0; attempt < MAX_INVOICE_NUMBER_RETRIES; attempt++) {
+              const result = await supabase
+                .from('invoices').insert({
+                  organisation_id: organisationId,
+                  customer_id: customerId,
+                  invoice_number: invoiceNumber,
+                  status: 'sent',
+                  issue_date: getISTDateString(),
+                  due_date: params.due_date || getISTDateString(7),
+                  currency: 'INR',
+                  subtotal: totals.subtotal,
+                  tax_amount: totals.total_tax,
+                  total_amount: totals.grand_total,
+                  discount_amount: totals.total_discount,
+                  amount_due: totals.grand_total,
+                  amount_paid: 0,
+                  custom_fields: {
+                    invoice_type: totals.invoice_type,
+                    cgst_amount: totals.cgst,
+                    sgst_amount: totals.sgst,
+                    igst_amount: totals.igst,
+                    freight_amount: totals.freight_amount,
+                    freight_tax: totals.freight_tax,
+                    round_off: totals.round_off,
+                    is_interstate: totals.is_interstate,
+                  },
+                }).select('id').single();
+              newInvoice = result.data;
+              invErr = result.error;
+              if (!invErr) break;
+              if (invErr.code === '23505') {
+                console.warn(`[SPARK] Invoice number collision on ${invoiceNumber}, retrying (attempt ${attempt + 1}/${MAX_INVOICE_NUMBER_RETRIES})`);
+                invoiceNumber = await generateInvoiceNumber(organisationId, params.invoice_type || 'Tax Invoice');
+                continue;
+              }
+              break;
+            }
             if (invErr) { console.error('Create invoice failed:', invErr); failed.push(actionId); continue; }
 
             // Insert invoice items using calculated line items
@@ -5796,39 +5843,44 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
 
             if (!quote) { failed.push(actionId); break; }
 
-            const { count: invCount } = await supabase
-              .from('invoices').select('*', { count: 'exact', head: true })
-              .eq('organisation_id', organisationId);
-            const invoiceNumber = 'INV-' + ((invCount || 0) + 1).toString().padStart(3, '0');
+            // Bug fixed Aug 2026 (Atif's live testing): same naive
+            // count-based number with zero collision handling as
+            // Spark's create_invoice had -- now uses the shared
+            // generateInvoiceNumber() with a retry-on-23505 loop. PDF
+            // generation and custom_fields carry-over (cgst/sgst/igst
+            // from the source quote) were fixed separately just prior.
+            let invoiceNumber = await generateInvoiceNumber(organisationId, 'Tax Invoice');
 
-            // Bugs fixed Aug 2026 (Atif's testing): this handler never
-            // generated a PDF at all -- no generateDocumentPDF() call
-            // anywhere, and no pdf_url in card_data -- which is the real
-            // cause of "not pre-filling"/appearing broken when the owner
-            // tapped View PDF on the resulting invoice card. Also copies
-            // custom_fields (cgst/sgst/igst) from the source quote --
-            // the tax split doesn't change on conversion, same line
-            // items and amounts, so this is a direct carry-over, not a
-            // recomputation.
-            const { data: newInv, error: convErr } = await supabase
-              .from('invoices').insert({
-                organisation_id: organisationId,
-                customer_id: customerId,
-                quotation_id: quoteId,
-                invoice_number: invoiceNumber,
-                status: 'sent',
-                issue_date: getISTDateString(),
-                due_date: params.due_date || getISTDateString(7),
-                currency: 'INR',
-                subtotal: quote.subtotal,
-                discount_amount: quote.discount_amount,
-                tax_amount: quote.tax_amount,
-                total_amount: quote.total_amount,
-                amount_paid: 0,
-                amount_due: quote.total_amount,
-                custom_fields: quote.custom_fields || null,
-              }).select('id').single();
-
+            let newInv = null, convErr = null;
+            for (let attempt = 0; attempt < MAX_INVOICE_NUMBER_RETRIES; attempt++) {
+              const result = await supabase
+                .from('invoices').insert({
+                  organisation_id: organisationId,
+                  customer_id: customerId,
+                  quotation_id: quoteId,
+                  invoice_number: invoiceNumber,
+                  status: 'sent',
+                  issue_date: getISTDateString(),
+                  due_date: params.due_date || getISTDateString(7),
+                  currency: 'INR',
+                  subtotal: quote.subtotal,
+                  discount_amount: quote.discount_amount,
+                  tax_amount: quote.tax_amount,
+                  total_amount: quote.total_amount,
+                  amount_paid: 0,
+                  amount_due: quote.total_amount,
+                  custom_fields: quote.custom_fields || null,
+                }).select('id').single();
+              newInv = result.data;
+              convErr = result.error;
+              if (!convErr) break;
+              if (convErr.code === '23505') {
+                console.warn(`[SPARK] Invoice number collision on ${invoiceNumber} during quote conversion, retrying (attempt ${attempt + 1}/${MAX_INVOICE_NUMBER_RETRIES})`);
+                invoiceNumber = await generateInvoiceNumber(organisationId, 'Tax Invoice');
+                continue;
+              }
+              break;
+            }
             if (convErr) { console.error('Convert quote failed:', convErr); failed.push(actionId); continue; }
 
             // Copy quote items to invoice items
