@@ -5833,7 +5833,8 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
                 .eq('status', 'sent').order('created_at', { ascending: false }).limit(1).maybeSingle();
               if (qt) quoteId = qt.id;
             }
-            if (!quoteId) { failed.push(actionId); break; }
+            if (!quoteId) { console.warn('[CONVERT-DIAG] No quoteId found for customerId=' + customerId + ' params=' + JSON.stringify(params)); failed.push(actionId); break; }
+            console.log('[CONVERT-DIAG] Resolved quoteId=' + quoteId);
 
             // Fetch quote and its items
             const { data: quote } = await supabase
@@ -5841,7 +5842,8 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
             const { data: quoteItems } = await supabase
               .from('quotation_items').select('*').eq('quotation_id', quoteId).is('deleted_at', null);
 
-            if (!quote) { failed.push(actionId); break; }
+            if (!quote) { console.warn('[CONVERT-DIAG] Quote row not found for quoteId=' + quoteId); failed.push(actionId); break; }
+            console.log('[CONVERT-DIAG] Quote found, status=' + quote.status + ' number=' + quote.quote_number);
 
             // Bug fixed Aug 2026 (Atif's live testing): same naive
             // count-based number with zero collision handling as
