@@ -3055,6 +3055,111 @@ app.get('/api/customer/:customer_id/advances', async (c) => {
 // returned alongside the ledger, matching how advances already stay
 // structurally separate everywhere else in the app until consciously
 // applied.
+// ─── computeCustomerLedger (Aug 2026) ────────────────────────
+// Extracted from the GET /ledger endpoint below, verified to produce
+// byte-identical behavior -- this is the SAME logic, just callable from
+// more than one place. Balance Sheet subtask 4 (Share Statement) needs
+// this exact computation to generate a PDF from, and duplicating a
+// 4-source merge + running-balance calculation would be a real risk of
+// the two copies drifting apart over time. Single source of truth for
+// "what does this customer's ledger say for this date range".
+async function computeCustomerLedger(organisationId, customerId, startDate, endDate) {
+  const customer = await validateCustomer(customerId, organisationId);
+  if (!customer) return null;
+
+  const { data: priorInvoices } = await supabase.from('invoices')
+    .select('total_amount')
+    .eq('organisation_id', organisationId).eq('customer_id', customerId)
+    .neq('status', 'draft').lt('issue_date', startDate);
+  const { data: priorPayments } = await supabase.from('payments')
+    .select('amount')
+    .eq('organisation_id', organisationId).eq('customer_id', customerId)
+    .lt('payment_date', startDate);
+  const { data: priorBills } = await supabase.from('purchase_bills')
+    .select('total_amount')
+    .eq('organisation_id', organisationId).eq('customer_id', customerId)
+    .eq('is_historical', false).is('deleted_at', null)
+    .neq('status', 'draft').lt('issue_date', startDate);
+  const { data: priorSupplierPayments } = await supabase.from('supplier_payments')
+    .select('amount')
+    .eq('organisation_id', organisationId).eq('customer_id', customerId)
+    .is('deleted_at', null).lt('payment_date', startDate);
+  const openingBalance =
+    (priorInvoices || []).reduce((s, i) => s + Number(i.total_amount || 0), 0) -
+    (priorPayments || []).reduce((s, p) => s + Number(p.amount || 0), 0) -
+    (priorBills || []).reduce((s, b) => s + Number(b.total_amount || 0), 0) +
+    (priorSupplierPayments || []).reduce((s, sp) => s + Number(sp.amount || 0), 0);
+
+  const { data: invoicesInRange } = await supabase.from('invoices')
+    .select('id, invoice_number, total_amount, issue_date')
+    .eq('organisation_id', organisationId).eq('customer_id', customerId)
+    .neq('status', 'draft').gte('issue_date', startDate).lte('issue_date', endDate);
+  const { data: paymentsInRange } = await supabase.from('payments')
+    .select('id, invoice_id, amount, payment_date, payment_method')
+    .eq('organisation_id', organisationId).eq('customer_id', customerId)
+    .gte('payment_date', startDate).lte('payment_date', endDate);
+  const { data: billsInRange } = await supabase.from('purchase_bills')
+    .select('id, bill_number, total_amount, issue_date')
+    .eq('organisation_id', organisationId).eq('customer_id', customerId)
+    .eq('is_historical', false).is('deleted_at', null)
+    .neq('status', 'draft').gte('issue_date', startDate).lte('issue_date', endDate);
+  const { data: supplierPaymentsInRange } = await supabase.from('supplier_payments')
+    .select('id, bill_id, amount, payment_date, payment_method')
+    .eq('organisation_id', organisationId).eq('customer_id', customerId)
+    .is('deleted_at', null).gte('payment_date', startDate).lte('payment_date', endDate);
+
+  const ledgerInvoiceIds = (invoicesInRange || []).map(i => i.id);
+  let ledgerInvoicePdfMap = {};
+  if (ledgerInvoiceIds.length > 0) {
+    const { data: ledgerInvoiceAttachments } = await supabase.from('attachments')
+      .select('entity_id, public_url, created_at')
+      .eq('organisation_id', organisationId).eq('entity_type', 'invoice')
+      .in('entity_id', ledgerInvoiceIds).order('created_at', { ascending: false });
+    (ledgerInvoiceAttachments || []).forEach(a => {
+      if (!ledgerInvoicePdfMap[a.entity_id]) ledgerInvoicePdfMap[a.entity_id] = a.public_url;
+    });
+  }
+
+  const lines = [
+    ...(invoicesInRange || []).map(i => ({
+      type: 'invoice', date: i.issue_date, description: i.invoice_number,
+      amount: Number(i.total_amount || 0), invoice_id: i.id, invoice_number: i.invoice_number,
+      pdf_url: ledgerInvoicePdfMap[i.id] || null,
+    })),
+    ...(paymentsInRange || []).map(p => ({
+      type: 'payment', date: p.payment_date, description: p.payment_method || 'Payment',
+      amount: -Number(p.amount || 0), invoice_id: p.invoice_id,
+    })),
+    ...(billsInRange || []).map(b => ({
+      type: 'purchase_bill', date: b.issue_date, description: `Goods purchased — ${b.bill_number}`,
+      amount: -Number(b.total_amount || 0), bill_id: b.id,
+    })),
+    ...(supplierPaymentsInRange || []).map(sp => ({
+      type: 'supplier_payment', date: sp.payment_date, description: `Paid to them — ${sp.payment_method || 'Payment'}`,
+      amount: Number(sp.amount || 0), bill_id: sp.bill_id,
+    })),
+  ].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+
+  let running = openingBalance;
+  const ledger = lines.map(line => {
+    running = Math.round((running + line.amount) * 100) / 100;
+    return { ...line, running_balance: running };
+  });
+
+  const { data: advances } = await supabase.from('customer_advances')
+    .select('id, amount, amount_applied, amount_remaining, purpose, received_date, payment_mode, status')
+    .eq('organisation_id', organisationId).eq('customer_id', customerId)
+    .order('received_date', { ascending: false });
+
+  return {
+    customer_name: customer.name,
+    opening_balance: Math.round(openingBalance * 100) / 100,
+    closing_balance: running,
+    ledger,
+    advances: advances || [],
+  };
+}
+
 app.get('/api/customer/:customer_id/ledger', async (c) => {
   try {
     const auth = await authenticateChat(c);
@@ -3066,107 +3171,84 @@ app.get('/api/customer/:customer_id/ledger', async (c) => {
 
     if (!startDate || !endDate) return c.json({ error: 'missing_date_range' }, 400);
 
+    const result = await computeCustomerLedger(organisationId, customerId, startDate, endDate);
+    if (!result) return c.json({ error: 'customer_not_found' }, 404);
+
+    return c.json(result);
+  } catch (err) {
+    console.error('[GET /api/customer/:customer_id/ledger] Error:', err.message);
+    return c.json({ error: 'internal_error' }, 500);
+  }
+});
+
+// ─── POST /api/customer/:customer_id/statement (Aug 2026) ───
+// Balance Sheet subtask 4 -- Share Statement. Reuses computeCustomerLedger()
+// (the exact same logic backing the Balance Sheet tab, not a re-derivation)
+// and generateLedgerPDF(). channel='app' posts a chat card visible to both
+// sides, reusing the invoice_card renderer via is_statement, matching the
+// existing pattern for receipts (is_receipt). channel='whatsapp' returns
+// a wa.me link.
+app.post('/api/customer/:customer_id/statement', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId, userId } = auth;
+    const customerId = c.req.param('customer_id');
+
+    const body = await c.req.json();
+    const { start, end, item_detail_level, channel } = body;
+    if (!start || !end) return c.json({ error: 'missing_date_range' }, 400);
+
     const customer = await validateCustomer(customerId, organisationId);
     if (!customer) return c.json({ error: 'customer_not_found' }, 404);
 
-    const { data: priorInvoices } = await supabase.from('invoices')
-      .select('total_amount')
-      .eq('organisation_id', organisationId).eq('customer_id', customerId)
-      .neq('status', 'draft').lt('issue_date', startDate);
-    const { data: priorPayments } = await supabase.from('payments')
-      .select('amount')
-      .eq('organisation_id', organisationId).eq('customer_id', customerId)
-      .lt('payment_date', startDate);
-    const { data: priorBills } = await supabase.from('purchase_bills')
-      .select('total_amount')
-      .eq('organisation_id', organisationId).eq('customer_id', customerId)
-      .eq('is_historical', false).is('deleted_at', null)
-      .neq('status', 'draft').lt('issue_date', startDate);
-    const { data: priorSupplierPayments } = await supabase.from('supplier_payments')
-      .select('amount')
-      .eq('organisation_id', organisationId).eq('customer_id', customerId)
-      .is('deleted_at', null).lt('payment_date', startDate);
-    const openingBalance =
-      (priorInvoices || []).reduce((s, i) => s + Number(i.total_amount || 0), 0) -
-      (priorPayments || []).reduce((s, p) => s + Number(p.amount || 0), 0) -
-      (priorBills || []).reduce((s, b) => s + Number(b.total_amount || 0), 0) +
-      (priorSupplierPayments || []).reduce((s, sp) => s + Number(sp.amount || 0), 0);
+    const ledgerResult = await computeCustomerLedger(organisationId, customerId, start, end);
+    if (!ledgerResult) return c.json({ error: 'customer_not_found' }, 404);
 
-    const { data: invoicesInRange } = await supabase.from('invoices')
-      .select('id, invoice_number, total_amount, issue_date')
-      .eq('organisation_id', organisationId).eq('customer_id', customerId)
-      .neq('status', 'draft').gte('issue_date', startDate).lte('issue_date', endDate);
-    const { data: paymentsInRange } = await supabase.from('payments')
-      .select('id, invoice_id, amount, payment_date, payment_method')
-      .eq('organisation_id', organisationId).eq('customer_id', customerId)
-      .gte('payment_date', startDate).lte('payment_date', endDate);
-    const { data: billsInRange } = await supabase.from('purchase_bills')
-      .select('id, bill_number, total_amount, issue_date')
-      .eq('organisation_id', organisationId).eq('customer_id', customerId)
-      .eq('is_historical', false).is('deleted_at', null)
-      .neq('status', 'draft').gte('issue_date', startDate).lte('issue_date', endDate);
-    const { data: supplierPaymentsInRange } = await supabase.from('supplier_payments')
-      .select('id, bill_id, amount, payment_date, payment_method')
-      .eq('organisation_id', organisationId).eq('customer_id', customerId)
-      .is('deleted_at', null).gte('payment_date', startDate).lte('payment_date', endDate);
+    const pdfUrl = await generateLedgerPDF({
+      organisationId, customerId, customerName: ledgerResult.customer_name,
+      startDate: start, endDate: end,
+      openingBalance: ledgerResult.opening_balance, closingBalance: ledgerResult.closing_balance,
+      ledger: ledgerResult.ledger, itemDetailLevel: item_detail_level || 'none',
+    });
 
-    // pdf_url per invoice line (Aug 2026, Atif's feedback) -- so invoice
-    // rows on this tab can be tappable too, matching every other tab.
-    // Same separate-lookup pattern as /api/documents, not an embedded
-    // join, per the earlier confirmed lesson that embedded joins can
-    // silently drop rows.
-    const ledgerInvoiceIds = (invoicesInRange || []).map(i => i.id);
-    let ledgerInvoicePdfMap = {};
-    if (ledgerInvoiceIds.length > 0) {
-      const { data: ledgerInvoiceAttachments } = await supabase.from('attachments')
-        .select('entity_id, public_url, created_at')
-        .eq('organisation_id', organisationId).eq('entity_type', 'invoice')
-        .in('entity_id', ledgerInvoiceIds).order('created_at', { ascending: false });
-      (ledgerInvoiceAttachments || []).forEach(a => {
-        if (!ledgerInvoicePdfMap[a.entity_id]) ledgerInvoicePdfMap[a.entity_id] = a.public_url;
-      });
+    if (!pdfUrl) return c.json({ error: 'pdf_generation_failed' }, 500);
+
+    if (channel === 'app') {
+      let conv = await resolveActiveEntityConversation(organisationId, customerId);
+      if (!conv) {
+        const { data: newConv } = await supabase.from('conversations').insert({
+          organisation_id: organisationId, user_id: userId, entity_type: 'customer',
+          entity_id: customerId, model: 'gpt-4o-mini', status: 'active',
+        }).select('id').single();
+        conv = newConv;
+      }
+      const { data: msg } = await supabase.from('messages').insert({
+        organisation_id: organisationId, conversation_id: conv.id,
+        role: 'tool', content: `Account Statement — ${start} to ${end}`,
+        metadata: {
+          sender_type: 'system', visibility: 'both', message_type: 'invoice_card',
+          read_by_owner: true, preview_text: `Statement: ${start} to ${end}`,
+          card_data: {
+            is_statement: true, pdf_url: pdfUrl,
+            total_amount: ledgerResult.closing_balance,
+            items_summary: `${start} to ${end}`,
+          },
+        },
+        tokens_input: 0, tokens_output: 0,
+      }).select('id').single();
+      await broadcastNewMessage(organisationId, { conversation_id: conv.id });
+      return c.json({ pdf_url: pdfUrl, shared: true, message_id: msg?.id });
     }
 
-    const lines = [
-      ...(invoicesInRange || []).map(i => ({
-        type: 'invoice', date: i.issue_date, description: i.invoice_number,
-        amount: Number(i.total_amount || 0), invoice_id: i.id, invoice_number: i.invoice_number,
-        pdf_url: ledgerInvoicePdfMap[i.id] || null,
-      })),
-      ...(paymentsInRange || []).map(p => ({
-        type: 'payment', date: p.payment_date, description: p.payment_method || 'Payment',
-        amount: -Number(p.amount || 0), invoice_id: p.invoice_id,
-      })),
-      ...(billsInRange || []).map(b => ({
-        type: 'purchase_bill', date: b.issue_date, description: `Goods purchased — ${b.bill_number}`,
-        amount: -Number(b.total_amount || 0), bill_id: b.id,
-      })),
-      ...(supplierPaymentsInRange || []).map(sp => ({
-        type: 'supplier_payment', date: sp.payment_date, description: `Paid to them — ${sp.payment_method || 'Payment'}`,
-        amount: Number(sp.amount || 0), bill_id: sp.bill_id,
-      })),
-    ].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+    if (channel === 'whatsapp') {
+      const waUrl = `https://wa.me/${(customer.phone || '').replace(/[^0-9]/g, '')}?text=${encodeURIComponent(`Account Statement (${start} to ${end}).\n\nView statement: ${pdfUrl}`)}`;
+      return c.json({ pdf_url: pdfUrl, whatsapp_url: waUrl });
+    }
 
-    let running = openingBalance;
-    const ledger = lines.map(line => {
-      running = Math.round((running + line.amount) * 100) / 100;
-      return { ...line, running_balance: running };
-    });
-
-    const { data: advances } = await supabase.from('customer_advances')
-      .select('id, amount, amount_applied, amount_remaining, purpose, received_date, payment_mode, status')
-      .eq('organisation_id', organisationId).eq('customer_id', customerId)
-      .order('received_date', { ascending: false });
-
-    return c.json({
-      customer_name: customer.name,
-      opening_balance: Math.round(openingBalance * 100) / 100,
-      closing_balance: running,
-      ledger,
-      advances: advances || [],
-    });
+    return c.json({ pdf_url: pdfUrl });
   } catch (err) {
-    console.error('[GET /api/customer/:customer_id/ledger] Error:', err.message);
+    console.error('[POST /api/customer/:customer_id/statement] Error:', err.message);
     return c.json({ error: 'internal_error' }, 500);
   }
 });
