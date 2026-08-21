@@ -4458,7 +4458,7 @@ Action rules:
 - create_invoice: ALL products in entities.items as ONE action. Extract freight separately into entities.freight — never put freight in amount. Extract discount_pct per item if mentioned.
 - STRICT product rule: Only extract products the owner explicitly names with a quantity. Never infer, add, or suggest products from chat history, context, or memory. Extract exactly what was said, nothing more.
 - create_quote: same structure as create_invoice but output is a quote. Use when owner says quote, quotation, estimate, bhav batao.
-- convert_quote_to_invoice: use when owner says convert quote to invoice. Set quote_number if mentioned.
+- convert_quote_to_invoice: use when owner says convert quote to invoice, OR when the context includes "Forwarded message: Quote ..." (a quote was just forwarded) AND the owner's instruction is a bare create-invoice request (invoice banao, create invoice, banao) WITHOUT naming any new products with quantities. This is the far more common real phrasing -- do not require the literal words "convert quote to invoice". Extract quote_number from the forwarded message text. If the owner DOES explicitly name new products with quantities in their own instruction, treat it as a fresh create_invoice instead, even if a quote was forwarded.
 - schedule_delivery: one action, set delivery_date.
 - update_delivery_status: use when owner says maal pahunch gaya, delivered, delivery complete. Set status=completed.
 - set_reminder: set due_date. ALSO extract a short 'title' describing what the reminder is for, in the owner's own words (e.g. "Trade License Renewal", "Follow up on quotation", "Renew GST registration"). Only use payment/collection framing if the conversation is actually about a pending payment or invoice -- do not assume every reminder is about money. If no clear subject is mentioned, leave title null.
@@ -5833,8 +5833,7 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
                 .eq('status', 'sent').order('created_at', { ascending: false }).limit(1).maybeSingle();
               if (qt) quoteId = qt.id;
             }
-            if (!quoteId) { console.warn('[CONVERT-DIAG] No quoteId found for customerId=' + customerId + ' params=' + JSON.stringify(params)); failed.push(actionId); break; }
-            console.log('[CONVERT-DIAG] Resolved quoteId=' + quoteId);
+            if (!quoteId) { failed.push(actionId); break; }
 
             // Fetch quote and its items
             const { data: quote } = await supabase
@@ -5842,8 +5841,7 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
             const { data: quoteItems } = await supabase
               .from('quotation_items').select('*').eq('quotation_id', quoteId).is('deleted_at', null);
 
-            if (!quote) { console.warn('[CONVERT-DIAG] Quote row not found for quoteId=' + quoteId); failed.push(actionId); break; }
-            console.log('[CONVERT-DIAG] Quote found, status=' + quote.status + ' number=' + quote.quote_number);
+            if (!quote) { failed.push(actionId); break; }
 
             // Bug fixed Aug 2026 (Atif's live testing): same naive
             // count-based number with zero collision handling as
