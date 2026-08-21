@@ -4052,6 +4052,11 @@ async function createQuoteRecord({ organisationId, customerId, items, dueDate, i
     }
   );
 
+  // Bug fixed Aug 2026 (Atif's testing): cgst/sgst/igst are already
+  // correctly computed by calculateInvoiceTotals() above, but were never
+  // being stored -- generateDocumentPDF() reads them from custom_fields
+  // when rendering, so the actual generated PDF was silently missing the
+  // tax split entirely, not just an on-screen preview gap.
   const { data: newQuote, error: qtErr } = await supabase
     .from('quotations').insert({
       organisation_id: organisationId,
@@ -4065,6 +4070,7 @@ async function createQuoteRecord({ organisationId, customerId, items, dueDate, i
       discount_amount: totals.total_discount,
       tax_amount: totals.total_tax,
       total_amount: totals.grand_total,
+      custom_fields: { cgst_amount: totals.cgst, sgst_amount: totals.sgst, igst_amount: totals.igst },
     }).select('id').single();
 
   if (qtErr) {
@@ -5665,6 +5671,11 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
               }
             );
 
+            // Bug fixed Aug 2026 (Atif's testing, found via the new
+            // Create Quote surface): same fix as createQuoteRecord() --
+            // cgst/sgst/igst were already correctly computed above but
+            // never stored, so generated quote PDFs from Spark were
+            // silently missing the tax split.
             const { data: newQuote, error: qtErr } = await supabase
               .from('quotations').insert({
                 organisation_id: organisationId,
@@ -5678,6 +5689,7 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
                 discount_amount: totals.total_discount,
                 tax_amount: totals.total_tax,
                 total_amount: totals.grand_total,
+                custom_fields: { cgst_amount: totals.cgst, sgst_amount: totals.sgst, igst_amount: totals.igst },
               }).select('id').single();
 
             if (qtErr) { console.error('Create quote failed:', qtErr); failed.push(actionId); continue; }
@@ -5789,6 +5801,15 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
               .eq('organisation_id', organisationId);
             const invoiceNumber = 'INV-' + ((invCount || 0) + 1).toString().padStart(3, '0');
 
+            // Bugs fixed Aug 2026 (Atif's testing): this handler never
+            // generated a PDF at all -- no generateDocumentPDF() call
+            // anywhere, and no pdf_url in card_data -- which is the real
+            // cause of "not pre-filling"/appearing broken when the owner
+            // tapped View PDF on the resulting invoice card. Also copies
+            // custom_fields (cgst/sgst/igst) from the source quote --
+            // the tax split doesn't change on conversion, same line
+            // items and amounts, so this is a direct carry-over, not a
+            // recomputation.
             const { data: newInv, error: convErr } = await supabase
               .from('invoices').insert({
                 organisation_id: organisationId,
@@ -5805,6 +5826,7 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
                 total_amount: quote.total_amount,
                 amount_paid: 0,
                 amount_due: quote.total_amount,
+                custom_fields: quote.custom_fields || null,
               }).select('id').single();
 
             if (convErr) { console.error('Convert quote failed:', convErr); failed.push(actionId); continue; }
@@ -5829,6 +5851,20 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
             // Mark quote as converted
             await supabase.from('quotations').update({ status: 'converted' }).eq('id', quoteId);
 
+            // Generate the invoice PDF -- previously entirely missing,
+            // matching the same call shape the regular create_invoice
+            // handler already uses.
+            let convertedPdfUrl = null;
+            try {
+              convertedPdfUrl = await generateDocumentPDF({
+                documentId: newInv.id, organisationId, documentType: 'invoice',
+                documentNumber: invoiceNumber, title: 'TAX INVOICE',
+                storageBucket: 'invoices', entityType: 'invoice',
+              });
+            } catch (pdfErr) {
+              console.warn('[PDF] Converted invoice PDF generation failed:', pdfErr.message);
+            }
+
             // Invoice card message
             const { data: convConv } = await supabase
               .from('conversations').select('id')
@@ -5847,6 +5883,7 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
                     total_amount: quote.total_amount,
                     due_date: params.due_date || new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0],
                     status: 'sent', items_summary: `Converted from ${quote.quote_number}`,
+                    pdf_url: convertedPdfUrl,
                   },
                 },
                 tokens_input: 0, tokens_output: 0,
