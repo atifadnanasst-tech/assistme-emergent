@@ -3221,7 +3221,14 @@ export default function CustomerChatScreen() {
                     if (p.amount) params.amount = String(p.amount);
                     if (previewDraftId) params.draft_id = previewDraftId;
                     if (action.action_id) params.action_id = action.action_id;
-                    router.push({ pathname: `/customer/${customer_id}/invoice`, params });
+                    // Real bug fixed Aug 2026 (Create Quote surface): both
+                    // action types previously always routed here to the
+                    // INVOICE screen, since quote.tsx was just a stub with
+                    // nowhere else to send them. Now branches correctly --
+                    // quote.tsx is a real screen, accepting the exact same
+                    // params.
+                    const editTarget = action.action_type === 'create_quote' ? 'quote' : 'invoice';
+                    router.push({ pathname: `/customer/${customer_id}/${editTarget}`, params });
                   } else if (action.action_type === 'schedule_delivery' || action.action_type === 'set_reminder') {
                     const dateStr = action.action_type === 'schedule_delivery'
                       ? action.parameters?.delivery_date
