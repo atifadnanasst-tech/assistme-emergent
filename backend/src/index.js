@@ -3540,6 +3540,108 @@ async function generateInvoiceNumber(organisationId, invoiceType) {
   return numberPrefix + (maxNum + 1).toString().padStart(3, '0');
 }
 
+// ─── convertQuoteToInvoiceRecord (Aug 2026, Create Quote surface) ──
+// Copied from Spark's own convert_quote_to_invoice handler (case
+// 'convert_quote_to_invoice' in the Spark execute-plan endpoint), NOT
+// refactored out of it. Deliberate decision (Atif's explicit call):
+// that handler was just brought into a hard-won, fully-tested working
+// state (fixed PDF generation, custom_fields carry-over, invoice-number
+// retry loop -- see prior fixes), verified live via two real successful
+// conversions. Touching it again today for a "safe" refactor would
+// reintroduce risk to something already proven working, for zero
+// functional benefit -- the new manual "Convert to Invoice" long-press
+// action doesn't need Spark's handler to change, only for this same
+// logic to exist somewhere callable. This function is that callable
+// version, copied verbatim in behavior. FUTURE REFACTOR OPPORTUNITY:
+// once both paths are independently stable for a while, Spark's own
+// handler (search for "case 'convert_quote_to_invoice'") should be
+// updated to call this same function instead of keeping its own copy,
+// eliminating the duplication -- deliberately not done now.
+//
+// Unlike Spark's version, this takes an explicit quoteId directly (no
+// quote_number-or-latest-sent fallback resolution needed) since the
+// manual UI always knows exactly which quote was tapped.
+async function convertQuoteToInvoiceRecord({ organisationId, customerId, userId, quoteId, dueDate }) {
+  const { data: quote } = await supabase
+    .from('quotations').select('*').eq('id', quoteId).maybeSingle();
+  const { data: quoteItems } = await supabase
+    .from('quotation_items').select('*').eq('quotation_id', quoteId).is('deleted_at', null);
+
+  if (!quote) return { error: 'quote_not_found' };
+
+  let invoiceNumber = await generateInvoiceNumber(organisationId, 'Tax Invoice');
+
+  let newInv = null, convErr = null;
+  for (let attempt = 0; attempt < MAX_INVOICE_NUMBER_RETRIES; attempt++) {
+    const result = await supabase
+      .from('invoices').insert({
+        organisation_id: organisationId,
+        customer_id: customerId,
+        quotation_id: quoteId,
+        invoice_number: invoiceNumber,
+        status: 'sent',
+        issue_date: getISTDateString(),
+        due_date: dueDate || getISTDateString(7),
+        currency: 'INR',
+        subtotal: quote.subtotal,
+        discount_amount: quote.discount_amount,
+        tax_amount: quote.tax_amount,
+        total_amount: quote.total_amount,
+        amount_paid: 0,
+        amount_due: quote.total_amount,
+        custom_fields: quote.custom_fields || null,
+      }).select('id').single();
+    newInv = result.data;
+    convErr = result.error;
+    if (!convErr) break;
+    if (convErr.code === '23505') {
+      console.warn(`[CONVERT] Invoice number collision on ${invoiceNumber}, retrying (attempt ${attempt + 1}/${MAX_INVOICE_NUMBER_RETRIES})`);
+      invoiceNumber = await generateInvoiceNumber(organisationId, 'Tax Invoice');
+      continue;
+    }
+    break;
+  }
+  if (convErr) {
+    console.error('[CONVERT] Convert quote to invoice failed:', convErr);
+    return { error: convErr.message };
+  }
+
+  for (let idx = 0; idx < (quoteItems || []).length; idx++) {
+    const qi = quoteItems[idx];
+    await supabase.from('invoice_items').insert({
+      organisation_id: organisationId,
+      invoice_id: newInv.id,
+      product_id: qi.product_id || null,
+      description: qi.description,
+      quantity: qi.quantity,
+      unit_price: qi.unit_price,
+      discount_pct: qi.discount_pct,
+      tax_rate: qi.tax_rate,
+      line_total: qi.line_total,
+      sort_order: qi.sort_order,
+    });
+  }
+
+  await supabase.from('quotations').update({ status: 'converted' }).eq('id', quoteId);
+
+  let convertedPdfUrl = null;
+  try {
+    convertedPdfUrl = await generateDocumentPDF({
+      documentId: newInv.id, organisationId, documentType: 'invoice',
+      documentNumber: invoiceNumber, title: 'TAX INVOICE',
+      storageBucket: 'invoices', entityType: 'invoice',
+    });
+  } catch (pdfErr) {
+    console.warn('[PDF] Converted invoice PDF generation failed:', pdfErr.message);
+  }
+
+  return {
+    invoice_id: newInv.id, invoice_number: invoiceNumber,
+    total_amount: quote.total_amount, pdf_url: convertedPdfUrl,
+    quote_number: quote.quote_number,
+  };
+}
+
 async function calculateInvoiceTotals(supabaseClient, organisationId, customerId, items, options = {}) {
   /*
    * items: array of {
