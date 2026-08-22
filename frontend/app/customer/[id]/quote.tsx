@@ -47,7 +47,7 @@ interface Customer { id: string; name: string; phone: string; }
 
 export default function NewQuoteScreen() {
   const router = useRouter();
-  const params = useLocalSearchParams<{ id: string; items?: string; amount?: string; due_date?: string; draft_id?: string; action_id?: string }>();
+  const params = useLocalSearchParams<{ id: string; items?: string; amount?: string; due_date?: string; draft_id?: string; action_id?: string; edit_quote_id?: string }>();
   const id = params.id;
   const { setIsAuthenticated } = useAuth();
 
@@ -73,6 +73,10 @@ export default function NewQuoteScreen() {
   const [newHsn, setNewHsn] = useState('');
   const [aiSuggestion, setAiSuggestion] = useState<string | null>(null);
   const [dueDate, setDueDate] = useState('');
+  // Edit Quotation (Aug 2026, quotation long-press option 1). When set,
+  // handleSubmit saves OVER this same quote via existing_quote_id
+  // instead of creating a new one -- matches Atif's own explicit spec.
+  const [editQuoteId, setEditQuoteId] = useState<string | null>(null);
 
   const getToken = async () => {
     const token = await authService.getAccessToken();
@@ -100,6 +104,31 @@ export default function NewQuoteScreen() {
       setProducts(data.products || []);
       if (data.prefilled_items?.length > 0) setItems(data.prefilled_items);
       if (params.due_date) setDueDate(params.due_date as string);
+
+      // Edit Quotation pre-fill -- overrides any other pre-fill source,
+      // since editing an existing quote is the most specific intent.
+      if (params.edit_quote_id) {
+        try {
+          const editRes = await fetch(`${backendUrl}/api/quotes/${params.edit_quote_id}`, { headers: { 'Authorization': `Bearer ${token}` } });
+          if (editRes.ok) {
+            const editData = await editRes.json();
+            setEditQuoteId(params.edit_quote_id as string);
+            setCustomerId(editData.quote.customer_id);
+            setDueDate(editData.quote.expiry_date || '');
+            const editItems: LineItem[] = (editData.items || []).map((qi: any) => ({
+              product_id: qi.product_id || '',
+              product_name: qi.description || 'Item',
+              hsn_code: null,
+              quantity: qi.quantity,
+              unit_price: qi.unit_price,
+              tax_rate: qi.tax_rate,
+              discount_pct: qi.discount_pct || 0,
+              line_total: qi.line_total,
+            }));
+            setItems(editItems);
+          }
+        } catch (e) { console.warn('Failed to load quote for editing:', e); }
+      }
 
       // Populate from Spark params if passed via URL (same pattern
       // invoice.tsx uses for its own action-preview Edit button).
@@ -216,6 +245,7 @@ export default function NewQuoteScreen() {
             customer_id: customerId,
             items: items.map(i => ({ product_id: i.product_id, quantity: i.quantity, unit_price: i.unit_price, discount_pct: i.discount_pct, hsn_code: i.hsn_code })),
             due_date: dueDate || undefined,
+            existing_quote_id: editQuoteId || undefined,
           }),
         });
 
@@ -290,7 +320,7 @@ export default function NewQuoteScreen() {
 
   if (loading) return (
     <SafeAreaView style={s.safe} edges={['top', 'bottom']}>
-      <View style={s.header}><TouchableOpacity onPress={() => router.back()} style={s.headerBtn}><Ionicons name="arrow-back" size={24} color="#FFF" /></TouchableOpacity><Text style={s.headerTitle}>New Quote</Text></View>
+      <View style={s.header}><TouchableOpacity onPress={() => router.back()} style={s.headerBtn}><Ionicons name="arrow-back" size={24} color="#FFF" /></TouchableOpacity><Text style={s.headerTitle}>{editQuoteId ? 'Edit Quote' : 'New Quote'}</Text></View>
       <View style={s.center}><ActivityIndicator size="large" color="#075E54" /></View>
     </SafeAreaView>
   );
@@ -300,7 +330,7 @@ export default function NewQuoteScreen() {
       <SafeAreaView style={s.safe} edges={['top']}>
         <View style={s.header}>
           <TouchableOpacity onPress={() => router.back()} style={s.headerBtn}><Ionicons name="arrow-back" size={24} color="#FFF" /></TouchableOpacity>
-          <Text style={s.headerTitle}>New Quote</Text>
+          <Text style={s.headerTitle}>{editQuoteId ? 'Edit Quote' : 'New Quote'}</Text>
         </View>
 
         <ScrollView style={s.scroll} contentContainerStyle={s.scrollContent} keyboardShouldPersistTaps="handled">
@@ -423,7 +453,7 @@ export default function NewQuoteScreen() {
       <SafeAreaView style={s.bottomSafe} edges={['bottom']}>
         <View style={s.bottomBar}>
           <TouchableOpacity style={s.pdfBtn} onPress={() => handleSubmit('pdf')} disabled={!!submitting || items.length === 0 || !!createdQuote}>
-            {submitting === 'pdf' ? <ActivityIndicator size="small" color="#333" /> : <><Ionicons name={createdQuote ? 'checkmark-circle' : 'document'} size={16} color="#333" /><Text style={s.pdfBtnText}>{createdQuote ? 'Created' : 'Create'}</Text></>}
+            {submitting === 'pdf' ? <ActivityIndicator size="small" color="#333" /> : <><Ionicons name={createdQuote ? 'checkmark-circle' : 'document'} size={16} color="#333" /><Text style={s.pdfBtnText}>{createdQuote ? (editQuoteId ? 'Saved' : 'Created') : (editQuoteId ? 'Save' : 'Create')}</Text></>}
           </TouchableOpacity>
           <TouchableOpacity style={s.shareBtn} onPress={() => handleSubmit('share')} disabled={!!submitting || items.length === 0}>
             {submitting === 'share' ? <ActivityIndicator size="small" color="#FFF" /> : <><Ionicons name="share-social" size={16} color="#FFF" /><Text style={s.shareBtnText}>Share Here</Text></>}

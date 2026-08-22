@@ -1196,6 +1196,50 @@ export default function CustomerChatScreen() {
     } catch { Alert.alert('Error', 'Failed to send reminder.'); }
   };
 
+  // Quotation long-press options 1-3 (Aug 2026). Only relevant when the
+  // long-pressed message is a quotation card (card_data.is_quote).
+  const handleEditQuotation = (quoteId: string) => {
+    setMessageMenuVisible(false);
+    setSelectedMessage(null);
+    router.push({ pathname: `/customer/${customer_id}/quote`, params: { edit_quote_id: quoteId } });
+  };
+
+  const handleConvertQuoteDirectly = async (quoteId: string) => {
+    setMessageMenuVisible(false);
+    setSelectedMessage(null);
+    try {
+      const token = await authService.getAccessToken();
+      if (!token) return;
+      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+      const res = await fetch(`${backendUrl}/api/quotes/${quoteId}/convert`, {
+        method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+      });
+      if (!res.ok) { Alert.alert('Error', 'Failed to convert quote to invoice'); return; }
+      loadChat();
+    } catch { Alert.alert('Error', 'Failed to convert quote to invoice'); }
+  };
+
+  const handleOpenQuoteInInvoiceForm = async (quoteId: string) => {
+    setMessageMenuVisible(false);
+    setSelectedMessage(null);
+    try {
+      const token = await authService.getAccessToken();
+      if (!token) return;
+      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+      const res = await fetch(`${backendUrl}/api/quotes/${quoteId}`, { headers: { 'Authorization': `Bearer ${token}` } });
+      if (!res.ok) { Alert.alert('Error', 'Failed to load quote'); return; }
+      const data = await res.json();
+      const invoiceItems = (data.items || []).map((qi: any) => ({
+        product_id: qi.product_id, product_name: qi.description,
+        quantity: qi.quantity, unit_price: qi.unit_price,
+      }));
+      router.push({
+        pathname: `/customer/${customer_id}/invoice`,
+        params: { items: JSON.stringify(invoiceItems), due_date: data.quote.expiry_date || '' },
+      });
+    } catch { Alert.alert('Error', 'Failed to load quote'); }
+  };
+
   const handleForwardToSpark = (message: ChatMessage) => {
     const msgType = message.metadata?.message_type || message.message_type || 'text';
     let payload: {
@@ -3503,6 +3547,33 @@ export default function CustomerChatScreen() {
                 <Ionicons name="sparkles" size={22} color="#075E54" style={{ marginRight: 16 }} />
                 <Text style={{ fontSize: 16, color: '#075E54', fontWeight: '600' }}>Forward to AI Spark</Text>
               </TouchableOpacity>
+
+              {/* Quotation-only options (Aug 2026) */}
+              {selectedMessage?.card_data?.is_quote && (
+                <>
+                  <TouchableOpacity
+                    style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#F0F0F0' }}
+                    onPress={() => selectedMessage && handleEditQuotation(selectedMessage.card_data.invoice_id)}
+                  >
+                    <Ionicons name="create-outline" size={22} color="#075E54" style={{ marginRight: 16 }} />
+                    <Text style={{ fontSize: 16, color: '#075E54', fontWeight: '600' }}>Edit Quotation</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#F0F0F0' }}
+                    onPress={() => selectedMessage && handleConvertQuoteDirectly(selectedMessage.card_data.invoice_id)}
+                  >
+                    <Ionicons name="swap-horizontal-outline" size={22} color="#075E54" style={{ marginRight: 16 }} />
+                    <Text style={{ fontSize: 16, color: '#075E54', fontWeight: '600' }}>Convert to Invoice</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#F0F0F0' }}
+                    onPress={() => selectedMessage && handleOpenQuoteInInvoiceForm(selectedMessage.card_data.invoice_id)}
+                  >
+                    <Ionicons name="document-text-outline" size={22} color="#075E54" style={{ marginRight: 16 }} />
+                    <Text style={{ fontSize: 16, color: '#075E54', fontWeight: '600' }}>Open in Invoice Form</Text>
+                  </TouchableOpacity>
+                </>
+              )}
               {/* Copy — GREYED, requires native build */}
               <TouchableOpacity
                 style={{
