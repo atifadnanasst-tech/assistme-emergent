@@ -2982,6 +2982,52 @@ app.post('/api/quotes', async (c) => {
 // names, foreign keys), not generic enough to reuse directly for
 // quotations/quotation_items. Reuses mirrorCardToReceiverOrg() directly,
 // which genuinely is generic/callable already.
+// ─── postInvoiceCardToChat (Aug 2026) ────────────────────────
+// Extracted from POST /api/quotes/:quote_id/share's own channel='app'
+// branch -- that logic was never a named function there either, just
+// inline. Extracting now because a third call site (Documents > Quote
+// tab long-press "Convert to Invoice") is about to need the exact same
+// "post an invoice_card message + mirror to receiver org" behavior --
+// two copies was tolerable, three is the point where sharing is clearly
+// worth it. Unlike the Spark convert_quote_to_invoice decision, this is
+// Claude's own recent code (not a hard-won, battle-tested path), so a
+// careful, verified extraction here is low-risk.
+async function postInvoiceCardToChat({ organisationId, userId, customerId, customerPhone, invoiceId, invoiceNumber, totalAmount, dueDate, statusLabel, itemsSummary, pdfUrl, isQuote }) {
+  const { data: conv } = await supabase.from('conversations').select('id')
+    .eq('organisation_id', organisationId).eq('entity_type', 'customer')
+    .eq('entity_id', customerId).eq('status', 'active').maybeSingle();
+
+  if (!conv) return { shared: false, message_id: null, error: 'no_conversation' };
+
+  const label = isQuote ? 'Quote' : 'Invoice';
+  const { data: msg, error: msgErr } = await supabase.from('messages').insert({
+    organisation_id: organisationId, conversation_id: conv.id,
+    role: 'tool', content: `${label} ${invoiceNumber} created`,
+    metadata: {
+      sender_type: 'system', visibility: 'both', message_type: 'invoice_card',
+      read_by_owner: true, preview_text: `${label} ${invoiceNumber} - ₹${totalAmount}`,
+      card_type: 'invoice_card',
+      card_data: {
+        invoice_id: invoiceId, invoice_number: invoiceNumber,
+        total_amount: totalAmount, due_date: dueDate,
+        status: statusLabel, items_summary: itemsSummary,
+        pdf_url: pdfUrl || null, is_quote: !!isQuote,
+      },
+    },
+    tokens_input: 0, tokens_output: 0,
+  }).select('id, metadata, content').single();
+
+  if (msgErr) return { shared: false, message_id: null, error: msgErr.message };
+
+  await mirrorCardToReceiverOrg({
+    supabase, senderOrgId: organisationId, senderUserId: userId,
+    customerPhone, originalMetadata: msg?.metadata || {},
+    originalContent: msg?.content || '',
+  });
+
+  return { shared: true, message_id: msg.id, pdf_url: pdfUrl || null };
+}
+
 app.post('/api/quotes/:quote_id/share', async (c) => {
   try {
     const auth = await authenticateChat(c);
@@ -3003,38 +3049,18 @@ app.post('/api/quotes/:quote_id/share', async (c) => {
       .eq('entity_type', 'quotation').eq('entity_id', quoteId).order('created_at', { ascending: false }).limit(1).maybeSingle();
 
     if (channel === 'app') {
-      const { data: conv } = await supabase.from('conversations').select('id')
-        .eq('organisation_id', organisationId).eq('entity_type', 'customer')
-        .eq('entity_id', quote.customer_id).eq('status', 'active').maybeSingle();
-
-      if (!conv) return c.json({ shared: false, message_id: null, error: 'no_conversation' });
-
-      const { data: msg, error: msgErr } = await supabase.from('messages').insert({
-        organisation_id: organisationId, conversation_id: conv.id,
-        role: 'tool', content: `Quote ${quote.quote_number} created`,
-        metadata: {
-          sender_type: 'system', visibility: 'both', message_type: 'invoice_card',
-          read_by_owner: true, preview_text: `Quote ${quote.quote_number} - ₹${quote.total_amount}`,
-          card_type: 'invoice_card',
-          card_data: {
-            invoice_id: quoteId, invoice_number: quote.quote_number,
-            total_amount: quote.total_amount, due_date: quote.expiry_date,
-            status: quote.status, items_summary: itemsSummary,
-            pdf_url: attachment?.public_url || null, is_quote: true,
-          },
-        },
-        tokens_input: 0, tokens_output: 0,
-      }).select('id, metadata, content').single();
-
-      if (msgErr) return c.json({ shared: false, error: msgErr.message }, 500);
-
-      await mirrorCardToReceiverOrg({
-        supabase, senderOrgId: organisationId, senderUserId: userId,
-        customerPhone: customer?.phone, originalMetadata: msg?.metadata || {},
-        originalContent: msg?.content || '',
+      // Now calls the shared postInvoiceCardToChat() -- verified same
+      // exact field mapping as the original inline version before this
+      // rewire (same content string, same preview_text, same card_data
+      // shape, is_quote:true).
+      const result = await postInvoiceCardToChat({
+        organisationId, userId, customerId: quote.customer_id, customerPhone: customer?.phone,
+        invoiceId: quoteId, invoiceNumber: quote.quote_number, totalAmount: quote.total_amount,
+        dueDate: quote.expiry_date, statusLabel: quote.status, itemsSummary,
+        pdfUrl: attachment?.public_url || null, isQuote: true,
       });
-
-      return c.json({ shared: true, message_id: msg.id, pdf_url: attachment?.public_url || null });
+      if (!result.shared) return c.json(result, result.error === 'no_conversation' ? 200 : 500);
+      return c.json(result);
     }
 
     if (channel === 'whatsapp') {
@@ -3047,6 +3073,41 @@ app.post('/api/quotes/:quote_id/share', async (c) => {
     return c.json({ pdf_url: attachment?.public_url || null });
   } catch (err) {
     console.error('[POST /api/quotes/:quote_id/share] Error:', err.message);
+    return c.json({ error: 'internal_error' }, 500);
+  }
+});
+
+// ─── POST /api/quotes/:quote_id/convert (Aug 2026) ───────────
+// Quotation long-press option 3 -- "Convert to Invoice" (direct, no AI
+// involved). Calls convertQuoteToInvoiceRecord() then posts the
+// resulting invoice card via the shared postInvoiceCardToChat().
+app.post('/api/quotes/:quote_id/convert', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId, userId } = auth;
+    const quoteId = c.req.param('quote_id');
+
+    const { data: quote } = await supabase.from('quotations').select('*').eq('id', quoteId).eq('organisation_id', organisationId).single();
+    if (!quote) return c.json({ error: 'quote_not_found' }, 404);
+
+    const { data: customer } = await supabase.from('customers').select('id, name, phone').eq('id', quote.customer_id).single();
+
+    const result = await convertQuoteToInvoiceRecord({
+      organisationId, customerId: quote.customer_id, userId, quoteId,
+    });
+    if (result.error) return c.json({ error: 'server_error', detail: result.error }, 500);
+
+    const cardResult = await postInvoiceCardToChat({
+      organisationId, userId, customerId: quote.customer_id, customerPhone: customer?.phone,
+      invoiceId: result.invoice_id, invoiceNumber: result.invoice_number, totalAmount: result.total_amount,
+      dueDate: new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0], statusLabel: 'sent',
+      itemsSummary: `Converted from ${result.quote_number}`, pdfUrl: result.pdf_url, isQuote: false,
+    });
+
+    return c.json({ ...result, ...cardResult });
+  } catch (err) {
+    console.error('[POST /api/quotes/:quote_id/convert] Error:', err.message);
     return c.json({ error: 'internal_error' }, 500);
   }
 });
