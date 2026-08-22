@@ -8093,9 +8093,17 @@ app.get('/api/documents', async (c) => {
     }));
 
     // Quotes -- own path, no create-from-here action per Atif's spec.
+    // UPDATED Aug 2026 (Atif's explicit call): excludes converted quotes
+    // from this list -- once a quote becomes an invoice, the invoice is
+    // the real source of truth (in the ledger, financial statements,
+    // etc.), and letting converted quotes pile up here indefinitely with
+    // no way to prune them would make this list grow forever. A
+    // converted quote is still reachable via the chat card for the rare
+    // edge case someone needs to look it up.
     let quoteQuery = supabase.from('quotations')
       .select('id, quote_number, customer_id, total_amount, issue_date, customers(name)')
       .eq('organisation_id', organisationId)
+      .neq('status', 'converted')
       .order('issue_date', { ascending: false })
       .limit(200);
     const { data: quoteRows } = await applyScope(quoteQuery);
