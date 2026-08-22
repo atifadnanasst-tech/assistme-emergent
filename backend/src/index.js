@@ -3654,6 +3654,16 @@ async function convertQuoteToInvoiceRecord({ organisationId, customerId, userId,
 
   if (!quote) return { error: 'quote_not_found' };
 
+  // Real bug fixed Aug 2026 (Atif's live testing, confirmed across three
+  // separate customers): this function -- and the Spark handler it was
+  // copied from -- never updated customers.outstanding_balance at all,
+  // unlike the regular create_invoice paths which always do. A converted
+  // quote's invoice was genuinely never counted toward what the customer
+  // owes. Fetching current balance fresh here since this is a standalone
+  // function, not inside Spark's own outer scope where customer is
+  // already available.
+  const { data: customerForBalance } = await supabase.from('customers').select('outstanding_balance').eq('id', customerId).single();
+
   let invoiceNumber = await generateInvoiceNumber(organisationId, 'Tax Invoice');
 
   let newInv = null, convErr = null;
@@ -3708,6 +3718,10 @@ async function convertQuoteToInvoiceRecord({ organisationId, customerId, userId,
   }
 
   await supabase.from('quotations').update({ status: 'converted' }).eq('id', quoteId);
+
+  await supabase.from('customers')
+    .update({ outstanding_balance: (customerForBalance?.outstanding_balance || 0) + quote.total_amount })
+    .eq('id', customerId).eq('organisation_id', organisationId);
 
   let convertedPdfUrl = null;
   try {
@@ -6159,6 +6173,18 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
                 originalContent: cardMsg?.content || '',
               });
             }
+
+            // Real bug fixed Aug 2026 (Atif's live testing, confirmed
+            // across three separate customers): this handler never
+            // updated customers.outstanding_balance at all, unlike
+            // create_invoice just above which always does. A converted
+            // quote's invoice was genuinely never counted toward what
+            // the customer owes. customer is already available in this
+            // outer scope.
+            await supabase.from('customers')
+              .update({ outstanding_balance: (customer?.outstanding_balance || 0) + quote.total_amount })
+              .eq('id', customerId).eq('organisation_id', organisationId);
+
             executed.push(actionId);
             break;
           }
