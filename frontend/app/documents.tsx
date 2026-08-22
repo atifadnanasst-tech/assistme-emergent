@@ -149,6 +149,12 @@ export default function DocumentsScreen() {
   const [selectedCustomerIds, setSelectedCustomerIds] = useState<Set<string>>(new Set());
   const [customerFilterVisible, setCustomerFilterVisible] = useState(false);
 
+  // Quote long-press options (Aug 2026), same three as the chat card's
+  // own menu -- Edit Quotation, Convert to Invoice, Open in Invoice Form.
+  const [quoteMenuVisible, setQuoteMenuVisible] = useState(false);
+  const [selectedQuote, setSelectedQuote] = useState<QuoteDoc | null>(null);
+  const [convertingQuote, setConvertingQuote] = useState(false);
+
   // Sort toggle (Aug 2026, honest fix -- this was planned as part of the
   // filter follow-up but never actually built when the filter itself
   // shipped). Newest-first by default, matching the backend's own order;
@@ -252,6 +258,59 @@ export default function DocumentsScreen() {
     Linking.openURL(url).catch(() => Alert.alert('Error', 'Could not open PDF'));
   };
 
+  // Quote long-press options (Aug 2026), same three actions and same
+  // backend endpoints as the chat card's own menu -- only the
+  // navigation source differs (Documents list vs a chat card).
+  const handleEditQuotation = (quote: QuoteDoc) => {
+    setQuoteMenuVisible(false);
+    setSelectedQuote(null);
+    router.push({ pathname: `/customer/${quote.customer_id}/quote`, params: { edit_quote_id: quote.id } });
+  };
+
+  const handleConvertQuoteDirectly = async (quote: QuoteDoc) => {
+    setConvertingQuote(true);
+    try {
+      const token = await getToken();
+      if (!token) return;
+      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+      const res = await fetch(`${backendUrl}/api/quotes/${quote.id}/convert`, {
+        method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+      });
+      setQuoteMenuVisible(false);
+      setSelectedQuote(null);
+      if (!res.ok) { Alert.alert('Error', 'Failed to convert quote to invoice'); return; }
+      await loadDocuments();
+      Alert.alert('Converted', `Quote ${quote.quote_number} converted to invoice.`);
+    } catch {
+      Alert.alert('Error', 'Failed to convert quote to invoice');
+    } finally {
+      setConvertingQuote(false);
+    }
+  };
+
+  const handleOpenQuoteInInvoiceForm = async (quote: QuoteDoc) => {
+    try {
+      const token = await getToken();
+      if (!token) return;
+      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+      const res = await fetch(`${backendUrl}/api/quotes/${quote.id}`, { headers: { 'Authorization': `Bearer ${token}` } });
+      setQuoteMenuVisible(false);
+      setSelectedQuote(null);
+      if (!res.ok) { Alert.alert('Error', 'Failed to load quote'); return; }
+      const data = await res.json();
+      const invoiceItems = (data.items || []).map((qi: any) => ({
+        product_id: qi.product_id, product_name: qi.description,
+        quantity: qi.quantity, unit_price: qi.unit_price,
+      }));
+      router.push({
+        pathname: `/customer/${quote.customer_id}/invoice`,
+        params: { items: JSON.stringify(invoiceItems), due_date: data.quote.expiry_date || '' },
+      });
+    } catch {
+      Alert.alert('Error', 'Failed to load quote');
+    }
+  };
+
   const handleCreateChallan = async (invoiceId: string) => {
     setCreatingChallan(true);
     try {
@@ -341,7 +400,12 @@ export default function DocumentsScreen() {
   );
 
   const renderQuoteRow = ({ item }: { item: QuoteDoc }) => (
-    <TouchableOpacity style={s.row} onPress={() => openPdf(item.pdf_url)}>
+    <TouchableOpacity
+      style={s.row}
+      onPress={() => openPdf(item.pdf_url)}
+      onLongPress={() => { setSelectedQuote(item); setQuoteMenuVisible(true); }}
+      delayLongPress={300}
+    >
       <View style={{ flex: 1 }}>
         <Text style={s.rowTitle}>{item.quote_number}</Text>
         {!isCustomerScoped && <Text style={s.rowSubtitle}>{item.customer_name}</Text>}
@@ -478,6 +542,32 @@ export default function DocumentsScreen() {
           </View>
         </BottomSheet>
       )}
+
+      <BottomSheet visible={quoteMenuVisible} onDismiss={() => { setQuoteMenuVisible(false); setSelectedQuote(null); }} scrollable={false}>
+        <Text style={{ fontSize: 18, fontWeight: '700', color: '#1A1A1A', marginBottom: 12 }}>{selectedQuote?.quote_number}</Text>
+        <TouchableOpacity
+          style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#F0F0F0' }}
+          onPress={() => selectedQuote && handleEditQuotation(selectedQuote)}
+        >
+          <Ionicons name="create-outline" size={22} color="#075E54" style={{ marginRight: 16 }} />
+          <Text style={{ fontSize: 16, color: '#075E54', fontWeight: '600' }}>Edit Quotation</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#F0F0F0' }}
+          onPress={() => selectedQuote && handleConvertQuoteDirectly(selectedQuote)}
+          disabled={convertingQuote}
+        >
+          {convertingQuote ? <ActivityIndicator size="small" color="#075E54" style={{ marginRight: 16 }} /> : <Ionicons name="swap-horizontal-outline" size={22} color="#075E54" style={{ marginRight: 16 }} />}
+          <Text style={{ fontSize: 16, color: '#075E54', fontWeight: '600' }}>Convert to Invoice</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14 }}
+          onPress={() => selectedQuote && handleOpenQuoteInInvoiceForm(selectedQuote)}
+        >
+          <Ionicons name="document-text-outline" size={22} color="#075E54" style={{ marginRight: 16 }} />
+          <Text style={{ fontSize: 16, color: '#075E54', fontWeight: '600' }}>Open in Invoice Form</Text>
+        </TouchableOpacity>
+      </BottomSheet>
 
       <View style={s.tabBarContainer}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.tabBar}>
