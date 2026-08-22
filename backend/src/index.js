@@ -2953,7 +2953,7 @@ app.post('/api/quotes', async (c) => {
     const { organisationId } = auth;
 
     const body = await c.req.json();
-    const { customer_id, items, due_date, invoice_type, po_number } = body;
+    const { customer_id, items, due_date, invoice_type, po_number, existing_quote_id } = body;
 
     if (!customer_id || !Array.isArray(items) || items.length === 0) {
       return c.json({ error: 'missing_fields' }, 400);
@@ -2964,7 +2964,7 @@ app.post('/api/quotes', async (c) => {
 
     const result = await createQuoteRecord({
       organisationId, customerId: customer_id, items, dueDate: due_date,
-      invoiceType: invoice_type, poNumber: po_number,
+      invoiceType: invoice_type, poNumber: po_number, existingQuoteId: existing_quote_id || undefined,
     });
 
     if (result.error) return c.json({ error: 'server_error', detail: result.error }, 500);
@@ -2972,6 +2972,30 @@ app.post('/api/quotes', async (c) => {
     return c.json(result);
   } catch (err) {
     console.error('[POST /api/quotes] Error:', err.message);
+    return c.json({ error: 'internal_error' }, 500);
+  }
+});
+
+// ─── GET /api/quotes/:quote_id (Aug 2026) ────────────────────
+// Quotation long-press option 1 -- "Edit Quotation". Fetches the
+// existing quote + items so quote.tsx can pre-fill and later save back
+// over the same row via existing_quote_id.
+app.get('/api/quotes/:quote_id', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+    const quoteId = c.req.param('quote_id');
+
+    const { data: quote } = await supabase.from('quotations').select('*').eq('id', quoteId).eq('organisation_id', organisationId).single();
+    if (!quote) return c.json({ error: 'quote_not_found' }, 404);
+
+    const { data: items } = await supabase.from('quotation_items')
+      .select('*').eq('quotation_id', quoteId).is('deleted_at', null).order('sort_order', { ascending: true });
+
+    return c.json({ quote, items: items || [] });
+  } catch (err) {
+    console.error('[GET /api/quotes/:quote_id] Error:', err.message);
     return c.json({ error: 'internal_error' }, 500);
   }
 });
@@ -4228,11 +4252,25 @@ async function generateDocumentPDF({ documentId, organisationId, documentType, d
 // constraint on quote_number, unlike invoices which got one specifically
 // to fix a real confirmed race condition; matching what's proven, not
 // "improving" it unilaterally as part of this task).
-async function createQuoteRecord({ organisationId, customerId, items, dueDate, invoiceType, poNumber, freight, freightTaxable, freightTaxRate, applyGst, overallDiscount }) {
-  const { count: qtCount } = await supabase
-    .from('quotations').select('*', { count: 'exact', head: true })
-    .eq('organisation_id', organisationId);
-  const quoteNumber = `Q-${((qtCount || 0) + 1).toString().padStart(3, '0')}`;
+// UPDATED Aug 2026 (Edit Quotation, quotation long-press option 1):
+// accepts an optional existingQuoteId. When present, this SAVES OVER the
+// same quote row (update quotations, delete+re-insert quotation_items,
+// re-generate the PDF) instead of creating a new one, per Atif's own
+// explicit spec -- "any changes are then saved over and above the same
+// quotation", a full replace, not a diff/merge or a new version. Keeps
+// the original quote_number unchanged either way.
+async function createQuoteRecord({ organisationId, customerId, items, dueDate, invoiceType, poNumber, freight, freightTaxable, freightTaxRate, applyGst, overallDiscount, existingQuoteId }) {
+  let quoteNumber;
+  if (existingQuoteId) {
+    const { data: existing } = await supabase.from('quotations').select('quote_number').eq('id', existingQuoteId).single();
+    if (!existing) return { error: 'quote_not_found' };
+    quoteNumber = existing.quote_number;
+  } else {
+    const { count: qtCount } = await supabase
+      .from('quotations').select('*', { count: 'exact', head: true })
+      .eq('organisation_id', organisationId);
+    quoteNumber = `Q-${((qtCount || 0) + 1).toString().padStart(3, '0')}`;
+  }
 
   const itemsForCalc = (items || []).map(i => ({
     product_id: i.product_id || null,
@@ -4255,37 +4293,45 @@ async function createQuoteRecord({ organisationId, customerId, items, dueDate, i
     }
   );
 
-  // Bug fixed Aug 2026 (Atif's testing): cgst/sgst/igst are already
-  // correctly computed by calculateInvoiceTotals() above, but were never
-  // being stored -- generateDocumentPDF() reads them from custom_fields
-  // when rendering, so the actual generated PDF was silently missing the
-  // tax split entirely, not just an on-screen preview gap.
-  const { data: newQuote, error: qtErr } = await supabase
-    .from('quotations').insert({
-      organisation_id: organisationId,
-      customer_id: customerId,
-      quote_number: quoteNumber,
-      status: 'sent',
-      issue_date: getISTDateString(),
-      expiry_date: dueDate || getISTDateString(30),
-      currency: 'INR',
-      subtotal: totals.subtotal,
-      discount_amount: totals.total_discount,
-      tax_amount: totals.total_tax,
-      total_amount: totals.grand_total,
-      custom_fields: { cgst_amount: totals.cgst, sgst_amount: totals.sgst, igst_amount: totals.igst },
-    }).select('id').single();
+  const quoteFields = {
+    organisation_id: organisationId,
+    customer_id: customerId,
+    quote_number: quoteNumber,
+    status: 'sent',
+    issue_date: getISTDateString(),
+    expiry_date: dueDate || getISTDateString(30),
+    currency: 'INR',
+    subtotal: totals.subtotal,
+    discount_amount: totals.total_discount,
+    tax_amount: totals.total_tax,
+    total_amount: totals.grand_total,
+    custom_fields: { cgst_amount: totals.cgst, sgst_amount: totals.sgst, igst_amount: totals.igst },
+  };
 
-  if (qtErr) {
-    console.error('[Quote] Create failed:', qtErr);
-    return { error: qtErr.message };
+  let quoteId;
+  if (existingQuoteId) {
+    const { error: updErr } = await supabase.from('quotations').update(quoteFields).eq('id', existingQuoteId);
+    if (updErr) {
+      console.error('[Quote] Update failed:', updErr);
+      return { error: updErr.message };
+    }
+    quoteId = existingQuoteId;
+    // Full replace, not a diff -- matches Atif's own "saved over" spec.
+    await supabase.from('quotation_items').delete().eq('quotation_id', quoteId);
+  } else {
+    const { data: newQuote, error: qtErr } = await supabase.from('quotations').insert(quoteFields).select('id').single();
+    if (qtErr) {
+      console.error('[Quote] Create failed:', qtErr);
+      return { error: qtErr.message };
+    }
+    quoteId = newQuote.id;
   }
 
   for (let idx = 0; idx < totals.line_items.length; idx++) {
     const li = totals.line_items[idx];
     await supabase.from('quotation_items').insert({
       organisation_id: organisationId,
-      quotation_id: newQuote.id,
+      quotation_id: quoteId,
       product_id: li.product_id || null,
       description: li.product_name || 'Item',
       quantity: li.quantity,
@@ -4300,7 +4346,7 @@ async function createQuoteRecord({ organisationId, customerId, items, dueDate, i
   let pdfUrl = null;
   try {
     pdfUrl = await generateDocumentPDF({
-      documentId: newQuote.id, organisationId, documentType: 'quotation',
+      documentId: quoteId, organisationId, documentType: 'quotation',
       documentNumber: quoteNumber, title: 'QUOTATION',
       storageBucket: 'quotes', entityType: 'quotation',
     });
@@ -4308,7 +4354,7 @@ async function createQuoteRecord({ organisationId, customerId, items, dueDate, i
     console.warn('[Quote] PDF generation failed:', pdfErr.message);
   }
 
-  return { quote_id: newQuote.id, quote_number: quoteNumber, total_amount: totals.grand_total, pdf_url: pdfUrl };
+  return { quote_id: quoteId, quote_number: quoteNumber, total_amount: totals.grand_total, pdf_url: pdfUrl };
 }
 
 // ─── generateReceiptPDF (Aug 2026, Payment recording subtask 5) ──
