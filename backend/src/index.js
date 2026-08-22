@@ -8100,11 +8100,16 @@ app.get('/api/documents', async (c) => {
     // no way to prune them would make this list grow forever. A
     // converted quote is still reachable via the chat card for the rare
     // edge case someone needs to look it up.
+    // Sorts by created_at (Atif's feedback) -- issue_date is a date-only
+    // column, so every quote created on the same calendar day shares an
+    // identical value, making their relative order among themselves
+    // undefined/arbitrary. created_at is a real timestamp, giving a
+    // stable, accurate "most recently created first" order.
     let quoteQuery = supabase.from('quotations')
-      .select('id, quote_number, customer_id, total_amount, issue_date, customers(name)')
+      .select('id, quote_number, customer_id, total_amount, issue_date, created_at, customers(name)')
       .eq('organisation_id', organisationId)
       .neq('status', 'converted')
-      .order('issue_date', { ascending: false })
+      .order('created_at', { ascending: false })
       .limit(200);
     const { data: quoteRows } = await applyScope(quoteQuery);
     const quoteIds = (quoteRows || []).map(q => q.id);
