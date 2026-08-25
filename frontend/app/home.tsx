@@ -927,7 +927,7 @@ export default function HomeScreen() {
         <Ionicons name={fabExpanded ? 'close' : 'add'} size={28} color="#FFFFFF" />
       </TouchableOpacity>
 
-      <Text style={{ textAlign: "center", fontSize: 10, color: "#CCC", paddingVertical: 2 }}>v1.3.489</Text>
+      <Text style={{ textAlign: "center", fontSize: 10, color: "#CCC", paddingVertical: 2 }}>v1.3.490</Text>
       {/* Bottom Navigation SafeAreaView */}
       <SafeAreaView style={styles.bottomNavSafeArea} edges={['bottom']}>
         <View style={styles.bottomNav}>
@@ -1028,11 +1028,18 @@ export default function HomeScreen() {
 
             <View style={styles.menuDivider} />
             <Text style={styles.menuSection}>ACCESS & GROWTH</Text>
-            <View style={[styles.menuItem, styles.comingSoonRow]}>
-              <Ionicons name="phone-portrait-outline" size={20} color="#B0B0B0" />
-              <Text style={styles.comingSoonItemText}>Linked Devices</Text>
-              <View style={styles.comingSoonBadge}><Text style={styles.comingSoonBadgeText}>Coming soon</Text></View>
-            </View>
+            {/* Linked Devices (Aug 2026): activated, replacing the
+                previous "Coming soon" stub. */}
+            <TouchableOpacity
+              style={styles.menuItem}
+              onPress={() => {
+                setShowThreeDotMenu(false);
+                router.push('/settings/devices');
+              }}
+            >
+              <Ionicons name="phone-portrait-outline" size={20} color="#667781" />
+              <Text style={styles.menuItemText}>Linked Devices</Text>
+            </TouchableOpacity>
             <View style={[styles.menuItem, styles.comingSoonRow]}>
               <Ionicons name="gift-outline" size={20} color="#B0B0B0" />
               <Text style={styles.comingSoonItemText}>Refer & Earn</Text>
@@ -1483,7 +1490,11 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0, 0, 0, 0.4)',
     justifyContent: 'flex-start',
     alignItems: 'flex-end',
-    paddingTop: 60,
+    // Increased from 60 (Aug 2026, Atif's feedback + screenshot) -- the
+    // menu was rendering on top of the green header instead of below
+    // it. This is an estimate based on typical header+status-bar height;
+    // may need further tuning after visual confirmation on device.
+    paddingTop: 110,
     paddingRight: 16,
   },
   menuCard: {
