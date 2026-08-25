@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { authService } from '../lib/auth';
 import { supabase } from '../lib/supabase';
+import { registerDevice } from '../lib/deviceId';
 
 interface AuthContextType {
   isAuthenticated: boolean;
@@ -41,6 +42,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (isValid) {
           setIsAuthenticated(true);
           console.log('✅ [AUTH_CONTEXT] Session valid - user authenticated');
+          // Linked Devices Phase 1 (Aug 2026) -- fire-and-forget, pure
+          // tracking only, no enforcement yet. registerDevice() itself
+          // fails open on any error; this call is not awaited so it
+          // can never delay or block the auth flow.
+          registerDevice();
         } else {
           // Try to refresh
           console.log('🔄 [AUTH_CONTEXT] Session invalid, attempting refresh...');
@@ -48,6 +54,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           if (refreshed) {
             setIsAuthenticated(true);
             console.log('✅ [AUTH_CONTEXT] Session refreshed - user authenticated');
+            registerDevice();
           } else {
             // Clear invalid session
             await authService.clearSession();
