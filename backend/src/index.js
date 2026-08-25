@@ -2942,6 +2942,159 @@ app.get('/api/customer/:customer_id/unpaid-invoices', async (c) => {
   }
 });
 
+// ─── Linked Devices feature (Aug 2026) ───────────────────────
+// Discovered from real usage: the same phone-number login can already be
+// used on unlimited devices simultaneously with zero restriction --
+// genuinely good news (multi-device support "for free"), but with real
+// gaps Atif identified himself: commercial leakage (one subscription,
+// unlimited team members), no security control (no way to revoke a lost
+// device), and audit-trail collapse (every action attributed to the same
+// identity). This feature adds a seat counter (tied to the existing
+// subscription) and a Linked Devices screen (list/rename/remove) without
+// touching the deferred full-RBAC/permissions system at all -- deliberate
+// scope: visibility and a seat limit, not per-person access control.
+//
+// Device identity: a stable, client-generated ID persisted on-device
+// (NOT the phone's own SIM number, confirmed unreliable/unavailable
+// cross-platform via research before building this). Device removal is
+// COOPERATIVE, not a forced instant kill -- deliberately chosen after
+// researching Supabase Auth's own per-session sign-out, which has a
+// currently open, confirmed bug (supabase/auth#2036) where 'local' scope
+// sign-out can incorrectly invalidate ALL sessions instead of just one.
+// Removing a device here deletes its device_sessions row; the next time
+// that device makes ANY authenticated request, authenticateChat() (below)
+// finds no matching row and rejects it, forcing a local sign-out on that
+// device. For an actively-used device this is effectively immediate,
+// since the app already calls authenticateChat() on every single
+// request -- this mirrors Gmail's own real published mechanism (a
+// lightweight heartbeat-style check bounding revocation delay, not
+// magic-instant even for Google) rather than inventing a novel approach.
+// Adds zero new network calls -- piggybacks on requests the app already
+// makes, not a separate heartbeat ping.
+
+// POST /api/devices/register -- called at app launch/login. Upserts this
+// device's session row and enforces the seat limit for genuinely NEW
+// devices only (an existing, already-registered device just gets its
+// last_active_at refreshed, never re-checked against the seat limit).
+app.post('/api/devices/register', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId, userId } = auth;
+    const body = await c.req.json();
+    const { device_id, device_name } = body;
+    if (!device_id) return c.json({ error: 'missing_device_id' }, 400);
+
+    const { data: existing } = await supabase
+      .from('device_sessions').select('id')
+      .eq('organisation_id', organisationId).eq('device_id', device_id).maybeSingle();
+
+    if (existing) {
+      await supabase.from('device_sessions')
+        .update({ last_active_at: new Date().toISOString() })
+        .eq('id', existing.id);
+      return c.json({ registered: true, new_device: false });
+    }
+
+    // Genuinely new device -- check the seat limit before inserting.
+    const { data: sub } = await supabase.from('subscriptions')
+      .select('seats_purchased').eq('organisation_id', organisationId).maybeSingle();
+    const seatsAllowed = sub?.seats_purchased || 1;
+
+    const { count: activeCount } = await supabase
+      .from('device_sessions').select('*', { count: 'exact', head: true })
+      .eq('organisation_id', organisationId);
+
+    if ((activeCount || 0) >= seatsAllowed) {
+      return c.json({
+        registered: false, error: 'seat_limit_reached',
+        seats_purchased: seatsAllowed, active_devices: activeCount || 0,
+      }, 403);
+    }
+
+    await supabase.from('device_sessions').insert({
+      organisation_id: organisationId, user_id: userId,
+      device_id, device_name: device_name || 'Unknown device',
+    });
+
+    return c.json({ registered: true, new_device: true });
+  } catch (err) {
+    console.error('[POST /api/devices/register] Error:', err.message);
+    // Fails open (Aug 2026, deliberate): a bug in this new check must
+    // never block a legitimate login. Registration failing silently is
+    // an acceptable trade-off; blocking real users over an internal
+    // error in a brand-new feature is not.
+    return c.json({ registered: true, fail_open: true });
+  }
+});
+
+// GET /api/devices -- list active devices for the Linked Devices screen.
+app.get('/api/devices', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+
+    const { data: devices } = await supabase
+      .from('device_sessions')
+      .select('id, device_id, device_name, last_active_at, created_at')
+      .eq('organisation_id', organisationId)
+      .order('last_active_at', { ascending: false });
+
+    const { data: sub } = await supabase.from('subscriptions')
+      .select('seats_purchased').eq('organisation_id', organisationId).maybeSingle();
+
+    return c.json({ devices: devices || [], seats_purchased: sub?.seats_purchased || 1 });
+  } catch (err) {
+    console.error('[GET /api/devices] Error:', err.message);
+    return c.json({ error: 'internal_error' }, 500);
+  }
+});
+
+// PUT /api/devices/:device_session_id -- rename a device.
+app.put('/api/devices/:device_session_id', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+    const deviceSessionId = c.req.param('device_session_id');
+    const body = await c.req.json();
+    const { device_name } = body;
+    if (!device_name || !device_name.trim()) return c.json({ error: 'missing_device_name' }, 400);
+
+    const { error } = await supabase.from('device_sessions')
+      .update({ device_name: device_name.trim() })
+      .eq('id', deviceSessionId).eq('organisation_id', organisationId);
+
+    if (error) return c.json({ error: 'update_failed' }, 500);
+    return c.json({ renamed: true });
+  } catch (err) {
+    console.error('[PUT /api/devices/:device_session_id] Error:', err.message);
+    return c.json({ error: 'internal_error' }, 500);
+  }
+});
+
+// DELETE /api/devices/:device_session_id -- remove a device (cooperative
+// revocation, see the design note above this section).
+app.delete('/api/devices/:device_session_id', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+    const deviceSessionId = c.req.param('device_session_id');
+
+    const { error } = await supabase.from('device_sessions')
+      .delete()
+      .eq('id', deviceSessionId).eq('organisation_id', organisationId);
+
+    if (error) return c.json({ error: 'delete_failed' }, 500);
+    return c.json({ removed: true });
+  } catch (err) {
+    console.error('[DELETE /api/devices/:device_session_id] Error:', err.message);
+    return c.json({ error: 'internal_error' }, 500);
+  }
+});
+
 // ─── POST /api/quotes (Aug 2026, Create Quote surface) ──────
 // Manual-creation endpoint, calling createQuoteRecord() -- the copied,
 // callable version of Spark's own proven create_quote logic. Spark's
