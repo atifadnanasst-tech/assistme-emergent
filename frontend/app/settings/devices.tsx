@@ -29,6 +29,7 @@ interface DeviceSession {
   device_name: string;
   last_active_at: string;
   created_at: string;
+  is_primary?: boolean;
 }
 
 function relativeTime(iso: string): string {
@@ -159,19 +160,29 @@ export default function LinkedDevices() {
             devices.map(device => (
               <View key={device.id} style={s.deviceRow}>
                 <View style={{ flex: 1 }}>
-                  <Text style={s.deviceName}>{device.device_name}</Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    <Text style={s.deviceName}>{device.device_name}</Text>
+                    {device.is_primary && (
+                      <View style={s.primaryBadge}><Text style={s.primaryBadgeText}>PRIMARY</Text></View>
+                    )}
+                  </View>
                   <Text style={s.deviceMeta}>{relativeTime(device.last_active_at)}</Text>
                 </View>
                 <TouchableOpacity onPress={() => openRename(device)} style={s.iconBtn}>
                   <Ionicons name="create-outline" size={20} color="#075E54" />
                 </TouchableOpacity>
-                <TouchableOpacity onPress={() => confirmRemove(device)} style={s.iconBtn} disabled={removingId === device.id}>
-                  {removingId === device.id ? (
-                    <ActivityIndicator size="small" color="#D32F2F" />
-                  ) : (
-                    <Ionicons name="trash-outline" size={20} color="#D32F2F" />
-                  )}
-                </TouchableOpacity>
+                {/* Primary device can never be removed (Aug 2026) --
+                    prevents a device given to a manager from removing
+                    the actual owner's own device and locking them out. */}
+                {!device.is_primary && (
+                  <TouchableOpacity onPress={() => confirmRemove(device)} style={s.iconBtn} disabled={removingId === device.id}>
+                    {removingId === device.id ? (
+                      <ActivityIndicator size="small" color="#D32F2F" />
+                    ) : (
+                      <Ionicons name="trash-outline" size={20} color="#D32F2F" />
+                    )}
+                  </TouchableOpacity>
+                )}
               </View>
             ))
           )}
@@ -225,6 +236,8 @@ const s = StyleSheet.create({
   sectionLabel: { fontSize: 11, fontWeight: '600', color: '#999', letterSpacing: 0.5, marginBottom: 8 },
   emptyText: { textAlign: 'center', color: '#999', marginTop: 20, fontSize: 14 },
   deviceRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF', borderRadius: 10, padding: 14, marginBottom: 8 },
+  primaryBadge: { backgroundColor: '#E8F5E9', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
+  primaryBadgeText: { fontSize: 9, fontWeight: '700', color: '#075E54', letterSpacing: 0.3 },
   deviceName: { fontSize: 15, fontWeight: '600', color: '#1A1A1A' },
   deviceMeta: { fontSize: 12, color: '#999', marginTop: 2 },
   iconBtn: { padding: 8, marginLeft: 4 },

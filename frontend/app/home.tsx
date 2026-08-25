@@ -927,7 +927,7 @@ export default function HomeScreen() {
         <Ionicons name={fabExpanded ? 'close' : 'add'} size={28} color="#FFFFFF" />
       </TouchableOpacity>
 
-      <Text style={{ textAlign: "center", fontSize: 10, color: "#CCC", paddingVertical: 2 }}>v1.3.490</Text>
+      <Text style={{ textAlign: "center", fontSize: 10, color: "#CCC", paddingVertical: 2 }}>v1.3.491</Text>
       {/* Bottom Navigation SafeAreaView */}
       <SafeAreaView style={styles.bottomNavSafeArea} edges={['bottom']}>
         <View style={styles.bottomNav}>
@@ -1490,11 +1490,11 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0, 0, 0, 0.4)',
     justifyContent: 'flex-start',
     alignItems: 'flex-end',
-    // Increased from 60 (Aug 2026, Atif's feedback + screenshot) -- the
-    // menu was rendering on top of the green header instead of below
-    // it. This is an estimate based on typical header+status-bar height;
-    // may need further tuning after visual confirmation on device.
-    paddingTop: 110,
+    // Increased again (Aug 2026, Atif's second round of feedback +
+    // screenshot) -- 110 still overlapped the filter-tags row below the
+    // header. Header + search row + filter tags together take up more
+    // vertical space than the header alone.
+    paddingTop: 220,
     paddingRight: 16,
   },
   menuCard: {

@@ -23,7 +23,7 @@
  */
 
 import * as SecureStore from 'expo-secure-store';
-import { Platform } from 'react-native';
+import { Platform, Alert } from 'react-native';
 import { authService } from './auth';
 
 const DEVICE_ID_KEY = 'assistme_device_id';
@@ -57,17 +57,34 @@ function getDefaultDeviceName(): string {
  * called from AuthContext right after a successful auth check, wrapped
  * in try/catch there too. Never throws, never blocks app launch.
  */
+// Aug 2026, Atif's real-world testing: a second device previously being
+// silently rejected (seat limit reached, no explanation) with zero
+// feedback was a real gap -- the owner had no idea WHY the second phone
+// never appeared in the Linked Devices list. Now shown once per app
+// launch when it happens.
+let seatLimitAlertShownThisSession = false;
+
 export async function registerDevice(): Promise<void> {
   try {
     const deviceId = await getOrCreateDeviceId();
     const token = await authService.getAccessToken();
     if (!token) return;
     const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
-    await fetch(`${backendUrl}/api/devices/register`, {
+    const res = await fetch(`${backendUrl}/api/devices/register`, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ device_id: deviceId, device_name: getDefaultDeviceName() }),
     });
+    if (res.status === 403 && !seatLimitAlertShownThisSession) {
+      const data = await res.json().catch(() => null);
+      if (data?.error === 'seat_limit_reached') {
+        seatLimitAlertShownThisSession = true;
+        Alert.alert(
+          'Device Limit Reached',
+          `Your plan includes ${data.seats_purchased} device seat${data.seats_purchased !== 1 ? 's' : ''}, already in use. Remove a device or add a seat from Linked Devices to use this one too.`
+        );
+      }
+    }
   } catch (e) {
     // Fails open -- Phase 1 is pure tracking, a registration failure
     // must never affect the user's session in any way.
