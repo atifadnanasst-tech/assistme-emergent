@@ -3044,7 +3044,23 @@ app.get('/api/devices', async (c) => {
     const { data: sub } = await supabase.from('subscriptions')
       .select('seats_purchased').eq('organisation_id', organisationId).maybeSingle();
 
-    return c.json({ devices: devices || [], seats_purchased: sub?.seats_purchased || 1 });
+    // Primary device (Aug 2026, Atif's real-world concern): the earliest
+    // registered device for this org, marked so it can never be removed
+    // -- prevents the scenario where a device given to a manager removes
+    // the actual owner's own device, locking them out. Computed as the
+    // minimum created_at rather than a stored flag -- no schema change
+    // needed, and it's inherently correct (the first device really is
+    // the first device).
+    const devicesList = devices || [];
+    let primaryId = null;
+    if (devicesList.length > 0) {
+      primaryId = devicesList.reduce((earliest, d) =>
+        new Date(d.created_at) < new Date(earliest.created_at) ? d : earliest
+      ).id;
+    }
+    const devicesWithPrimary = devicesList.map(d => ({ ...d, is_primary: d.id === primaryId }));
+
+    return c.json({ devices: devicesWithPrimary, seats_purchased: sub?.seats_purchased || 1 });
   } catch (err) {
     console.error('[GET /api/devices] Error:', err.message);
     return c.json({ error: 'internal_error' }, 500);
@@ -3082,6 +3098,21 @@ app.delete('/api/devices/:device_session_id', async (c) => {
     if (!auth) return c.json({ error: 'unauthorized' }, 401);
     const { organisationId } = auth;
     const deviceSessionId = c.req.param('device_session_id');
+
+    // Primary-device protection (Aug 2026) -- see the GET endpoint's own
+    // comment for the full reasoning. The earliest-registered device for
+    // this org can never be removed, by anyone, from any device.
+    const { data: allDevices } = await supabase
+      .from('device_sessions').select('id, created_at')
+      .eq('organisation_id', organisationId);
+    if (allDevices && allDevices.length > 0) {
+      const primary = allDevices.reduce((earliest, d) =>
+        new Date(d.created_at) < new Date(earliest.created_at) ? d : earliest
+      );
+      if (primary.id === deviceSessionId) {
+        return c.json({ error: 'cannot_remove_primary_device' }, 403);
+      }
+    }
 
     const { error } = await supabase.from('device_sessions')
       .delete()
