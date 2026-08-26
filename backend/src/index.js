@@ -2982,7 +2982,7 @@ app.post('/api/devices/register', async (c) => {
     if (!auth) return c.json({ error: 'unauthorized' }, 401);
     const { organisationId, userId } = auth;
     const body = await c.req.json();
-    const { device_id, device_name } = body;
+    const { device_id, device_name, force_takeover } = body;
     if (!device_id) return c.json({ error: 'missing_device_id' }, 400);
 
     const { data: existing } = await supabase
@@ -3040,6 +3040,45 @@ app.post('/api/devices/register', async (c) => {
 
     // Genuinely new device.
     if ((activeCount || 0) >= seatsAllowed) {
+      // Device takeover (Aug 2026, Atif's design): a fresh OTP login is
+      // real proof of phone-number ownership -- WhatsApp's own model.
+      // When explicitly confirmed by the person logging in (never
+      // silent, never automatic), the least-recently-active existing
+      // device is bumped and this new device takes over BOTH the seat
+      // AND primary status. Primary must transfer here, not just the
+      // seat: whoever most recently proved ownership via a fresh OTP
+      // should always hold primary, not whoever happened to register
+      // first historically -- otherwise a stolen phone that registered
+      // first could keep primary protection even after the real owner
+      // takes their number back.
+      if (force_takeover) {
+        const { data: toBump } = await supabase
+          .from('device_sessions').select('id, device_name')
+          .eq('organisation_id', organisationId).eq('status', 'active')
+          .order('last_active_at', { ascending: true }).limit(1).maybeSingle();
+
+        if (toBump) {
+          await supabase.from('device_sessions')
+            .update({ status: 'removed', is_primary: false })
+            .eq('id', toBump.id);
+        }
+
+        await supabase.from('device_sessions').insert({
+          organisation_id: organisationId, user_id: userId,
+          device_id, device_name: device_name || 'Unknown device',
+          status: 'active', is_primary: true,
+        });
+
+        return c.json({ registered: true, new_device: true, took_over_from: toBump?.device_name || null });
+      }
+
+      // Not a takeover -- reject, but tell the frontend which existing
+      // device is holding the seat so it can offer the takeover prompt.
+      const { data: blockerDevice } = await supabase
+        .from('device_sessions').select('device_name')
+        .eq('organisation_id', organisationId).eq('status', 'active')
+        .order('last_active_at', { ascending: true }).limit(1).maybeSingle();
+
       await supabase.from('device_sessions').insert({
         organisation_id: organisationId, user_id: userId,
         device_id, device_name: device_name || 'Unknown device',
@@ -3048,13 +3087,18 @@ app.post('/api/devices/register', async (c) => {
       return c.json({
         registered: false, error: 'seat_limit_reached',
         seats_purchased: seatsAllowed, active_devices: activeCount || 0,
+        existing_device_name: blockerDevice?.device_name || null,
       }, 403);
     }
 
+    // First-ever device for this org becomes primary automatically.
+    // Every subsequent ordinary login (within available seats) joins as
+    // a regular, removable device -- primary only ever transfers again
+    // via an explicit takeover above, never on a routine additional login.
     await supabase.from('device_sessions').insert({
       organisation_id: organisationId, user_id: userId,
       device_id, device_name: device_name || 'Unknown device',
-      status: 'active',
+      status: 'active', is_primary: (activeCount || 0) === 0,
     });
 
     return c.json({ registered: true, new_device: true });
@@ -3077,7 +3121,7 @@ app.get('/api/devices', async (c) => {
 
     const { data: devices } = await supabase
       .from('device_sessions')
-      .select('id, device_id, device_name, last_active_at, created_at, status')
+      .select('id, device_id, device_name, last_active_at, created_at, status, is_primary')
       .eq('organisation_id', organisationId)
       .order('last_active_at', { ascending: false });
 
@@ -3094,25 +3138,16 @@ app.get('/api/devices', async (c) => {
     // limit itself.
     const blockedDevices = allDevices.filter(d => d.status === 'blocked');
 
-    // Primary device (Aug 2026, Atif's real-world concern): the earliest
-    // registered ACTIVE device for this org, marked so it can never be
-    // removed -- prevents the scenario where a device given to a manager
-    // removes the actual owner's own device, locking them out. Computed
-    // from active devices only, not blocked ones, since a blocked
-    // device never held a real seat and shouldn't be eligible to be
-    // considered "primary" even if it happens to have an earlier
-    // created_at (e.g., a very first login attempt that predates the
-    // primary's own successful registration).
-    let primaryId = null;
-    if (activeDevices.length > 0) {
-      primaryId = activeDevices.reduce((earliest, d) =>
-        new Date(d.created_at) < new Date(earliest.created_at) ? d : earliest
-      ).id;
-    }
-    const activeWithPrimary = activeDevices.map(d => ({ ...d, is_primary: d.id === primaryId }));
-
+    // Primary device (Aug 2026): now a real, STORED flag rather than
+    // computed live from earliest created_at. Updated after Atif's
+    // device-takeover design -- primary must be able to actually
+    // TRANSFER to a new device during a takeover (which always has a
+    // later created_at than what it's replacing), so "earliest wins"
+    // could never reflect a takeover correctly. Set at registration
+    // (first-ever device for an org) or during a confirmed takeover
+    // (see the register endpoint) -- never derived here.
     return c.json({
-      devices: activeWithPrimary,
+      devices: activeDevices,
       blocked_devices: blockedDevices,
       seats_purchased: sub?.seats_purchased || 1,
     });
@@ -3155,22 +3190,14 @@ app.delete('/api/devices/:device_session_id', async (c) => {
     const deviceSessionId = c.req.param('device_session_id');
 
     // Primary-device protection (Aug 2026) -- see the GET endpoint's own
-    // comment for the full reasoning. The earliest-registered ACTIVE
-    // device for this org can never be removed, by anyone, from any
-    // device. Bug fixed here: this check previously considered ALL rows
-    // (including blocked/removed), not just active ones -- same class
-    // of bug already fixed in GET /api/devices, just not carried over
-    // to this endpoint's own separate copy of the logic.
-    const { data: allDevices } = await supabase
-      .from('device_sessions').select('id, created_at')
-      .eq('organisation_id', organisationId).eq('status', 'active');
-    if (allDevices && allDevices.length > 0) {
-      const primary = allDevices.reduce((earliest, d) =>
-        new Date(d.created_at) < new Date(earliest.created_at) ? d : earliest
-      );
-      if (primary.id === deviceSessionId) {
-        return c.json({ error: 'cannot_remove_primary_device' }, 403);
-      }
+    // comment for the full reasoning. Now a direct lookup of the stored
+    // is_primary flag rather than a live computation -- simpler, and
+    // correctly reflects a transferred primary after a takeover.
+    const { data: targetDevice } = await supabase
+      .from('device_sessions').select('is_primary')
+      .eq('id', deviceSessionId).eq('organisation_id', organisationId).maybeSingle();
+    if (targetDevice?.is_primary) {
+      return c.json({ error: 'cannot_remove_primary_device' }, 403);
     }
 
     // Phase 2 enforcement (Aug 2026): soft-delete via status='removed'
