@@ -3009,6 +3009,18 @@ app.post('/api/devices/register', async (c) => {
           .eq('id', existing.id);
         return c.json({ registered: true, new_device: false });
       }
+      // Phase 2 enforcement (Aug 2026, Atif's explicit decision): a
+      // REMOVED device must NEVER be auto-promoted back to active, even
+      // if a seat frees up -- unlike 'blocked', which should. Only
+      // returns if the owner deliberately re-adds it. Distinct error
+      // code (device_removed, not seat_limit_reached) so the frontend
+      // can show an accurate message and force sign-out.
+      if (existing.status === 'removed') {
+        await supabase.from('device_sessions')
+          .update({ last_active_at: new Date().toISOString() })
+          .eq('id', existing.id);
+        return c.json({ registered: false, error: 'device_removed' }, 403);
+      }
       // Existing but blocked -- re-check in case a seat has since freed
       // up (another device removed, or a seat purchased) and promote it.
       if ((activeCount || 0) < seatsAllowed) {
@@ -3143,11 +3155,15 @@ app.delete('/api/devices/:device_session_id', async (c) => {
     const deviceSessionId = c.req.param('device_session_id');
 
     // Primary-device protection (Aug 2026) -- see the GET endpoint's own
-    // comment for the full reasoning. The earliest-registered device for
-    // this org can never be removed, by anyone, from any device.
+    // comment for the full reasoning. The earliest-registered ACTIVE
+    // device for this org can never be removed, by anyone, from any
+    // device. Bug fixed here: this check previously considered ALL rows
+    // (including blocked/removed), not just active ones -- same class
+    // of bug already fixed in GET /api/devices, just not carried over
+    // to this endpoint's own separate copy of the logic.
     const { data: allDevices } = await supabase
       .from('device_sessions').select('id, created_at')
-      .eq('organisation_id', organisationId);
+      .eq('organisation_id', organisationId).eq('status', 'active');
     if (allDevices && allDevices.length > 0) {
       const primary = allDevices.reduce((earliest, d) =>
         new Date(d.created_at) < new Date(earliest.created_at) ? d : earliest
@@ -3157,8 +3173,14 @@ app.delete('/api/devices/:device_session_id', async (c) => {
       }
     }
 
+    // Phase 2 enforcement (Aug 2026): soft-delete via status='removed'
+    // rather than an actual row deletion. Unlike 'blocked' (which
+    // SHOULD get back in automatically if a seat frees up), a removed
+    // device must never silently rejoin just because a seat opened up
+    // -- confirmed with Atif as a deliberate, explicit decision. It
+    // only returns if the owner deliberately re-adds it.
     const { error } = await supabase.from('device_sessions')
-      .delete()
+      .update({ status: 'removed' })
       .eq('id', deviceSessionId).eq('organisation_id', organisationId);
 
     if (error) return c.json({ error: 'delete_failed' }, 500);
