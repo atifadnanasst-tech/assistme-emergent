@@ -237,40 +237,17 @@ export default function OTPScreen() {
 
       console.log('✅ [OTP] Supabase session set in memory');
 
-      // Device takeover check (Aug 2026, Atif's design): this fresh OTP
-      // verification IS the proof of phone-number ownership. If this
-      // org's one seat is already in use elsewhere, offer an explicit
-      // takeover rather than silently failing or silently allowing --
-      // never automatic, always confirmed by the person logging in.
-      const deviceResult = await registerDeviceAtLogin(false);
-      if (!deviceResult.success && deviceResult.needsTakeoverConfirmation) {
-        Alert.alert(
-          'Already Logged In Elsewhere',
-          `You're already logged in on ${deviceResult.existingDeviceName || 'another device'}. Log out that device and continue here?`,
-          [
-            {
-              text: 'Cancel', style: 'cancel', onPress: async () => {
-                // Declined -- this fresh session must not proceed.
-                await authService.clearSession();
-                await supabase.auth.signOut();
-                setError('Login cancelled.');
-                setLoading(false);
-              },
-            },
-            {
-              text: 'Log Out That Device', onPress: async () => {
-                await registerDeviceAtLogin(true);
-                console.log('🔐 [OTP] Setting authentication state to true (after takeover)');
-                setIsAuthenticated(true);
-                console.log('✅ [OTP] Authentication complete - guard will handle navigation');
-              },
-            },
-          ]
-        );
-        return;
-      }
-
-      // Update auth state - navigation guard will handle redirect to /home
+      // ROLLED BACK (Aug 2026, emergency): the device-takeover check
+      // that lived here caused a real lockout during live testing --
+      // exact mechanism not yet confirmed, but the symptom (correct OTP,
+      // repeatedly bounced back to the phone-number screen, no new
+      // backend log entries) matches an uncaught client-side exception
+      // somewhere in this block being swallowed by the outer catch,
+      // which sets an error and stops loading but never resolves
+      // isAuthenticated either way. Restoring the simple, proven,
+      // pre-takeover flow immediately to restore access; the takeover
+      // feature will be re-investigated and re-applied separately,
+      // without the pressure of anyone being locked out while doing so.
       console.log('🔐 [OTP] Setting authentication state to true');
       setIsAuthenticated(true);
       console.log('✅ [OTP] Authentication complete - guard will handle navigation');
