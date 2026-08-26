@@ -53,41 +53,64 @@ function getDefaultDeviceName(): string {
 }
 
 /**
- * Registers this device with the backend. Fire-and-forget by design --
- * called from AuthContext right after a successful auth check, wrapped
- * in try/catch there too. Never throws, never blocks app launch.
+ * Registers this device with the backend. Called (and now AWAITED,
+ * unlike Phase 1) from AuthContext right after a successful auth check.
+ *
+ * PHASE 2 ENFORCEMENT (Aug 2026, Atif's explicit ask -- "allowing is
+ * one thing, recognizing is another; if it is not recognizing, then
+ * how will it bar the login"): returns {shouldSignOut: true} ONLY on a
+ * confirmed, explicit 403 with error code exactly 'seat_limit_reached'
+ * or 'device_removed'. Every other outcome -- network failure, timeout,
+ * unexpected status, malformed response, any other error code --
+ * returns {shouldSignOut: false} and fails open. This is the one
+ * deliberate exception to "never affect the user's session": a
+ * confirmed rejection from the server is trusted, but ambiguity never
+ * is. The actual sign-out itself is performed by AuthContext (which
+ * already owns that logic), not duplicated here -- this function only
+ * signals the decision.
  */
-// Aug 2026, Atif's real-world testing: a second device previously being
-// silently rejected (seat limit reached, no explanation) with zero
-// feedback was a real gap -- the owner had no idea WHY the second phone
-// never appeared in the Linked Devices list. Now shown once per app
-// launch when it happens.
 let seatLimitAlertShownThisSession = false;
 
-export async function registerDevice(): Promise<void> {
+export async function registerDevice(): Promise<{ shouldSignOut: boolean; reason?: string }> {
   try {
     const deviceId = await getOrCreateDeviceId();
     const token = await authService.getAccessToken();
-    if (!token) return;
+    if (!token) return { shouldSignOut: false };
     const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
     const res = await fetch(`${backendUrl}/api/devices/register`, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ device_id: deviceId, device_name: getDefaultDeviceName() }),
     });
-    if (res.status === 403 && !seatLimitAlertShownThisSession) {
-      const data = await res.json().catch(() => null);
-      if (data?.error === 'seat_limit_reached') {
+
+    if (res.status !== 403) return { shouldSignOut: false };
+
+    const data = await res.json().catch(() => null);
+    if (!data || !data.error) return { shouldSignOut: false };
+
+    if (data.error === 'device_removed') {
+      Alert.alert('Device Removed', 'This device was removed from your account. Please contact the account owner if this is unexpected.');
+      return { shouldSignOut: true, reason: 'device_removed' };
+    }
+
+    if (data.error === 'seat_limit_reached') {
+      if (!seatLimitAlertShownThisSession) {
         seatLimitAlertShownThisSession = true;
         Alert.alert(
           'Device Limit Reached',
           `Your plan includes ${data.seats_purchased} device seat${data.seats_purchased !== 1 ? 's' : ''}, already in use. Remove a device or add a seat from Linked Devices to use this one too.`
         );
       }
+      return { shouldSignOut: true, reason: 'seat_limit_reached' };
     }
+
+    // Unrecognized error code -- fail open rather than guess.
+    return { shouldSignOut: false };
   } catch (e) {
-    // Fails open -- Phase 1 is pure tracking, a registration failure
-    // must never affect the user's session in any way.
+    // Fails open -- a network hiccup or unexpected error must never be
+    // treated as a confirmed rejection. Only an explicit, well-formed
+    // 403 with a recognized error code above triggers sign-out.
     console.warn('[deviceId] Registration failed (non-fatal):', e);
+    return { shouldSignOut: false };
   }
 }

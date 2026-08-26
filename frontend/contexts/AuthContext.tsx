@@ -42,11 +42,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (isValid) {
           setIsAuthenticated(true);
           console.log('✅ [AUTH_CONTEXT] Session valid - user authenticated');
-          // Linked Devices Phase 1 (Aug 2026) -- fire-and-forget, pure
-          // tracking only, no enforcement yet. registerDevice() itself
-          // fails open on any error; this call is not awaited so it
-          // can never delay or block the auth flow.
-          registerDevice();
+          // Linked Devices Phase 2 (Aug 2026, Atif's explicit ask):
+          // registerDevice() is now AWAITED (was fire-and-forget in
+          // Phase 1) so its enforcement decision can act before the
+          // user sees the app. It fails open on any ambiguous outcome
+          // (network error, unexpected status, unrecognized error code)
+          // -- shouldSignOut is only ever true on a confirmed, explicit
+          // 403 with a recognized error code from the server.
+          const deviceCheck = await registerDevice();
+          if (deviceCheck.shouldSignOut) {
+            await authService.clearSession();
+            await supabase.auth.signOut();
+            setIsAuthenticated(false);
+            console.log(`❌ [AUTH_CONTEXT] Device rejected (${deviceCheck.reason}) - signed out`);
+            return;
+          }
         } else {
           // Try to refresh
           console.log('🔄 [AUTH_CONTEXT] Session invalid, attempting refresh...');
@@ -54,7 +64,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           if (refreshed) {
             setIsAuthenticated(true);
             console.log('✅ [AUTH_CONTEXT] Session refreshed - user authenticated');
-            registerDevice();
+            const deviceCheck = await registerDevice();
+            if (deviceCheck.shouldSignOut) {
+              await authService.clearSession();
+              await supabase.auth.signOut();
+              setIsAuthenticated(false);
+              console.log(`❌ [AUTH_CONTEXT] Device rejected (${deviceCheck.reason}) - signed out`);
+              return;
+            }
           } else {
             // Clear invalid session
             await authService.clearSession();
