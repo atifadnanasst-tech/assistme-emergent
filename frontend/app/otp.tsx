@@ -7,12 +7,14 @@ import {
   StyleSheet,
   ActivityIndicator,
   Animated,
+  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams, useSegments } from 'expo-router';
 import { supabase } from '../lib/supabase';
 import { authService } from '../lib/auth';
 import { useAuth } from '../contexts/AuthContext';
+import { registerDeviceAtLogin } from '../lib/deviceId';
 
 const TIMER_DURATION = 28; // seconds
 
@@ -234,6 +236,39 @@ export default function OTPScreen() {
       }
 
       console.log('✅ [OTP] Supabase session set in memory');
+
+      // Device takeover check (Aug 2026, Atif's design): this fresh OTP
+      // verification IS the proof of phone-number ownership. If this
+      // org's one seat is already in use elsewhere, offer an explicit
+      // takeover rather than silently failing or silently allowing --
+      // never automatic, always confirmed by the person logging in.
+      const deviceResult = await registerDeviceAtLogin(false);
+      if (!deviceResult.success && deviceResult.needsTakeoverConfirmation) {
+        Alert.alert(
+          'Already Logged In Elsewhere',
+          `You're already logged in on ${deviceResult.existingDeviceName || 'another device'}. Log out that device and continue here?`,
+          [
+            {
+              text: 'Cancel', style: 'cancel', onPress: async () => {
+                // Declined -- this fresh session must not proceed.
+                await authService.clearSession();
+                await supabase.auth.signOut();
+                setError('Login cancelled.');
+                setLoading(false);
+              },
+            },
+            {
+              text: 'Log Out That Device', onPress: async () => {
+                await registerDeviceAtLogin(true);
+                console.log('🔐 [OTP] Setting authentication state to true (after takeover)');
+                setIsAuthenticated(true);
+                console.log('✅ [OTP] Authentication complete - guard will handle navigation');
+              },
+            },
+          ]
+        );
+        return;
+      }
 
       // Update auth state - navigation guard will handle redirect to /home
       console.log('🔐 [OTP] Setting authentication state to true');

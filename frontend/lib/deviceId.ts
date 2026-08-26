@@ -114,3 +114,55 @@ export async function registerDevice(): Promise<{ shouldSignOut: boolean; reason
     return { shouldSignOut: false };
   }
 }
+
+/**
+ * DEVICE TAKEOVER (Aug 2026, Atif's design). Separate from
+ * registerDevice() above on purpose: that function handles a silent
+ * app relaunch on an ALREADY-known device and must never prompt the
+ * user. This function is for the one moment that's fundamentally
+ * different -- a genuinely fresh login (phone number + a brand new
+ * OTP just verified), called from the OTP screen right after
+ * verification succeeds. A fresh OTP is real proof of phone-number
+ * ownership, matching WhatsApp's own model: if a device is already
+ * using this org's one seat, the person who just proved ownership can
+ * explicitly choose to take over -- never silent, never automatic.
+ *
+ * Call with forceTakeover=false first; if the result says confirmation
+ * is needed, show the prompt yourself and call again with
+ * forceTakeover=true only if the person confirms.
+ */
+type DeviceLoginResult =
+  | { success: true }
+  | { success: false; needsTakeoverConfirmation: true; existingDeviceName: string | null }
+  | { success: false; needsTakeoverConfirmation: false };
+
+export async function registerDeviceAtLogin(forceTakeover: boolean): Promise<DeviceLoginResult> {
+  try {
+    const deviceId = await getOrCreateDeviceId();
+    const token = await authService.getAccessToken();
+    if (!token) return { success: false, needsTakeoverConfirmation: false };
+    const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+    const res = await fetch(`${backendUrl}/api/devices/register`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ device_id: deviceId, device_name: getDefaultDeviceName(), force_takeover: forceTakeover }),
+    });
+
+    if (res.ok) return { success: true };
+
+    if (res.status === 403) {
+      const data = await res.json().catch(() => null);
+      if (data?.error === 'seat_limit_reached') {
+        return { success: false, needsTakeoverConfirmation: true, existingDeviceName: data.existing_device_name || null };
+      }
+    }
+
+    // Any other outcome -- fail open, treat as a soft success rather
+    // than blocking a fresh, just-verified login over a device-tracking
+    // hiccup. This mirrors registerDevice()'s own fail-open discipline.
+    return { success: true };
+  } catch (e) {
+    console.warn('[deviceId] Login-time registration failed (non-fatal):', e);
+    return { success: true };
+  }
+}
