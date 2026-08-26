@@ -19,6 +19,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { authService } from '../../lib/auth';
+import { supabase } from '../../lib/supabase';
 import RazorpayCheckout from 'react-native-razorpay';
 
 interface DeviceSession {
@@ -96,6 +97,22 @@ export default function LinkedDevices() {
       }
       const created = await createRes.json();
 
+      // Pre-fill contact/email (Aug 2026, Atif's request) -- the owner
+      // is already a known, logged-in member buying a seat for their
+      // own org, so there's no reason to make them retype their own
+      // phone number and email on Razorpay's own contact-details step.
+      // react-native-razorpay's own documented prefill option (contact,
+      // email, name) is exactly for this. Fails open to no pre-fill
+      // (Razorpay just asks the person directly) if getUser() has any
+      // trouble -- never blocks the purchase over this.
+      let prefillContact: string | undefined;
+      let prefillEmail: string | undefined;
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        prefillContact = user?.phone || undefined;
+        prefillEmail = user?.email || undefined;
+      } catch {}
+
       let paymentResult;
       try {
         paymentResult = await RazorpayCheckout.open({
@@ -104,6 +121,7 @@ export default function LinkedDevices() {
           subscription_id: created.subscriptionId,
           name: 'AssistMe',
           theme: { color: '#075E54' },
+          prefill: { contact: prefillContact, email: prefillEmail },
         });
       } catch (checkoutErr: any) {
         if (checkoutErr?.code !== 0) {
