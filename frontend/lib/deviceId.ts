@@ -152,7 +152,15 @@ export async function registerDeviceAtLogin(forceTakeover: boolean): Promise<Dev
 
     if (res.status === 403) {
       const data = await res.json().catch(() => null);
-      if (data?.error === 'seat_limit_reached') {
+      // Real gap fixed (Aug 2026, found via Atif's live testing):
+      // device_removed now offers the same takeover prompt as
+      // seat_limit_reached -- a fresh OTP login is exactly as strong
+      // proof of ownership for a device that was explicitly removed as
+      // for one that was merely blocked. Previously only
+      // seat_limit_reached triggered this, meaning the real owner
+      // logging in fresh on a device they'd once removed was
+      // permanently locked out of ever using that install again.
+      if (data?.error === 'seat_limit_reached' || data?.error === 'device_removed') {
         return { success: false, needsTakeoverConfirmation: true, existingDeviceName: data.existing_device_name || null };
       }
     }

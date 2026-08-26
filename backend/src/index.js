@@ -3009,17 +3009,47 @@ app.post('/api/devices/register', async (c) => {
           .eq('id', existing.id);
         return c.json({ registered: true, new_device: false });
       }
-      // Phase 2 enforcement (Aug 2026, Atif's explicit decision): a
-      // REMOVED device must NEVER be auto-promoted back to active, even
-      // if a seat frees up -- unlike 'blocked', which should. Only
-      // returns if the owner deliberately re-adds it. Distinct error
-      // code (device_removed, not seat_limit_reached) so the frontend
-      // can show an accurate message and force sign-out.
+      // Real gap fixed (Aug 2026, found via Atif's live testing): a
+      // REMOVED device must NEVER auto-promote back to active on a
+      // silent app relaunch (registerDevice() never sends
+      // force_takeover, so this still fully applies there) -- but a
+      // FRESH OTP LOGIN is exactly as strong proof of ownership as it
+      // is for a merely-'blocked' device, and the original design
+      // treated 'removed' as an unconditional dead end even then. That
+      // meant the actual owner, logging in fresh with their own OTP on
+      // a device they'd previously removed, would be permanently
+      // locked out of ever using that install again -- clearly wrong,
+      // since a takeover is exactly what a fresh OTP should be able to
+      // do regardless of whether the device was blocked or removed.
       if (existing.status === 'removed') {
+        if (force_takeover) {
+          if ((activeCount || 0) >= seatsAllowed) {
+            const { data: toBump } = await supabase
+              .from('device_sessions').select('id')
+              .eq('organisation_id', organisationId).eq('status', 'active')
+              .order('last_active_at', { ascending: true }).limit(1).maybeSingle();
+            if (toBump) {
+              await supabase.from('device_sessions')
+                .update({ status: 'removed', is_primary: false })
+                .eq('id', toBump.id);
+            }
+          }
+          await supabase.from('device_sessions')
+            .update({ status: 'active', is_primary: true, last_active_at: new Date().toISOString() })
+            .eq('id', existing.id);
+          return c.json({ registered: true, new_device: false, promoted: true });
+        }
+        const { data: blockerDevice } = await supabase
+          .from('device_sessions').select('device_name')
+          .eq('organisation_id', organisationId).eq('status', 'active')
+          .order('last_active_at', { ascending: true }).limit(1).maybeSingle();
         await supabase.from('device_sessions')
           .update({ last_active_at: new Date().toISOString() })
           .eq('id', existing.id);
-        return c.json({ registered: false, error: 'device_removed' }, 403);
+        return c.json({
+          registered: false, error: 'device_removed',
+          existing_device_name: blockerDevice?.device_name || null,
+        }, 403);
       }
       // Existing but blocked -- re-check in case a seat has since freed
       // up (another device removed, or a seat purchased) and promote it.
