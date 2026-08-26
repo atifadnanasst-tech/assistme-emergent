@@ -22,6 +22,7 @@ import { getFinancialPosition } from './services/ai/queryEngine/primitives.js';
 import { recordAiUsage, checkUsageAllowed, getOrCreateCurrentPeriod, getCeilingPaisaForPlan } from './services/billing/usageTracking.js';
 import { createWalletOrder, creditWalletTopup, verifyClientPayment, verifyWebhookSignature } from './services/billing/walletService.js';
 import { createSubscription, requestCancellation, handleSubscriptionEvent, verifySubscriptionWebhookSignature, jobDowngradeCancelledSubscriptions, verifyClientSubscriptionPayment, activateSubscriptionClientSide, changeSubscriptionTier } from './services/billing/subscriptionService.js';
+import { createSeatSubscription, verifyClientSeatPayment, activateSeatSubscriptionClientSide, verifySeatWebhookSignature, handleSeatSubscriptionEvent } from './services/billing/seatSubscriptionService.js';
 import { generateOwnerDataExport } from './services/export/generateOwnerDataExport.js';
 import { generateGstFilingReport } from './services/reports/generateGstFilingReport.js';
 import PDFDocument from 'pdfkit';
@@ -1722,6 +1723,79 @@ app.post('/api/subscription/webhook', async (c) => {
     return c.json({ received: true });
   } catch (err) {
     console.error('[POST /api/subscription/webhook] Error:', err);
+    return c.json({ error: 'internal_error' }, 500);
+  }
+});
+
+// ─── Seat Subscriptions (Aug 2026, Linked Devices seat-purchase) ─
+// See seatSubscriptionService.js for the full design rationale --
+// deliberately mirrors the subscription endpoints above almost
+// exactly, since a seat purchase IS just another instance of the same
+// underlying Razorpay subscription (Atif's own design call).
+app.post('/api/seats/create-subscription', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+
+    const result = await createSeatSubscription({ orgId: organisationId, supabase });
+    if (!result.success) return c.json({ error: result.error }, 400);
+    return c.json(result);
+  } catch (err) {
+    console.error('[POST /api/seats/create-subscription] Error:', err);
+    return c.json({ error: 'internal_error' }, 500);
+  }
+});
+
+app.post('/api/seats/verify-payment', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+    const body = await c.req.json();
+    const { razorpay_subscription_id, razorpay_payment_id, razorpay_signature } = body;
+
+    if (!razorpay_subscription_id || !razorpay_payment_id || !razorpay_signature) {
+      return c.json({ error: 'missing_fields' }, 400);
+    }
+
+    const isValid = verifyClientSeatPayment({
+      subscriptionId: razorpay_subscription_id,
+      paymentId: razorpay_payment_id,
+      signature: razorpay_signature,
+    });
+    if (!isValid) {
+      console.warn('[POST /api/seats/verify-payment] signature mismatch for subscription:', razorpay_subscription_id);
+      return c.json({ error: 'invalid_signature' }, 400);
+    }
+
+    await activateSeatSubscriptionClientSide({ orgId: organisationId, razorpaySubscriptionId: razorpay_subscription_id, supabase });
+    return c.json({ success: true });
+  } catch (err) {
+    console.error('[POST /api/seats/verify-payment] Error:', err);
+    return c.json({ error: 'internal_error' }, 500);
+  }
+});
+
+app.post('/api/seats/webhook', async (c) => {
+  try {
+    const rawBody = await c.req.text();
+    const signature = c.req.header('x-razorpay-signature');
+
+    if (!signature || !verifySeatWebhookSignature({ rawBody, signature })) {
+      console.warn('[POST /api/seats/webhook] invalid or missing signature');
+      return c.json({ error: 'invalid_signature' }, 400);
+    }
+
+    const payload = JSON.parse(rawBody);
+    const result = await handleSeatSubscriptionEvent({ event: payload.event, payload: payload.payload, supabase });
+    if (!result.success) {
+      throw new Error('handleSeatSubscriptionEvent failed');
+    }
+
+    return c.json({ received: true });
+  } catch (err) {
+    console.error('[POST /api/seats/webhook] Error:', err);
     return c.json({ error: 'internal_error' }, 500);
   }
 });
