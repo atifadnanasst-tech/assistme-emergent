@@ -1,4 +1,5 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
+import { AppState, AppStateStatus } from 'react-native';
 import { authService } from '../lib/auth';
 import { supabase } from '../lib/supabase';
 import { registerDevice } from '../lib/deviceId';
@@ -15,6 +16,28 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
+  // App-resume device check (Aug 2026, Atif's design): app launch alone
+  // only re-verifies a device on a genuine force-kill-and-relaunch, which
+  // real people rarely do -- most just switch apps and back, which does
+  // NOT re-run launch logic in React Native. AppState's foreground
+  // transition is the natural, much more frequent signal that actually
+  // matches real usage, without going anywhere near per-request checks
+  // on the busiest code path in the backend. isAuthenticatedRef mirrors
+  // isAuthenticated so the AppState listener (subscribed once) always
+  // sees the current value without needing to re-subscribe.
+  const isAuthenticatedRef = useRef(isAuthenticated);
+  const lastResumeCheckAt = useRef(0);
+  useEffect(() => { isAuthenticatedRef.current = isAuthenticated; }, [isAuthenticated]);
+
+  const runDeviceCheck = async () => {
+    const deviceCheck = await registerDevice();
+    if (deviceCheck.shouldSignOut) {
+      await authService.clearSession();
+      await supabase.auth.signOut();
+      setIsAuthenticated(false);
+      console.log(`❌ [AUTH_CONTEXT] Device rejected (${deviceCheck.reason}) - signed out`);
+    }
+  };
 
   const checkAuth = async () => {
     setIsCheckingAuth(true);
@@ -49,14 +72,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           // (network error, unexpected status, unrecognized error code)
           // -- shouldSignOut is only ever true on a confirmed, explicit
           // 403 with a recognized error code from the server.
-          const deviceCheck = await registerDevice();
-          if (deviceCheck.shouldSignOut) {
-            await authService.clearSession();
-            await supabase.auth.signOut();
-            setIsAuthenticated(false);
-            console.log(`❌ [AUTH_CONTEXT] Device rejected (${deviceCheck.reason}) - signed out`);
-            return;
-          }
+          await runDeviceCheck();
         } else {
           // Try to refresh
           console.log('🔄 [AUTH_CONTEXT] Session invalid, attempting refresh...');
@@ -64,14 +80,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           if (refreshed) {
             setIsAuthenticated(true);
             console.log('✅ [AUTH_CONTEXT] Session refreshed - user authenticated');
-            const deviceCheck = await registerDevice();
-            if (deviceCheck.shouldSignOut) {
-              await authService.clearSession();
-              await supabase.auth.signOut();
-              setIsAuthenticated(false);
-              console.log(`❌ [AUTH_CONTEXT] Device rejected (${deviceCheck.reason}) - signed out`);
-              return;
-            }
+            await runDeviceCheck();
           } else {
             // Clear invalid session
             await authService.clearSession();
@@ -116,6 +125,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     );
 
     return () => subscription.unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    const handleAppStateChange = (nextState: AppStateStatus) => {
+      if (nextState !== 'active') return;
+      if (!isAuthenticatedRef.current) return;
+      const now = Date.now();
+      // Throttle (Aug 2026): rapid background/foreground cycling (e.g.
+      // pulling down a notification shade) shouldn't fire repeated
+      // checks. 30s is generous enough to skip noise while still being
+      // far more frequent than "only on a true force-kill relaunch."
+      if (now - lastResumeCheckAt.current < 30000) return;
+      lastResumeCheckAt.current = now;
+      console.log('🔄 [AUTH_CONTEXT] App resumed to foreground - re-checking device');
+      runDeviceCheck();
+    };
+    const sub = AppState.addEventListener('change', handleAppStateChange);
+    return () => sub.remove();
   }, []);
 
   return (
