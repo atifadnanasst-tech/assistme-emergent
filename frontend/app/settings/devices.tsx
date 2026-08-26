@@ -50,6 +50,7 @@ export default function LinkedDevices() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [devices, setDevices] = useState<DeviceSession[]>([]);
+  const [blockedDevices, setBlockedDevices] = useState<DeviceSession[]>([]);
   const [seatsPurchased, setSeatsPurchased] = useState(1);
   const [renamingDevice, setRenamingDevice] = useState<DeviceSession | null>(null);
   const [renameInput, setRenameInput] = useState('');
@@ -67,6 +68,7 @@ export default function LinkedDevices() {
       if (res.ok) {
         const data = await res.json();
         setDevices(data.devices || []);
+        setBlockedDevices(data.blocked_devices || []);
         setSeatsPurchased(data.seats_purchased || 1);
       }
     } catch {} finally { setLoading(false); }
@@ -194,6 +196,24 @@ export default function LinkedDevices() {
             <Ionicons name="add-circle-outline" size={20} color="#075E54" />
             <Text style={s.addSeatText}>Add Seat</Text>
           </TouchableOpacity>
+
+          {/* Blocked attempts (Aug 2026, Atif's explicit ask) --
+              "allowing is one thing, recognizing is another." A device
+              rejected for exceeding the seat limit is now visible here,
+              never counted toward the seat limit itself. */}
+          {blockedDevices.length > 0 && (
+            <>
+              <Text style={[s.sectionLabel, { marginTop: 24 }]}>BLOCKED ATTEMPTS</Text>
+              {blockedDevices.map(device => (
+                <View key={device.id} style={[s.deviceRow, s.blockedRow]}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={s.deviceName}>{device.device_name}</Text>
+                    <Text style={s.deviceMeta}>Blocked — tried {relativeTime(device.last_active_at)}</Text>
+                  </View>
+                </View>
+              ))}
+            </>
+          )}
         </ScrollView>
       )}
 
@@ -237,6 +257,7 @@ const s = StyleSheet.create({
   emptyText: { textAlign: 'center', color: '#999', marginTop: 20, fontSize: 14 },
   deviceRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF', borderRadius: 10, padding: 14, marginBottom: 8 },
   primaryBadge: { backgroundColor: '#E8F5E9', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
+  blockedRow: { opacity: 0.6, borderLeftWidth: 3, borderLeftColor: '#D32F2F' },
   primaryBadgeText: { fontSize: 9, fontWeight: '700', color: '#075E54', letterSpacing: 0.3 },
   deviceName: { fontSize: 15, fontWeight: '600', color: '#1A1A1A' },
   deviceMeta: { fontSize: 12, color: '#999', marginTop: 2 },

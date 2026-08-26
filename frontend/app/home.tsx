@@ -927,7 +927,7 @@ export default function HomeScreen() {
         <Ionicons name={fabExpanded ? 'close' : 'add'} size={28} color="#FFFFFF" />
       </TouchableOpacity>
 
-      <Text style={{ textAlign: "center", fontSize: 10, color: "#CCC", paddingVertical: 2 }}>v1.3.491</Text>
+      <Text style={{ textAlign: "center", fontSize: 10, color: "#CCC", paddingVertical: 2 }}>v1.3.492</Text>
       {/* Bottom Navigation SafeAreaView */}
       <SafeAreaView style={styles.bottomNavSafeArea} edges={['bottom']}>
         <View style={styles.bottomNav}>
@@ -1490,11 +1490,11 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0, 0, 0, 0.4)',
     justifyContent: 'flex-start',
     alignItems: 'flex-end',
-    // Increased again (Aug 2026, Atif's second round of feedback +
-    // screenshot) -- 110 still overlapped the filter-tags row below the
-    // header. Header + search row + filter tags together take up more
-    // vertical space than the header alone.
-    paddingTop: 220,
+    // Dialed back (Aug 2026, Atif's third round of feedback) -- 220
+    // overshot, clearing the filter-tags strip entirely. Atif's own
+    // preferred placement: just below the header, slightly overlapping
+    // the top of the filter strip.
+    paddingTop: 150,
     paddingRight: 16,
   },
   menuCard: {
