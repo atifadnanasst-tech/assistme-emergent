@@ -8,9 +8,6 @@
  * Remove is COOPERATIVE revocation (deletes the device_sessions row;
  * see the design note on the backend's device endpoints for why this
  * was chosen over Supabase Auth's own per-session sign-out).
- *
- * "Add Seat" is a placeholder for now -- the actual Razorpay seat-
- * purchase flow is a separate, deliberately follow-up subtask.
  */
 
 import React, { useState, useEffect } from 'react';
@@ -22,6 +19,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { authService } from '../../lib/auth';
+import RazorpayCheckout from 'react-native-razorpay';
 
 interface DeviceSession {
   id: string;
@@ -56,6 +54,7 @@ export default function LinkedDevices() {
   const [renameInput, setRenameInput] = useState('');
   const [savingRename, setSavingRename] = useState(false);
   const [removingId, setRemovingId] = useState<string | null>(null);
+  const [purchasingSeat, setPurchasingSeat] = useState(false);
 
   const getToken = async () => authService.getAccessToken();
 
@@ -72,6 +71,69 @@ export default function LinkedDevices() {
         setSeatsPurchased(data.seats_purchased || 1);
       }
     } catch {} finally { setLoading(false); }
+  };
+
+  // Seat purchase (Aug 2026). Mirrors billing.tsx's own
+  // openCheckoutAndVerify() pattern almost exactly, since a seat
+  // purchase IS just another instance of the same Razorpay
+  // subscription checkout (Atif's own design call) -- same
+  // RazorpayCheckout.open() call shape, same verify-then-fallback
+  // flow, just pointed at the new /api/seats/* endpoints.
+  const handleAddSeat = async () => {
+    if (purchasingSeat) return;
+    setPurchasingSeat(true);
+    try {
+      const token = await getToken();
+      if (!token) return;
+      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+
+      const createRes = await fetch(`${backendUrl}/api/seats/create-subscription`, {
+        method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+      });
+      if (!createRes.ok) {
+        Alert.alert('Could not start seat purchase', 'Please try again.');
+        return;
+      }
+      const created = await createRes.json();
+
+      let paymentResult;
+      try {
+        paymentResult = await RazorpayCheckout.open({
+          description: 'AssistMe — additional seat (monthly)',
+          key: created.keyId,
+          subscription_id: created.subscriptionId,
+          name: 'AssistMe',
+          theme: { color: '#075E54' },
+        });
+      } catch (checkoutErr: any) {
+        if (checkoutErr?.code !== 0) {
+          Alert.alert('Not completed', checkoutErr?.description || 'Please try again.');
+        }
+        return;
+      }
+
+      const verifyRes = await fetch(`${backendUrl}/api/seats/verify-payment`, {
+        method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          razorpay_subscription_id: paymentResult.razorpay_subscription_id,
+          razorpay_payment_id: paymentResult.razorpay_payment_id,
+          razorpay_signature: paymentResult.razorpay_signature,
+        }),
+      });
+
+      if (verifyRes.ok) {
+        Alert.alert('Seat Added', 'Your new seat is ready to use.');
+        loadDevices();
+      } else {
+        Alert.alert('Payment received', 'Your payment went through. Your seat count may take a moment to update.');
+        loadDevices();
+      }
+    } catch (err) {
+      console.error('[handleAddSeat] error:', err);
+      Alert.alert('Something went wrong', 'Please try again, or contact support if this continues.');
+    } finally {
+      setPurchasingSeat(false);
+    }
   };
 
   useEffect(() => { loadDevices(); }, []);
@@ -191,10 +253,15 @@ export default function LinkedDevices() {
 
           <TouchableOpacity
             style={s.addSeatBtn}
-            onPress={() => Alert.alert('Add Seat', 'Seat purchasing is coming very soon.')}
+            onPress={handleAddSeat}
+            disabled={purchasingSeat}
           >
-            <Ionicons name="add-circle-outline" size={20} color="#075E54" />
-            <Text style={s.addSeatText}>Add Seat</Text>
+            {purchasingSeat ? (
+              <ActivityIndicator size="small" color="#075E54" />
+            ) : (
+              <Ionicons name="add-circle-outline" size={20} color="#075E54" />
+            )}
+            <Text style={s.addSeatText}>{purchasingSeat ? 'Processing...' : 'Add Seat'}</Text>
           </TouchableOpacity>
 
           {/* Blocked attempts (Aug 2026, Atif's explicit ask) --
