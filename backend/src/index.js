@@ -2986,26 +2986,53 @@ app.post('/api/devices/register', async (c) => {
     if (!device_id) return c.json({ error: 'missing_device_id' }, 400);
 
     const { data: existing } = await supabase
-      .from('device_sessions').select('id')
+      .from('device_sessions').select('id, status')
       .eq('organisation_id', organisationId).eq('device_id', device_id).maybeSingle();
 
-    if (existing) {
-      await supabase.from('device_sessions')
-        .update({ last_active_at: new Date().toISOString() })
-        .eq('id', existing.id);
-      return c.json({ registered: true, new_device: false });
-    }
-
-    // Genuinely new device -- check the seat limit before inserting.
     const { data: sub } = await supabase.from('subscriptions')
       .select('seats_purchased').eq('organisation_id', organisationId).maybeSingle();
     const seatsAllowed = sub?.seats_purchased || 1;
 
+    // Only 'active' rows count toward the seat limit -- 'blocked' rows
+    // exist purely for visibility (Aug 2026, Atif's explicit ask:
+    // "allowing is one thing, recognizing is another. If it is not
+    // recognizing, then how will it bar the login"). A rejected device
+    // previously left zero trace anywhere.
     const { count: activeCount } = await supabase
       .from('device_sessions').select('*', { count: 'exact', head: true })
-      .eq('organisation_id', organisationId);
+      .eq('organisation_id', organisationId).eq('status', 'active');
 
+    if (existing) {
+      if (existing.status === 'active') {
+        await supabase.from('device_sessions')
+          .update({ last_active_at: new Date().toISOString() })
+          .eq('id', existing.id);
+        return c.json({ registered: true, new_device: false });
+      }
+      // Existing but blocked -- re-check in case a seat has since freed
+      // up (another device removed, or a seat purchased) and promote it.
+      if ((activeCount || 0) < seatsAllowed) {
+        await supabase.from('device_sessions')
+          .update({ status: 'active', last_active_at: new Date().toISOString() })
+          .eq('id', existing.id);
+        return c.json({ registered: true, new_device: false, promoted: true });
+      }
+      await supabase.from('device_sessions')
+        .update({ last_active_at: new Date().toISOString() })
+        .eq('id', existing.id);
+      return c.json({
+        registered: false, error: 'seat_limit_reached',
+        seats_purchased: seatsAllowed, active_devices: activeCount || 0,
+      }, 403);
+    }
+
+    // Genuinely new device.
     if ((activeCount || 0) >= seatsAllowed) {
+      await supabase.from('device_sessions').insert({
+        organisation_id: organisationId, user_id: userId,
+        device_id, device_name: device_name || 'Unknown device',
+        status: 'blocked',
+      });
       return c.json({
         registered: false, error: 'seat_limit_reached',
         seats_purchased: seatsAllowed, active_devices: activeCount || 0,
@@ -3015,6 +3042,7 @@ app.post('/api/devices/register', async (c) => {
     await supabase.from('device_sessions').insert({
       organisation_id: organisationId, user_id: userId,
       device_id, device_name: device_name || 'Unknown device',
+      status: 'active',
     });
 
     return c.json({ registered: true, new_device: true });
@@ -3037,30 +3065,45 @@ app.get('/api/devices', async (c) => {
 
     const { data: devices } = await supabase
       .from('device_sessions')
-      .select('id, device_id, device_name, last_active_at, created_at')
+      .select('id, device_id, device_name, last_active_at, created_at, status')
       .eq('organisation_id', organisationId)
       .order('last_active_at', { ascending: false });
 
     const { data: sub } = await supabase.from('subscriptions')
       .select('seats_purchased').eq('organisation_id', organisationId).maybeSingle();
 
+    const allDevices = devices || [];
+    const activeDevices = allDevices.filter(d => d.status === 'active');
+    // Blocked-device visibility (Aug 2026, Atif's real-world testing):
+    // "allowing is one thing, recognizing is another. If it is not
+    // recognizing, then how will it bar the login." A device rejected
+    // for exceeding the seat limit is now recorded, not silently
+    // discarded -- shown separately, never counted toward the seat
+    // limit itself.
+    const blockedDevices = allDevices.filter(d => d.status === 'blocked');
+
     // Primary device (Aug 2026, Atif's real-world concern): the earliest
-    // registered device for this org, marked so it can never be removed
-    // -- prevents the scenario where a device given to a manager removes
-    // the actual owner's own device, locking them out. Computed as the
-    // minimum created_at rather than a stored flag -- no schema change
-    // needed, and it's inherently correct (the first device really is
-    // the first device).
-    const devicesList = devices || [];
+    // registered ACTIVE device for this org, marked so it can never be
+    // removed -- prevents the scenario where a device given to a manager
+    // removes the actual owner's own device, locking them out. Computed
+    // from active devices only, not blocked ones, since a blocked
+    // device never held a real seat and shouldn't be eligible to be
+    // considered "primary" even if it happens to have an earlier
+    // created_at (e.g., a very first login attempt that predates the
+    // primary's own successful registration).
     let primaryId = null;
-    if (devicesList.length > 0) {
-      primaryId = devicesList.reduce((earliest, d) =>
+    if (activeDevices.length > 0) {
+      primaryId = activeDevices.reduce((earliest, d) =>
         new Date(d.created_at) < new Date(earliest.created_at) ? d : earliest
       ).id;
     }
-    const devicesWithPrimary = devicesList.map(d => ({ ...d, is_primary: d.id === primaryId }));
+    const activeWithPrimary = activeDevices.map(d => ({ ...d, is_primary: d.id === primaryId }));
 
-    return c.json({ devices: devicesWithPrimary, seats_purchased: sub?.seats_purchased || 1 });
+    return c.json({
+      devices: activeWithPrimary,
+      blocked_devices: blockedDevices,
+      seats_purchased: sub?.seats_purchased || 1,
+    });
   } catch (err) {
     console.error('[GET /api/devices] Error:', err.message);
     return c.json({ error: 'internal_error' }, 500);
