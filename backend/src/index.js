@@ -8102,6 +8102,49 @@ app.get('/api/invoice/new', async (c) => {
   }
 });
 
+// ─── POST /api/purchase-bills (Aug 2026) ─────────────────────
+// Purchase Bill / Supplier Payment subtask 2 -- the exact manual-UI
+// caller recordPurchaseBill.js's own header comment already planned for
+// ("POST /api/purchase-bills (manual UI — PurchaseBillSheet)"). Thin
+// wrapper only: zero new business logic, calls the SAME centralized
+// primitive already used successfully by Spark's create_purchase_bill
+// case -- inventory updates, cost-price updates, entity_memory writes,
+// bill numbering all already proven, reused verbatim.
+app.post('/api/purchase-bills', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+    const body = await c.req.json();
+    const { customer_id, items, supplier_bill_number, issue_date, due_date, notes } = body;
+
+    if (!customer_id) return c.json({ error: 'missing_customer_id' }, 400);
+    if (!Array.isArray(items) || items.length === 0) return c.json({ error: 'no_items' }, 400);
+
+    const { recordPurchaseBill } = await import('./services/business/recordPurchaseBill.js');
+    const result = await recordPurchaseBill(supabase, organisationId, customer_id, items, {
+      issueDate: issue_date || null,
+      dueDate: due_date || null,
+      supplierBillNumber: supplier_bill_number || null,
+      notes: notes || null,
+    });
+
+    if (result.status === 'failed') {
+      return c.json({ error: result.error || 'failed' }, 400);
+    }
+
+    return c.json({
+      bill_id: result.bill_id,
+      bill_number: result.bill_number,
+      total_amount: result.total_amount,
+      due_date: result.due_date,
+    });
+  } catch (error) {
+    console.error('POST /api/purchase-bills error:', error);
+    return c.json({ error: 'server_error' }, 500);
+  }
+});
+
 // ─── GET /api/products/find ─────────────────────────────────
 // DEPRECATED — use POST /api/products/resolve for full resolution
 // Kept for backward compatibility with existing callers
