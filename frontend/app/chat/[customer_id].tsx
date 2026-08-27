@@ -2328,18 +2328,40 @@ export default function CustomerChatScreen() {
   };
 
   // ── 3-dot menu ─────────────────────────────────────────────
+  // Pre-v1 menu audit (Aug 2026, Atif's own live review): Search, Block,
+  // Clear chat, Set reminder rules, Set language, and Customer preference
+  // all confirmed genuinely unwired (Block/Clear chat showed a fake
+  // confirmation Alert with no real action behind it; the rest were
+  // completely empty actions). Hidden below rather than left as
+  // misleading dead taps, matching the existing TEMP SESSION 6C
+  // convention already used in this same file for a hidden dev item.
+  // Set language specifically: NOT a simple reuse of the existing
+  // settings/language.tsx screen as hoped -- that screen is hard-wired
+  // to the org-wide language setting (/api/organisations), not anything
+  // per-customer; a real per-customer version would need a new backend
+  // field and endpoint that doesn't exist today. Deferred, not a quick
+  // wiring fix.
   const menuItems = [
     { icon: 'person-outline', label: 'View contact', action: () => { setMenuVisible(false); router.push(`/customer/${customer_id}/report`); } },
-    { icon: 'search-outline', label: 'Search', action: () => { setMenuVisible(false); } },
-    { icon: 'ban-outline', label: 'Block', color: '#D32F2F', action: () => { setMenuVisible(false); Alert.alert('Block', 'Block this customer?'); } },
-    { icon: 'trash-outline', label: 'Clear chat', color: '#D32F2F', action: () => { setMenuVisible(false); Alert.alert('Clear Chat', 'Clear all messages?'); } },
+    // { icon: 'search-outline', label: 'Search', action: () => { setMenuVisible(false); } },
+    // { icon: 'ban-outline', label: 'Block', color: '#D32F2F', action: () => { setMenuVisible(false); Alert.alert('Block', 'Block this customer?'); } },
+    // { icon: 'trash-outline', label: 'Clear chat', color: '#D32F2F', action: () => { setMenuVisible(false); Alert.alert('Clear Chat', 'Clear all messages?'); } },
     { divider: true },
     { icon: 'document-text-outline', label: 'Create quote', action: () => { setMenuVisible(false); router.push(`/customer/${customer_id}/quote`); } },
     { icon: 'receipt-outline', label: 'Create invoice', action: () => { setMenuVisible(false); router.push(`/customer/${customer_id}/invoice`); } },
     // Unified Documents surface subtask I (Aug 2026): moved here per
     // Atif's feedback -- logically belongs right next to Create invoice.
     { icon: 'document-text-outline', label: 'Documents', action: () => { setMenuVisible(false); router.push(`/documents?customer_id=${customer_id}`); } },
-    { icon: 'alarm-outline', label: 'Set payment reminder', action: () => { setMenuVisible(false); } },
+    // Renamed from "Set payment reminder" and actually wired (Aug 2026,
+    // Atif's own reasoning): every invoice already carries its own
+    // built-in payment reminder, so a payment-specific reminder here
+    // would be redundant. This opens the same, real Set Reminder screen
+    // reached from the Home FAB (task-detail.tsx, confirmed identical
+    // target) for any OTHER kind of reminder, pre-filled with this
+    // customer -- which also surfaced and fixed a real, separate bug:
+    // that screen accepted a customer to pre-fill but silently never
+    // applied it, even for its own existing Voice Reminder handoff.
+    { icon: 'alarm-outline', label: 'Set reminder', action: () => { setMenuVisible(false); router.push({ pathname: '/task-detail', params: { draft_customer_id: customer_id, draft_customer_name: customer?.name || '' } }); } },
     // Payment recording subtask 3 (Aug 2026): wired to the new Record
     // Payment screen -- was previously an empty action.
     { icon: 'cash-outline', label: 'Record payment', action: () => { setMenuVisible(false); router.push(`/customer/${customer_id}/record-payment`); } },
@@ -2380,9 +2402,9 @@ export default function CustomerChatScreen() {
     // ===== TEMP SESSION 6C END =====
     { divider: true },
     { icon: 'business-outline', label: 'Business Details', action: () => { setMenuVisible(false); router.push(`/customer/${customer_id}/business-profile`); } },
-    { icon: 'settings-outline', label: 'Set reminder rules', action: () => { setMenuVisible(false); } },
-    { icon: 'language-outline', label: 'Set language', action: () => { setMenuVisible(false); } },
-    { icon: 'options-outline', label: 'Customer preference', action: () => { setMenuVisible(false); } },
+    // { icon: 'settings-outline', label: 'Set reminder rules', action: () => { setMenuVisible(false); } },
+    // { icon: 'language-outline', label: 'Set language', action: () => { setMenuVisible(false); } },
+    // { icon: 'options-outline', label: 'Customer preference', action: () => { setMenuVisible(false); } },
   ];
 
   // ── Loading state ──────────────────────────────────────────

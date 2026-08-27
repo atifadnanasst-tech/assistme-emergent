@@ -85,7 +85,17 @@ export default function TaskDetailScreen() {
     if (draft_description) setDescription(String(draft_description));
     if (draft_due_date) setDueDate(new Date(`${draft_due_date}T00:00:00`));
     setRepeatPattern(typeof draft_repeat_pattern === 'string' ? draft_repeat_pattern : null);
-  }, [isEditMode, draft_title, draft_description, draft_due_date, draft_repeat_pattern]);
+    // Real bug fixed (Aug 2026, found while wiring the chat screen's
+    // "Set Reminder" menu item): draft_customer_id/draft_customer_name
+    // were accepted as params but never actually applied to customer
+    // state anywhere in this file -- meaning even the existing Voice
+    // Reminder "Edit" handoff was silently failing to pre-fill the
+    // customer this whole time. Fixed here rather than only for the
+    // new call site, since both should get the same, correct behavior.
+    if (draft_customer_id && draft_customer_name) {
+      setCustomer({ id: String(draft_customer_id), name: String(draft_customer_name) });
+    }
+  }, [isEditMode, draft_title, draft_description, draft_due_date, draft_repeat_pattern, draft_customer_id, draft_customer_name]);
 
   const [pickerVisible, setPickerVisible] = useState(false);
   const [customerSearch, setCustomerSearch] = useState('');
