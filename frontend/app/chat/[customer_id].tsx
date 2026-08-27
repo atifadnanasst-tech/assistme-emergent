@@ -2349,6 +2349,15 @@ export default function CustomerChatScreen() {
     { divider: true },
     { icon: 'document-text-outline', label: 'Create quote', action: () => { setMenuVisible(false); router.push(`/customer/${customer_id}/quote`); } },
     { icon: 'receipt-outline', label: 'Create invoice', action: () => { setMenuVisible(false); router.push(`/customer/${customer_id}/invoice`); } },
+    // Menu reorder (Aug 2026, Atif's own design): moved up to sit right
+    // below Create invoice, grouping the customer-side document/payment
+    // trio together. Renamed from "Record payment" to "Record payment
+    // received" specifically so there's no ambiguity once the mirrored,
+    // opposite-direction "Record payment made" (supplier side) is wired
+    // in below, once its screen exists (subtask 4 -- not yet, this is
+    // just the reorder/rename step).
+    { icon: 'cash-outline', label: 'Record payment received', action: () => { setMenuVisible(false); router.push(`/customer/${customer_id}/record-payment`); } },
+    { divider: true },
     // Unified Documents surface subtask I (Aug 2026): moved here per
     // Atif's feedback -- logically belongs right next to Create invoice.
     { icon: 'document-text-outline', label: 'Documents', action: () => { setMenuVisible(false); router.push(`/documents?customer_id=${customer_id}`); } },
@@ -2362,9 +2371,6 @@ export default function CustomerChatScreen() {
     // that screen accepted a customer to pre-fill but silently never
     // applied it, even for its own existing Voice Reminder handoff.
     { icon: 'alarm-outline', label: 'Set reminder', action: () => { setMenuVisible(false); router.push({ pathname: '/task-detail', params: { draft_customer_id: customer_id, draft_customer_name: customer?.name || '' } }); } },
-    // Payment recording subtask 3 (Aug 2026): wired to the new Record
-    // Payment screen -- was previously an empty action.
-    { icon: 'cash-outline', label: 'Record payment', action: () => { setMenuVisible(false); router.push(`/customer/${customer_id}/record-payment`); } },
     { divider: true },
     { icon: 'sparkles-outline', label: 'Customer Intelligence', action: () => { setMenuVisible(false); router.push(`/customer/${customer_id}/intelligence`); } },
     { icon: 'logo-whatsapp', label: 'Import WhatsApp History', action: handleWhatsAppImport },
