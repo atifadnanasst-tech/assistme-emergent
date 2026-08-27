@@ -251,7 +251,11 @@ export default function OTPScreen() {
       // back out immediately and the person sees the same alert they'd
       // see on any other relaunch -- no takeover offer on a fresh
       // login for now, that's still deliberately deferred separately.
-      const deviceCheck = await registerDevice();
+      // Pass isFreshLogin=true (Aug 2026): this IS the deliberate,
+      // fresh-login case (Atif's own design review) -- the backend
+      // needs this flag to allow claiming an open seat directly here,
+      // where it must never do so during a silent, automatic check.
+      const deviceCheck = await registerDevice(true);
       if (deviceCheck.shouldSignOut) {
         await authService.clearSession();
         await supabase.auth.signOut({ scope: 'local' });

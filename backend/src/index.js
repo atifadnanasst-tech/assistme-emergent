@@ -1196,7 +1196,7 @@ app.post('/api/auth/sign-out', async (c) => {
           // security concern, worth revisiting later rather than
           // solving under today's time pressure.
           await supabase.from('device_sessions')
-            .update({ status: 'removed', is_primary: false })
+            .update({ is_active: false, is_primary: false })
             .eq('organisation_id', orgId).eq('device_id', deviceId);
         }
       }
@@ -3088,160 +3088,96 @@ app.get('/api/customer/:customer_id/unpaid-invoices', async (c) => {
 // device's session row and enforces the seat limit for genuinely NEW
 // devices only (an existing, already-registered device just gets its
 // last_active_at refreshed, never re-checked against the seat limit).
+// POST /api/devices/register -- called both silently (app launch/resume,
+// via registerDevice()) and at a genuinely fresh login (otp.tsx, right
+// after OTP verification succeeds). These two callers need DIFFERENT
+// behavior, distinguished by the is_fresh_login flag the client sends:
+//
+// SILENT check (is_fresh_login absent/false): NEVER grants access on
+// its own. If this device is already active, just refresh its
+// timestamp. If it's not active, reject -- always, regardless of
+// whether a seat happens to be free. Per Atif's own design review: the
+// automatic background check must never be the thing that lets someone
+// in; only a deliberate human action can do that.
+//
+// FRESH LOGIN (is_fresh_login: true): this IS the deliberate human
+// trigger -- typing a phone number and entering a brand new OTP is
+// real proof of ownership (WhatsApp's own model). If a seat is free,
+// claim it immediately, no confirmation needed. If no seat is free,
+// offer an explicit takeover (force_takeover) rather than silently
+// failing or silently bumping someone.
 app.post('/api/devices/register', async (c) => {
   try {
     const auth = await authenticateChat(c);
     if (!auth) return c.json({ error: 'unauthorized' }, 401);
     const { organisationId, userId } = auth;
     const body = await c.req.json();
-    const { device_id, device_name, force_takeover } = body;
+    const { device_id, device_name, force_takeover, is_fresh_login } = body;
     if (!device_id) return c.json({ error: 'missing_device_id' }, 400);
 
     const { data: existing } = await supabase
-      .from('device_sessions').select('id, status')
+      .from('device_sessions').select('id, is_active')
       .eq('organisation_id', organisationId).eq('device_id', device_id).maybeSingle();
 
     const { data: sub } = await supabase.from('subscriptions')
       .select('seats_purchased').eq('organisation_id', organisationId).maybeSingle();
     const seatsAllowed = sub?.seats_purchased || 1;
 
-    // Only 'active' rows count toward the seat limit -- 'blocked' rows
-    // exist purely for visibility (Aug 2026, Atif's explicit ask:
-    // "allowing is one thing, recognizing is another. If it is not
-    // recognizing, then how will it bar the login"). A rejected device
-    // previously left zero trace anywhere.
     const { count: activeCount } = await supabase
       .from('device_sessions').select('*', { count: 'exact', head: true })
-      .eq('organisation_id', organisationId).eq('status', 'active');
+      .eq('organisation_id', organisationId).eq('is_active', true);
 
     if (existing) {
-      if (existing.status === 'active') {
+      if (existing.is_active) {
         await supabase.from('device_sessions')
           .update({ last_active_at: new Date().toISOString() })
           .eq('id', existing.id);
         return c.json({ registered: true, new_device: false });
       }
-      // Real gap fixed (Aug 2026, found via Atif's live testing): a
-      // REMOVED device must NEVER auto-promote back to active on a
-      // silent app relaunch (registerDevice() never sends
-      // force_takeover, so this still fully applies there) -- but a
-      // FRESH OTP LOGIN is exactly as strong proof of ownership as it
-      // is for a merely-'blocked' device, and the original design
-      // treated 'removed' as an unconditional dead end even then. That
-      // meant the actual owner, logging in fresh with their own OTP on
-      // a device they'd previously removed, would be permanently
-      // locked out of ever using that install again -- clearly wrong,
-      // since a takeover is exactly what a fresh OTP should be able to
-      // do regardless of whether the device was blocked or removed.
-      if (existing.status === 'removed') {
-        // Real gap fixed (Aug 2026, found via Atif's live testing): a
-        // removed device with a genuinely FREE seat available (e.g. a
-        // seat was just purchased) should rejoin directly, exactly
-        // like a merely-blocked device does -- there's nothing to
-        // "take over" when no one needs to be bumped. The takeover
-        // confirmation should only ever appear when someone would
-        // actually be displaced. Also fixes a related bug this exposed:
-        // the old code always set is_primary=true on any promotion,
-        // even a plain rejoin into open capacity -- that would create
-        // TWO primary devices at once alongside the org's existing,
-        // untouched primary. Primary only transfers when a real bump
-        // happens below.
-        if ((activeCount || 0) < seatsAllowed) {
-          await supabase.from('device_sessions')
-            .update({ status: 'active', last_active_at: new Date().toISOString() })
-            .eq('id', existing.id);
-          return c.json({ registered: true, new_device: false, promoted: true });
-        }
-        if (force_takeover) {
-          const { data: toBump } = await supabase
-            .from('device_sessions').select('id')
-            .eq('organisation_id', organisationId).eq('status', 'active')
-            .order('last_active_at', { ascending: true }).limit(1).maybeSingle();
-          if (toBump) {
-            await supabase.from('device_sessions')
-              .update({ status: 'removed', is_primary: false })
-              .eq('id', toBump.id);
-          }
-          await supabase.from('device_sessions')
-            .update({ status: 'active', is_primary: true, last_active_at: new Date().toISOString() })
-            .eq('id', existing.id);
-          return c.json({ registered: true, new_device: false, promoted: true });
-        }
-        const { data: blockerDevice } = await supabase
-          .from('device_sessions').select('device_name')
-          .eq('organisation_id', organisationId).eq('status', 'active')
-          .order('last_active_at', { ascending: true }).limit(1).maybeSingle();
+
+      // Not currently active. A silent check NEVER grants access here,
+      // full stop -- this is the exact rule that was missing before.
+      if (!is_fresh_login) {
         await supabase.from('device_sessions')
           .update({ last_active_at: new Date().toISOString() })
           .eq('id', existing.id);
-        return c.json({
-          registered: false, error: 'device_removed',
-          existing_device_name: blockerDevice?.device_name || null,
-        }, 403);
+        return c.json({ registered: false, error: 'device_not_active' }, 403);
       }
-      // Existing but blocked -- re-check in case a seat has since freed
-      // up (another device removed, or a seat purchased) and promote it.
+
+      // Fresh login: claim a free seat immediately, no confirmation.
       if ((activeCount || 0) < seatsAllowed) {
         await supabase.from('device_sessions')
-          .update({ status: 'active', last_active_at: new Date().toISOString() })
+          .update({ is_active: true, last_active_at: new Date().toISOString() })
           .eq('id', existing.id);
         return c.json({ registered: true, new_device: false, promoted: true });
       }
+
+      // No free seat -- offer an explicit takeover. Primary transfers
+      // here since a fresh OTP is the strongest proof of ownership,
+      // not whoever happened to register first historically.
+      if (force_takeover) {
+        const { data: toBump } = await supabase
+          .from('device_sessions').select('id')
+          .eq('organisation_id', organisationId).eq('is_active', true)
+          .order('last_active_at', { ascending: true }).limit(1).maybeSingle();
+        if (toBump) {
+          await supabase.from('device_sessions')
+            .update({ is_active: false, is_primary: false })
+            .eq('id', toBump.id);
+        }
+        await supabase.from('device_sessions')
+          .update({ is_active: true, is_primary: true, last_active_at: new Date().toISOString() })
+          .eq('id', existing.id);
+        return c.json({ registered: true, new_device: false, promoted: true });
+      }
+
+      const { data: blockerDevice } = await supabase
+        .from('device_sessions').select('device_name')
+        .eq('organisation_id', organisationId).eq('is_active', true)
+        .order('last_active_at', { ascending: true }).limit(1).maybeSingle();
       await supabase.from('device_sessions')
         .update({ last_active_at: new Date().toISOString() })
         .eq('id', existing.id);
-      return c.json({
-        registered: false, error: 'seat_limit_reached',
-        seats_purchased: seatsAllowed, active_devices: activeCount || 0,
-      }, 403);
-    }
-
-    // Genuinely new device.
-    if ((activeCount || 0) >= seatsAllowed) {
-      // Device takeover (Aug 2026, Atif's design): a fresh OTP login is
-      // real proof of phone-number ownership -- WhatsApp's own model.
-      // When explicitly confirmed by the person logging in (never
-      // silent, never automatic), the least-recently-active existing
-      // device is bumped and this new device takes over BOTH the seat
-      // AND primary status. Primary must transfer here, not just the
-      // seat: whoever most recently proved ownership via a fresh OTP
-      // should always hold primary, not whoever happened to register
-      // first historically -- otherwise a stolen phone that registered
-      // first could keep primary protection even after the real owner
-      // takes their number back.
-      if (force_takeover) {
-        const { data: toBump } = await supabase
-          .from('device_sessions').select('id, device_name')
-          .eq('organisation_id', organisationId).eq('status', 'active')
-          .order('last_active_at', { ascending: true }).limit(1).maybeSingle();
-
-        if (toBump) {
-          await supabase.from('device_sessions')
-            .update({ status: 'removed', is_primary: false })
-            .eq('id', toBump.id);
-        }
-
-        await supabase.from('device_sessions').insert({
-          organisation_id: organisationId, user_id: userId,
-          device_id, device_name: device_name || 'Unknown device',
-          status: 'active', is_primary: true,
-        });
-
-        return c.json({ registered: true, new_device: true, took_over_from: toBump?.device_name || null });
-      }
-
-      // Not a takeover -- reject, but tell the frontend which existing
-      // device is holding the seat so it can offer the takeover prompt.
-      const { data: blockerDevice } = await supabase
-        .from('device_sessions').select('device_name')
-        .eq('organisation_id', organisationId).eq('status', 'active')
-        .order('last_active_at', { ascending: true }).limit(1).maybeSingle();
-
-      await supabase.from('device_sessions').insert({
-        organisation_id: organisationId, user_id: userId,
-        device_id, device_name: device_name || 'Unknown device',
-        status: 'blocked',
-      });
       return c.json({
         registered: false, error: 'seat_limit_reached',
         seats_purchased: seatsAllowed, active_devices: activeCount || 0,
@@ -3249,14 +3185,57 @@ app.post('/api/devices/register', async (c) => {
       }, 403);
     }
 
-    // First-ever device for this org becomes primary automatically.
-    // Every subsequent ordinary login (within available seats) joins as
-    // a regular, removable device -- primary only ever transfers again
-    // via an explicit takeover above, never on a routine additional login.
+    // Genuinely new device (no row at all for this device_id).
+    if ((activeCount || 0) >= seatsAllowed) {
+      if (is_fresh_login && force_takeover) {
+        const { data: toBump } = await supabase
+          .from('device_sessions').select('id, device_name')
+          .eq('organisation_id', organisationId).eq('is_active', true)
+          .order('last_active_at', { ascending: true }).limit(1).maybeSingle();
+        if (toBump) {
+          await supabase.from('device_sessions')
+            .update({ is_active: false, is_primary: false })
+            .eq('id', toBump.id);
+        }
+        await supabase.from('device_sessions').insert({
+          organisation_id: organisationId, user_id: userId,
+          device_id, device_name: device_name || 'Unknown device',
+          is_active: true, is_primary: true,
+        });
+        return c.json({ registered: true, new_device: true, took_over_from: toBump?.device_name || null });
+      }
+
+      const { data: blockerDevice } = await supabase
+        .from('device_sessions').select('device_name')
+        .eq('organisation_id', organisationId).eq('is_active', true)
+        .order('last_active_at', { ascending: true }).limit(1).maybeSingle();
+
+      // A silent check hitting a genuinely new, never-registered device
+      // is a rare edge case (e.g. local device_id storage was reset
+      // while the auth session stayed valid) -- reject without
+      // inserting anything either way, matching "never grant access
+      // silently."
+      if (is_fresh_login) {
+        await supabase.from('device_sessions').insert({
+          organisation_id: organisationId, user_id: userId,
+          device_id, device_name: device_name || 'Unknown device',
+          is_active: false,
+        });
+      }
+      return c.json({
+        registered: false, error: 'seat_limit_reached',
+        seats_purchased: seatsAllowed, active_devices: activeCount || 0,
+        existing_device_name: blockerDevice?.device_name || null,
+      }, 403);
+    }
+
+    // Seat available -- first-ever device for this org becomes primary
+    // automatically; every subsequent login within available seats
+    // joins as a regular, removable device.
     await supabase.from('device_sessions').insert({
       organisation_id: organisationId, user_id: userId,
       device_id, device_name: device_name || 'Unknown device',
-      status: 'active', is_primary: (activeCount || 0) === 0,
+      is_active: true, is_primary: (activeCount || 0) === 0,
     });
 
     return c.json({ registered: true, new_device: true });
@@ -3279,7 +3258,7 @@ app.get('/api/devices', async (c) => {
 
     const { data: devices } = await supabase
       .from('device_sessions')
-      .select('id, device_id, device_name, last_active_at, created_at, status, is_primary')
+      .select('id, device_id, device_name, last_active_at, created_at, is_active, is_primary')
       .eq('organisation_id', organisationId)
       .order('last_active_at', { ascending: false });
 
@@ -3287,23 +3266,23 @@ app.get('/api/devices', async (c) => {
       .select('seats_purchased').eq('organisation_id', organisationId).maybeSingle();
 
     const allDevices = devices || [];
-    const activeDevices = allDevices.filter(d => d.status === 'active');
-    // Blocked-device visibility (Aug 2026, Atif's real-world testing):
+    const activeDevices = allDevices.filter(d => d.is_active);
+    // Not-active visibility (Aug 2026, Atif's real-world testing):
     // "allowing is one thing, recognizing is another. If it is not
-    // recognizing, then how will it bar the login." A device rejected
-    // for exceeding the seat limit is now recorded, not silently
+    // recognizing, then how will it bar the login." A device that
+    // couldn't get in, or was removed, is now recorded, not silently
     // discarded -- shown separately, never counted toward the seat
-    // limit itself.
-    const blockedDevices = allDevices.filter(d => d.status === 'blocked');
+    // limit itself. Response shape kept as blocked_devices/"BLOCKED
+    // ATTEMPTS" for the frontend even though the underlying model no
+    // longer distinguishes blocked from removed (Aug 2026 consolidation,
+    // Atif's own design review) -- it's still an accurate, simple
+    // description from the owner's point of view: devices not currently
+    // logged in.
+    const blockedDevices = allDevices.filter(d => !d.is_active);
 
-    // Primary device (Aug 2026): now a real, STORED flag rather than
-    // computed live from earliest created_at. Updated after Atif's
-    // device-takeover design -- primary must be able to actually
-    // TRANSFER to a new device during a takeover (which always has a
-    // later created_at than what it's replacing), so "earliest wins"
-    // could never reflect a takeover correctly. Set at registration
-    // (first-ever device for an org) or during a confirmed takeover
-    // (see the register endpoint) -- never derived here.
+    // Primary device: a real, stored flag, not derived here. Set at
+    // registration (first-ever device for an org) or during a
+    // confirmed takeover (see the register endpoint).
     return c.json({
       devices: activeDevices,
       blocked_devices: blockedDevices,
@@ -3358,14 +3337,15 @@ app.delete('/api/devices/:device_session_id', async (c) => {
       return c.json({ error: 'cannot_remove_primary_device' }, 403);
     }
 
-    // Phase 2 enforcement (Aug 2026): soft-delete via status='removed'
-    // rather than an actual row deletion. Unlike 'blocked' (which
-    // SHOULD get back in automatically if a seat frees up), a removed
-    // device must never silently rejoin just because a seat opened up
-    // -- confirmed with Atif as a deliberate, explicit decision. It
-    // only returns if the owner deliberately re-adds it.
+    // Soft-delete via is_active=false rather than an actual row
+    // deletion. Per Atif's own design review, this device now NEVER
+    // silently rejoins on its own -- the silent background check will
+    // always reject it regardless of seat availability, and it can
+    // only become active again via a genuinely fresh, deliberate login
+    // (which is free to claim an open seat immediately, no separate
+    // "re-add" action required).
     const { error } = await supabase.from('device_sessions')
-      .update({ status: 'removed' })
+      .update({ is_active: false, is_primary: false })
       .eq('id', deviceSessionId).eq('organisation_id', organisationId);
 
     if (error) return c.json({ error: 'delete_failed' }, 500);

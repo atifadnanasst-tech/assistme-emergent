@@ -71,7 +71,7 @@ function getDefaultDeviceName(): string {
  */
 let seatLimitAlertShownThisSession = false;
 
-export async function registerDevice(): Promise<{ shouldSignOut: boolean; reason?: string }> {
+export async function registerDevice(isFreshLogin: boolean = false): Promise<{ shouldSignOut: boolean; reason?: string }> {
   try {
     const deviceId = await getOrCreateDeviceId();
     const token = await authService.getAccessToken();
@@ -80,7 +80,15 @@ export async function registerDevice(): Promise<{ shouldSignOut: boolean; reason
     const res = await fetch(`${backendUrl}/api/devices/register`, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ device_id: deviceId, device_name: getDefaultDeviceName() }),
+      // is_fresh_login (Aug 2026, consolidation after Atif's design
+      // review): the backend now needs this to distinguish a silent,
+      // automatic check (must NEVER grant access on its own) from a
+      // genuinely fresh login (a deliberate human action -- typing a
+      // phone number and a brand new OTP -- which SHOULD freely claim
+      // an open seat with no extra confirmation needed). Callers at app
+      // launch/resume pass isFreshLogin=false (the default); otp.tsx
+      // passes true right after OTP verification succeeds.
+      body: JSON.stringify({ device_id: deviceId, device_name: getDefaultDeviceName(), is_fresh_login: isFreshLogin }),
     });
 
     if (res.status !== 403) return { shouldSignOut: false };
@@ -88,9 +96,14 @@ export async function registerDevice(): Promise<{ shouldSignOut: boolean; reason
     const data = await res.json().catch(() => null);
     if (!data || !data.error) return { shouldSignOut: false };
 
-    if (data.error === 'device_removed') {
-      Alert.alert('Device Removed', 'This device was removed from your account. Please contact the account owner if this is unexpected.');
-      return { shouldSignOut: true, reason: 'device_removed' };
+    // 'device_not_active' replaces the old 'device_removed'/'blocked'
+    // distinction (Aug 2026 consolidation, Atif's own design review) --
+    // both behaved identically (neither should ever silently reactivate
+    // on its own), so they're now a single is_active flag on the
+    // backend with one corresponding error code here.
+    if (data.error === 'device_not_active') {
+      Alert.alert('Device Not Active', 'This device is not currently active on your account. Please contact the account owner if this is unexpected.');
+      return { shouldSignOut: true, reason: 'device_not_active' };
     }
 
     if (data.error === 'seat_limit_reached') {
