@@ -2352,11 +2352,18 @@ export default function CustomerChatScreen() {
     // Menu reorder (Aug 2026, Atif's own design): moved up to sit right
     // below Create invoice, grouping the customer-side document/payment
     // trio together. Renamed from "Record payment" to "Record payment
-    // received" specifically so there's no ambiguity once the mirrored,
-    // opposite-direction "Record payment made" (supplier side) is wired
-    // in below, once its screen exists (subtask 4 -- not yet, this is
-    // just the reorder/rename step).
+    // received" specifically so there's no ambiguity now that the
+    // mirrored, opposite-direction "Record payment made" (supplier
+    // side) sits right below.
     { icon: 'cash-outline', label: 'Record payment received', action: () => { setMenuVisible(false); router.push(`/customer/${customer_id}/record-payment`); } },
+    { divider: true },
+    // Purchase Bill / Supplier Payment subtask 4 (Aug 2026, Atif's own
+    // design): the mirror-image pair of Create invoice / Record payment
+    // received, for the reverse direction of the same customer-or-
+    // supplier relationship. "Create purchase bill" now wired -- its
+    // screen exists (subtask 2). "Record payment made" still points to
+    // its screen once subtask 3 builds it.
+    { icon: 'cart-outline', label: 'Create purchase bill', action: () => { setMenuVisible(false); router.push(`/customer/${customer_id}/purchase-bill`); } },
     { divider: true },
     // Unified Documents surface subtask I (Aug 2026): moved here per
     // Atif's feedback -- logically belongs right next to Create invoice.
