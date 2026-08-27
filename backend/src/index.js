@@ -8133,6 +8133,33 @@ app.post('/api/purchase-bills', async (c) => {
       return c.json({ error: result.error || 'failed' }, 400);
     }
 
+    // Real gap fixed (Aug 2026, found via Atif's live testing): this
+    // endpoint originally only called recordPurchaseBill() and returned
+    // -- missing the confirmation message Spark's own create_purchase_bill
+    // case already posts to chat after the exact same service call.
+    // Without this, the manual form left zero trace in the conversation
+    // (no audit-log-style confirmation), and -- since the chat screen's
+    // realtime handler only re-fetches on a NEW message arriving -- the
+    // header balance also never got a chance to refresh. Matches Spark's
+    // own message shape exactly (owner_only visibility, system_alert type).
+    try {
+      const { data: pbConv } = await supabase
+        .from('conversations').select('id')
+        .eq('organisation_id', organisationId).eq('entity_type', 'customer')
+        .eq('entity_id', customer_id).eq('status', 'active').maybeSingle();
+      if (pbConv) {
+        await supabase.from('messages').insert({
+          organisation_id: organisationId, conversation_id: pbConv.id,
+          role: 'system',
+          content: `✓ Purchase bill ${result.bill_number} recorded — ${result.entity_name || ''} · ₹${(result.total_amount || 0).toLocaleString('en-IN')} due ${result.due_date || ''}`,
+          metadata: { sender_type: 'system', visibility: 'owner_only', message_type: 'system_alert', read_by_owner: true, preview_text: `Purchase bill ${result.bill_number} recorded` },
+          tokens_input: 0, tokens_output: 0,
+        });
+      }
+    } catch (msgErr) {
+      console.warn('[POST /api/purchase-bills] confirmation message failed (non-fatal):', msgErr.message);
+    }
+
     return c.json({
       bill_id: result.bill_id,
       bill_number: result.bill_number,
