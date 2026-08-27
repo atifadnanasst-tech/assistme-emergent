@@ -21,6 +21,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { authService } from '../../lib/auth';
 import { supabase } from '../../lib/supabase';
 import RazorpayCheckout from 'react-native-razorpay';
+import { getOrCreateDeviceId } from '../../lib/deviceId';
 
 interface DeviceSession {
   id: string;
@@ -56,6 +57,7 @@ export default function LinkedDevices() {
   const [savingRename, setSavingRename] = useState(false);
   const [removingId, setRemovingId] = useState<string | null>(null);
   const [purchasingSeat, setPurchasingSeat] = useState(false);
+  const [thisDeviceId, setThisDeviceId] = useState<string | null>(null);
 
   const getToken = async () => authService.getAccessToken();
 
@@ -154,7 +156,14 @@ export default function LinkedDevices() {
     }
   };
 
-  useEffect(() => { loadDevices(); }, []);
+  useEffect(() => {
+    loadDevices();
+    // "This Device" label (Aug 2026, Atif's suggestion) -- lets the
+    // owner immediately identify which row belongs to the phone
+    // they're currently looking at, rather than guessing from the
+    // generic default name.
+    getOrCreateDeviceId().then(setThisDeviceId).catch(() => {});
+  }, []);
 
   const openRename = (device: DeviceSession) => {
     setRenamingDevice(device);
@@ -205,6 +214,19 @@ export default function LinkedDevices() {
       });
       if (res.ok) {
         setDevices(prev => prev.filter(d => d.id !== device.id));
+        // Self-delete signs out immediately (Aug 2026, Atif's real-world
+        // testing/suggestion) -- previously, deleting your OWN row only
+        // took effect the next time this device happened to check in
+        // (relaunch or resume from background, itself throttled to once
+        // per 30s), which looked broken since the app just kept working
+        // as if nothing happened. This device already knows, at this
+        // exact moment, that it just removed itself -- no reason to
+        // wait for a future check to notice what it already knows.
+        if (device.device_id === thisDeviceId) {
+          await authService.clearSession();
+          await supabase.auth.signOut();
+          router.replace('/login');
+        }
       } else {
         Alert.alert('Error', 'Could not remove this device');
       }
@@ -242,10 +264,13 @@ export default function LinkedDevices() {
             devices.map(device => (
               <View key={device.id} style={s.deviceRow}>
                 <View style={{ flex: 1 }}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                     <Text style={s.deviceName}>{device.device_name}</Text>
                     {device.is_primary && (
                       <View style={s.primaryBadge}><Text style={s.primaryBadgeText}>PRIMARY</Text></View>
+                    )}
+                    {device.device_id === thisDeviceId && (
+                      <View style={s.thisDeviceBadge}><Text style={s.thisDeviceBadgeText}>THIS DEVICE</Text></View>
                     )}
                   </View>
                   <Text style={s.deviceMeta}>{relativeTime(device.last_active_at)}</Text>
@@ -344,6 +369,8 @@ const s = StyleSheet.create({
   primaryBadge: { backgroundColor: '#E8F5E9', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
   blockedRow: { opacity: 0.6, borderLeftWidth: 3, borderLeftColor: '#D32F2F' },
   primaryBadgeText: { fontSize: 9, fontWeight: '700', color: '#075E54', letterSpacing: 0.3 },
+  thisDeviceBadge: { backgroundColor: '#E3F2FD', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
+  thisDeviceBadgeText: { fontSize: 9, fontWeight: '700', color: '#1565C0', letterSpacing: 0.3 },
   deviceName: { fontSize: 15, fontWeight: '600', color: '#1A1A1A' },
   deviceMeta: { fontSize: 12, color: '#999', marginTop: 2 },
   iconBtn: { padding: 8, marginLeft: 4 },
