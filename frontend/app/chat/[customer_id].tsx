@@ -2446,12 +2446,24 @@ export default function CustomerChatScreen() {
             )}
           </View>
 
-          <TouchableOpacity style={styles.headerBtn}>
+          <TouchableOpacity style={styles.headerBtn} onPress={() => {
+            // Real bug fixed (Aug 2026, found via Atif's live testing):
+            // this button had no onPress at all -- a completely dead
+            // tap target that looked fully functional. Wired to place
+            // an actual phone call, reusing the exact same phone-
+            // normalization logic already proven elsewhere on this
+            // screen (WhatsApp deep-linking).
+            const rawPhone = customer?.phone?.replace(/[^0-9]/g, '') || '';
+            if (!rawPhone) return;
+            Linking.openURL(`tel:${rawPhone}`).catch(() => {});
+          }}>
             <Ionicons name="call-outline" size={20} color="#FFF" />
           </TouchableOpacity>
-          <TouchableOpacity style={styles.headerBtn}>
-            <Ionicons name="list-outline" size={20} color="#FFF" />
-          </TouchableOpacity>
+          {/* List icon deliberately hidden for pre-v1 (Aug 2026, Atif's
+              explicit call) -- was also a dead button with no onPress;
+              rather than wire up unclear intent under time pressure,
+              hidden until its purpose is defined and built properly in
+              a later pass. */}
           {renderHealthDots()}
           <TouchableOpacity style={styles.headerBtn} onPress={() => setMenuVisible(true)}>
             <Ionicons name="ellipsis-vertical" size={20} color="#FFF" />
@@ -3327,7 +3339,34 @@ export default function CustomerChatScreen() {
                   <Text style={styles.confirmAllText}>Confirm All</Text>
                 )}
               </TouchableOpacity>
-              <TouchableOpacity style={styles.editMasterBtn}>
+              <TouchableOpacity style={styles.editMasterBtn} onPress={() => {
+                // Real bug fixed (Aug 2026, found via Atif's live
+                // testing): this button had no onPress at all -- a
+                // completely dead tap target. Wired to reuse the exact
+                // same navigation logic already proven in the per-card
+                // "Edit" link above (which Atif confirmed works
+                // correctly): finds the invoice/quote action in this
+                // preview and routes to the matching screen with the
+                // same pre-filled data. The invoice/quote is the one
+                // primary, user-facing document in a preview -- any
+                // accompanying reminder/delivery actions are secondary,
+                // derived from its own date fields, so editing those
+                // individually via their own per-card Edit link (which
+                // opens the date-edit sheet) remains the right place
+                // for that, not this master button.
+                const docAction = previewActions.find((a: any) => a.action_type === 'create_invoice' || a.action_type === 'create_quote');
+                if (!docAction) return;
+                setPreviewVisible(false);
+                const p = docAction.parameters || {};
+                const params: Record<string, string> = {};
+                if (p.items) params.items = JSON.stringify(p.items);
+                if (p.due_date) params.due_date = p.due_date;
+                if (p.amount) params.amount = String(p.amount);
+                if (previewDraftId) params.draft_id = previewDraftId;
+                if (docAction.action_id) params.action_id = docAction.action_id;
+                const editTarget = docAction.action_type === 'create_quote' ? 'quote' : 'invoice';
+                router.push({ pathname: `/customer/${customer_id}/${editTarget}`, params });
+              }}>
                 <Text style={styles.editMasterText}>Edit</Text>
               </TouchableOpacity>
             </View>

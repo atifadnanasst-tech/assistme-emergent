@@ -5833,7 +5833,19 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
           else if (key === 'payment_behavior') parts.push(`Payment behavior: ${val}`);
           else if (key === 'avg_payment_days') parts.push(`${customer.name} usually pays within ${val} days`);
           else if (key.includes('preferred')) parts.push(`Preferred: ${val}`);
-          else parts.push(`${key.replace(/_/g, ' ')}: ${val}`);
+          // Real bug fixed (Aug 2026, found via Atif's screenshot):
+          // this catch-all used to dump ANY unrecognized memory_key
+          // straight onto the owner's screen as raw "key: value" text --
+          // confirmed live examples include stale, orphaned keys
+          // (payment_delay, current_complaint, last_payment_amount,
+          // last_payment_date) that no current code even writes anymore,
+          // meaning they can never be trusted as up to date. One of them
+          // showed a frozen "owes ₹3,000" sitting right next to the
+          // real, correct "₹38,369 pending" in the header -- exactly
+          // the "half-cooked information the owner will start
+          // questioning" Atif flagged. Per his own principle: showing
+          // nothing is better than showing something wrong. Unrecognized
+          // keys are now silently skipped rather than surfaced.
         }
         if (parts.length > 0) aiInsight = parts.join('. ') + '.';
       }
