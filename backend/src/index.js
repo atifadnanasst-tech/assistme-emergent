@@ -1163,8 +1163,46 @@ app.post('/api/auth/sign-out', async (c) => {
       return c.json({ error: 'unauthorized' }, 401);
     }
 
-    // Validate and sign out
-    await supabase.auth.admin.signOut(token);
+    // Real, high-impact bug fixed (Aug 2026, found via Atif's live
+    // multi-device testing): admin.signOut(token) with no scope
+    // defaults to GLOBAL -- this is the app's own main "Log Out" button
+    // (home.tsx's handleLogout), meaning logging out on ONE device was
+    // silently signing out every device sharing this login. 'local'
+    // limits it to this one session's own token.
+    await supabase.auth.admin.signOut(token, 'local');
+
+    // Frees the seat on deliberate logout (Aug 2026, Atif's own
+    // earlier-predicted gap: "with logout will his counter become
+    // zero"). Previously only the manual "Remove Device" button ever
+    // marked a device removed -- an ordinary Log Out never told the
+    // backend anything, so the seat stayed occupied indefinitely even
+    // after the person genuinely left. Best-effort: accepts an optional
+    // device_id from the client and marks that device's row removed;
+    // never blocks the sign-out itself if this fails or is omitted.
+    try {
+      const body = await c.req.json().catch(() => ({}));
+      const deviceId = body?.device_id;
+      if (deviceId) {
+        const { data: userData } = await supabase.auth.getUser(token);
+        const orgId = userData?.user?.user_metadata?.organisation_id;
+        if (orgId) {
+          // Simple, predictable rule: an ordinary logout marks this
+          // device removed and clears is_primary, exactly matching the
+          // manual "Remove Device" button's own behavior -- this is
+          // just self-initiated instead of someone else doing it. If
+          // this happened to be the primary device, the org may
+          // briefly have no primary until a fresh login claims it
+          // again -- an acceptable, minor edge case for now, not a
+          // security concern, worth revisiting later rather than
+          // solving under today's time pressure.
+          await supabase.from('device_sessions')
+            .update({ status: 'removed', is_primary: false })
+            .eq('organisation_id', orgId).eq('device_id', deviceId);
+        }
+      }
+    } catch (deviceErr) {
+      console.warn('[POST /api/auth/sign-out] device cleanup failed (non-fatal):', deviceErr.message);
+    }
 
     return c.json({ success: true });
   } catch (error) {
@@ -3096,17 +3134,33 @@ app.post('/api/devices/register', async (c) => {
       // since a takeover is exactly what a fresh OTP should be able to
       // do regardless of whether the device was blocked or removed.
       if (existing.status === 'removed') {
+        // Real gap fixed (Aug 2026, found via Atif's live testing): a
+        // removed device with a genuinely FREE seat available (e.g. a
+        // seat was just purchased) should rejoin directly, exactly
+        // like a merely-blocked device does -- there's nothing to
+        // "take over" when no one needs to be bumped. The takeover
+        // confirmation should only ever appear when someone would
+        // actually be displaced. Also fixes a related bug this exposed:
+        // the old code always set is_primary=true on any promotion,
+        // even a plain rejoin into open capacity -- that would create
+        // TWO primary devices at once alongside the org's existing,
+        // untouched primary. Primary only transfers when a real bump
+        // happens below.
+        if ((activeCount || 0) < seatsAllowed) {
+          await supabase.from('device_sessions')
+            .update({ status: 'active', last_active_at: new Date().toISOString() })
+            .eq('id', existing.id);
+          return c.json({ registered: true, new_device: false, promoted: true });
+        }
         if (force_takeover) {
-          if ((activeCount || 0) >= seatsAllowed) {
-            const { data: toBump } = await supabase
-              .from('device_sessions').select('id')
-              .eq('organisation_id', organisationId).eq('status', 'active')
-              .order('last_active_at', { ascending: true }).limit(1).maybeSingle();
-            if (toBump) {
-              await supabase.from('device_sessions')
-                .update({ status: 'removed', is_primary: false })
-                .eq('id', toBump.id);
-            }
+          const { data: toBump } = await supabase
+            .from('device_sessions').select('id')
+            .eq('organisation_id', organisationId).eq('status', 'active')
+            .order('last_active_at', { ascending: true }).limit(1).maybeSingle();
+          if (toBump) {
+            await supabase.from('device_sessions')
+              .update({ status: 'removed', is_primary: false })
+              .eq('id', toBump.id);
           }
           await supabase.from('device_sessions')
             .update({ status: 'active', is_primary: true, last_active_at: new Date().toISOString() })

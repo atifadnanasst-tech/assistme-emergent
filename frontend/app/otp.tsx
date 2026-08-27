@@ -14,7 +14,7 @@ import { useRouter, useLocalSearchParams, useSegments } from 'expo-router';
 import { supabase } from '../lib/supabase';
 import { authService } from '../lib/auth';
 import { useAuth } from '../contexts/AuthContext';
-import { registerDeviceAtLogin } from '../lib/deviceId';
+import { registerDevice } from '../lib/deviceId';
 
 const TIMER_DURATION = 28; // seconds
 
@@ -237,17 +237,29 @@ export default function OTPScreen() {
 
       console.log('✅ [OTP] Supabase session set in memory');
 
-      // ROLLED BACK (Aug 2026, emergency): the device-takeover check
-      // that lived here caused a real lockout during live testing --
-      // exact mechanism not yet confirmed, but the symptom (correct OTP,
-      // repeatedly bounced back to the phone-number screen, no new
-      // backend log entries) matches an uncaught client-side exception
-      // somewhere in this block being swallowed by the outer catch,
-      // which sets an error and stops loading but never resolves
-      // isAuthenticated either way. Restoring the simple, proven,
-      // pre-takeover flow immediately to restore access; the takeover
-      // feature will be re-investigated and re-applied separately,
-      // without the pressure of anyone being locked out while doing so.
+      // Real gap fixed (Aug 2026, found via Atif's live testing): the
+      // earlier emergency rollback removed the entire device check at
+      // login, not just the risky takeover-confirmation prompt --
+      // meaning a fresh login stopped enforcing the seat limit and
+      // stopped registering the device at all, only checking again on
+      // the NEXT app relaunch. Restoring the basic check here using
+      // registerDevice() -- the exact same simple, silent, already-
+      // proven function AuthContext.tsx's own checkAuth() and resume
+      // listener already call successfully, with no confirmation-
+      // prompt/Alert.alert() flow (that's the part that caused the
+      // earlier hang). If this device is blocked or removed, it signs
+      // back out immediately and the person sees the same alert they'd
+      // see on any other relaunch -- no takeover offer on a fresh
+      // login for now, that's still deliberately deferred separately.
+      const deviceCheck = await registerDevice();
+      if (deviceCheck.shouldSignOut) {
+        await authService.clearSession();
+        await supabase.auth.signOut({ scope: 'local' });
+        setError('This device is not authorized. Please contact the account owner.');
+        setLoading(false);
+        return;
+      }
+
       console.log('🔐 [OTP] Setting authentication state to true');
       setIsAuthenticated(true);
       console.log('✅ [OTP] Authentication complete - guard will handle navigation');

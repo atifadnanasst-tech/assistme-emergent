@@ -22,6 +22,7 @@ import { authService } from '../lib/auth';
 import { getLanguageLabel, DEFAULT_LANGUAGE } from '../constants/languages';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { getOrCreateDeviceId } from '../lib/deviceId';
 let Contacts: any = null;
 try { Contacts = require('expo-contacts'); } catch { Contacts = null; }
 
@@ -495,16 +496,28 @@ export default function HomeScreen() {
       const token = await authService.getAccessToken();
       if (token) {
         const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+        // Real, high-impact bug fixed (Aug 2026, found via Atif's live
+        // multi-device testing): this is the app's own main Log Out
+        // button, used far more than any device-specific screen. Now
+        // sends device_id so the backend can free this device's seat
+        // (previously an ordinary logout told the backend nothing at
+        // all, leaving the seat occupied indefinitely even after the
+        // person genuinely left).
+        const deviceId = await getOrCreateDeviceId().catch(() => null);
         await fetch(`${backendUrl}/api/auth/sign-out`, {
           method: 'POST',
-          headers: { 'Authorization': `Bearer ${token}` },
+          headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ device_id: deviceId }),
         });
       }
     } catch (err) {
       console.error('Logout error:', err);
     } finally {
       await authService.clearSession();
-      await supabase.auth.signOut();
+      // Real bug fixed (Aug 2026): signOut() with no scope defaults to
+      // GLOBAL -- was signing out every device sharing this login, not
+      // just this one, every single time anyone tapped Log Out.
+      await supabase.auth.signOut({ scope: 'local' });
       setIsAuthenticated(false);
       router.replace('/login');
     }
@@ -927,7 +940,7 @@ export default function HomeScreen() {
         <Ionicons name={fabExpanded ? 'close' : 'add'} size={28} color="#FFFFFF" />
       </TouchableOpacity>
 
-      <Text style={{ textAlign: "center", fontSize: 10, color: "#CCC", paddingVertical: 2 }}>v1.3.502</Text>
+      <Text style={{ textAlign: "center", fontSize: 10, color: "#CCC", paddingVertical: 2 }}>v1.3.503</Text>
       {/* Bottom Navigation SafeAreaView */}
       <SafeAreaView style={styles.bottomNavSafeArea} edges={['bottom']}>
         <View style={styles.bottomNav}>
