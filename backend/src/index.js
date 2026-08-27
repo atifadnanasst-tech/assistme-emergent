@@ -8145,6 +8145,75 @@ app.post('/api/purchase-bills', async (c) => {
   }
 });
 
+// ─── POST /api/purchase-bills/extract-from-image (Aug 2026) ──
+// Purchase Bill subtask 2 (image capture) -- Atif's own recollection
+// that Spark can already read a photo of a supplier's bill and extract
+// items/prices is correct, but that capability lives inside Spark's
+// chat-based pipeline (attachment -> vision text -> full LLM re-parse),
+// which isn't a clean fit for a non-chat, standalone form screen.
+// Rather than route this screen's traffic through the chat pipeline
+// (real architectural risk to an already-working flow), this reuses
+// the SAME proven GPT-4o vision call pattern (same model, same client,
+// same timeout/error handling as the existing chat attachment path)
+// but asks for structured JSON directly in one call, since a manual
+// form has no further LLM re-parsing step to hand off to. Self-
+// contained: accepts a base64 image directly in the request body, no
+// dependency on any existing attachment/storage upload step.
+app.post('/api/purchase-bills/extract-from-image', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const body = await c.req.json();
+    const { image_base64, mime_type } = body;
+    if (!image_base64) return c.json({ error: 'missing_image' }, 400);
+
+    const mime = mime_type || 'image/jpeg';
+    const approxBytes = image_base64.length * 0.75;
+    if (approxBytes > 8 * 1024 * 1024) return c.json({ error: 'image_too_large' }, 400);
+
+    const visionClient = getOpenAI();
+    if (!visionClient) return c.json({ error: 'ai_unavailable' }, 503);
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+    let visionRes;
+    try {
+      visionRes = await visionClient.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'text', text: 'You are reading a supplier\'s purchase bill or invoice, photographed by an Indian MSME trader who is RECEIVING these goods. Extract the information and return ONLY valid JSON, no markdown, no explanation, in exactly this shape:\n{"supplier_bill_number": string or null, "items": [{"product_name": string, "quantity": number, "unit_price": number}], "notes": string or null}\nRules:\n- supplier_bill_number is the SUPPLIER\'s own bill/invoice number as printed on the document, not anything we would generate ourselves.\n- Only include items that are clearly, explicitly written -- never guess or invent a product, quantity, or price.\n- If a field is not visible or not legible, use null for that field rather than guessing.\n- notes should capture any other relevant handwritten or printed text that does not fit the structured fields above.' },
+            { type: 'image_url', image_url: { url: `data:${mime};base64,${image_base64}`, detail: 'low' } }
+          ]
+        }],
+        max_tokens: 800,
+        response_format: { type: 'json_object' },
+      }, { signal: controller.signal });
+    } finally {
+      clearTimeout(timeout);
+    }
+
+    const raw = visionRes.choices?.[0]?.message?.content?.trim() || '{}';
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (parseErr) {
+      console.error('[extract-from-image] JSON parse failed:', parseErr.message, raw);
+      return c.json({ error: 'extraction_unreadable' }, 422);
+    }
+
+    return c.json({
+      supplier_bill_number: parsed.supplier_bill_number || null,
+      items: Array.isArray(parsed.items) ? parsed.items : [],
+      notes: parsed.notes || null,
+    });
+  } catch (error) {
+    console.error('POST /api/purchase-bills/extract-from-image error:', error.message);
+    return c.json({ error: 'server_error' }, 500);
+  }
+});
+
 // ─── GET /api/products/find ─────────────────────────────────
 // DEPRECATED — use POST /api/products/resolve for full resolution
 // Kept for backward compatibility with existing callers
