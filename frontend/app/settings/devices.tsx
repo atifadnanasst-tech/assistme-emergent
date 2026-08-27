@@ -238,7 +238,14 @@ export default function LinkedDevices() {
           // guard handle the redirect itself, rather than forcing
           // navigation directly.
           await authService.clearSession();
-          await supabase.auth.signOut();
+          // Real bug fixed (Aug 2026, found via Atif's live testing,
+          // multi-device scenario): supabase.auth.signOut() with no
+          // scope defaults to a GLOBAL sign-out -- it was signing OUT
+          // EVERY device sharing this login, not just this one. This
+          // is exactly why self-deleting from one device also logged
+          // out the primary device at the same time. 'local' scope
+          // limits it to this device's own session only.
+          await supabase.auth.signOut({ scope: 'local' });
           setIsAuthenticated(false);
         }
       } else {

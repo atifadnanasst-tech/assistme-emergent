@@ -33,7 +33,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const deviceCheck = await registerDevice();
     if (deviceCheck.shouldSignOut) {
       await authService.clearSession();
-      await supabase.auth.signOut();
+      // Real bug fixed (Aug 2026, found via Atif's live testing,
+      // multi-device scenario): supabase.auth.signOut() with no scope
+      // defaults to a GLOBAL sign-out -- it was signing out EVERY
+      // device sharing this login, not just this one. 'local' scope
+      // limits it to this device's own session only.
+      await supabase.auth.signOut({ scope: 'local' });
       setIsAuthenticated(false);
       console.log(`❌ [AUTH_CONTEXT] Device rejected (${deviceCheck.reason}) - signed out`);
     }
