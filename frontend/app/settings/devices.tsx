@@ -22,6 +22,7 @@ import { authService } from '../../lib/auth';
 import { supabase } from '../../lib/supabase';
 import RazorpayCheckout from 'react-native-razorpay';
 import { getOrCreateDeviceId } from '../../lib/deviceId';
+import { useAuth } from '../../contexts/AuthContext';
 
 interface DeviceSession {
   id: string;
@@ -48,6 +49,7 @@ function relativeTime(iso: string): string {
 
 export default function LinkedDevices() {
   const router = useRouter();
+  const { setIsAuthenticated } = useAuth();
   const [loading, setLoading] = useState(true);
   const [devices, setDevices] = useState<DeviceSession[]>([]);
   const [blockedDevices, setBlockedDevices] = useState<DeviceSession[]>([]);
@@ -223,9 +225,21 @@ export default function LinkedDevices() {
         // exact moment, that it just removed itself -- no reason to
         // wait for a future check to notice what it already knows.
         if (device.device_id === thisDeviceId) {
+          // Real bug fixed (Aug 2026, found via Atif's live testing):
+          // this cleared the underlying session but never updated the
+          // app's own shared auth state (setIsAuthenticated), leaving
+          // the navigation guard still believing the user was logged
+          // in while a direct router.replace('/login') fought it at
+          // the same time -- two contradicting navigation instructions
+          // produced a stuck, blank screen requiring a force-close.
+          // Fixed to match the exact same pattern AuthContext.tsx's own
+          // runDeviceCheck() already uses successfully: update
+          // setIsAuthenticated(false) and let the existing navigation
+          // guard handle the redirect itself, rather than forcing
+          // navigation directly.
           await authService.clearSession();
           await supabase.auth.signOut();
-          router.replace('/login');
+          setIsAuthenticated(false);
         }
       } else {
         Alert.alert('Error', 'Could not remove this device');
