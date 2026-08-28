@@ -3119,9 +3119,13 @@ app.get('/api/customer/:customer_id/unpaid-invoices', async (c) => {
     const { organisationId } = auth;
     const customerId = c.req.param('customer_id');
 
+    // issue_date added (Aug 2026, Atif's own explicit request) --
+    // was already used for sorting but never actually returned to the
+    // frontend, so Record Payment Received's unpaid-bill rows had no
+    // date to show at all.
     const { data: invoices } = await supabase
       .from('invoices')
-      .select('id, invoice_number, total_amount, amount_paid, amount_due')
+      .select('id, invoice_number, total_amount, amount_paid, amount_due, issue_date')
       .eq('organisation_id', organisationId)
       .eq('customer_id', customerId)
       .eq('is_historical', false)
@@ -3150,9 +3154,11 @@ app.get('/api/customer/:customer_id/unpaid-purchase-bills', async (c) => {
     const { organisationId } = auth;
     const customerId = c.req.param('customer_id');
 
+    // issue_date added (Aug 2026, Atif's own explicit request) --
+    // same gap as unpaid-invoices above, same fix.
     const { data: bills } = await supabase
       .from('purchase_bills')
-      .select('id, bill_number, total_amount, amount_paid, amount_due')
+      .select('id, bill_number, total_amount, amount_paid, amount_due, issue_date')
       .eq('organisation_id', organisationId)
       .eq('customer_id', customerId)
       .eq('is_historical', false)
