@@ -38,7 +38,7 @@ import { supabase } from '../../../lib/supabase';
 import { authService } from '../../../lib/auth';
 
 interface UnpaidBill {
-  id: string; bill_number: string; total_amount: number; amount_paid: number; amount_due: number;
+  id: string; bill_number: string; total_amount: number; amount_paid: number; amount_due: number; issue_date?: string;
 }
 
 const PAYMENT_MODES = ['Cash', 'UPI', 'Bank Transfer', 'Cheque', 'Other'];
@@ -52,7 +52,10 @@ const formatDisplay = (d: Date) => d.toLocaleDateString('en-IN', { day: 'numeric
 
 export default function RecordSupplierPaymentScreen() {
   const router = useRouter();
-  const params = useLocalSearchParams<{ id: string }>();
+  // Pre-fill support (Aug 2026, found via Atif's live testing): same
+  // gap as record-payment.tsx -- Edit navigated here correctly but
+  // never actually passed or read the amount.
+  const params = useLocalSearchParams<{ id: string; amount?: string }>();
   const customerId = params.id;
   const { setIsAuthenticated } = useAuth();
 
@@ -60,7 +63,7 @@ export default function RecordSupplierPaymentScreen() {
   const [submitting, setSubmitting] = useState(false);
   const [supplierName, setSupplierName] = useState('');
   const [unpaidBills, setUnpaidBills] = useState<UnpaidBill[]>([]);
-  const [amount, setAmount] = useState('');
+  const [amount, setAmount] = useState(params.amount ? String(params.amount) : '');
   const [paymentDate, setPaymentDate] = useState(new Date());
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [paymentMode, setPaymentMode] = useState<string | null>(null);
@@ -275,7 +278,7 @@ export default function RecordSupplierPaymentScreen() {
               >
                 <View>
                   <Text style={s.billRowText}>{bill.bill_number}</Text>
-                  <Text style={s.billRowMeta}>{fmt(bill.amount_due)} due of {fmt(bill.total_amount)}</Text>
+                  <Text style={s.billRowMeta}>{fmt(bill.amount_due)} due of {fmt(bill.total_amount)}{bill.issue_date ? ` — ${formatDisplay(new Date(bill.issue_date))}` : ''}</Text>
                 </View>
                 {selectedBillIds.includes(bill.id) && <Ionicons name="checkmark-circle" size={20} color="#075E54" />}
               </TouchableOpacity>

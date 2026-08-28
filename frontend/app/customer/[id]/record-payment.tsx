@@ -31,7 +31,7 @@ import { authService } from '../../../lib/auth';
 import { shareReceipt, ReceiptAppliedToEntry } from '../../../lib/shareReceipt';
 
 interface UnpaidInvoice {
-  id: string; invoice_number: string; total_amount: number; amount_paid: number; amount_due: number;
+  id: string; invoice_number: string; total_amount: number; amount_paid: number; amount_due: number; issue_date?: string;
 }
 interface CustomerAdvance {
   id: string; amount: number; amount_applied: number; amount_remaining: number;
@@ -53,13 +53,17 @@ type SubmitAction = 'record' | 'share' | 'whatsapp';
 
 export default function RecordPaymentScreen() {
   const router = useRouter();
-  const params = useLocalSearchParams<{ id: string }>();
+  // Pre-fill support (Aug 2026, found via Atif's live testing): the
+  // Spark confirmation sheet's Edit link/button already navigated
+  // here correctly, but this screen never read the amount it was
+  // sent -- Edit opened a blank form instead of a pre-filled one.
+  const params = useLocalSearchParams<{ id: string; amount?: string }>();
   const customerId = params.id;
 
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState<SubmitAction | null>(null);
   const [unpaidInvoices, setUnpaidInvoices] = useState<UnpaidInvoice[]>([]);
-  const [amount, setAmount] = useState('');
+  const [amount, setAmount] = useState(params.amount ? String(params.amount) : '');
   const [paymentDate, setPaymentDate] = useState(new Date());
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [paymentMode, setPaymentMode] = useState<string | null>(null);
@@ -467,7 +471,7 @@ export default function RecordPaymentScreen() {
               <Ionicons name={selectedInvoiceIds.has(inv.id) ? 'checkbox' : 'square-outline'} size={20} color="#075E54" />
               <View style={{ marginLeft: 10, flex: 1 }}>
                 <Text style={s.invoiceRowTitle}>{inv.invoice_number}</Text>
-                <Text style={s.invoiceRowSubtitle}>{fmt(inv.amount_due)} due of {fmt(inv.total_amount)}</Text>
+                <Text style={s.invoiceRowSubtitle}>{fmt(inv.amount_due)} due of {fmt(inv.total_amount)}{inv.issue_date ? ` — ${formatDateStr(inv.issue_date)}` : ''}</Text>
               </View>
             </TouchableOpacity>
           ))}

@@ -3379,14 +3379,15 @@ export default function CustomerChatScreen() {
                     // Real bug fixed (Aug 2026, found via Atif's live
                     // testing): both payment action types fell through
                     // this entire if/else chain with no matching branch
-                    // at all -- Edit did nothing. Neither screen accepts
-                    // pre-fill params today, so this opens a blank form
-                    // rather than a drafted one -- still real progress
-                    // over a dead tap, with true pre-fill a natural
-                    // small follow-up.
+                    // at all -- Edit did nothing. Now also pre-fills the
+                    // amount (both screens updated to accept and apply
+                    // it) -- was previously a blank form even after the
+                    // navigation itself got fixed.
                     setPreviewVisible(false);
                     const target = action.action_type === 'record_payment' ? 'record-payment' : 'supplier-payment';
-                    router.push(`/customer/${customer_id}/${target}`);
+                    const payParams: Record<string, string> = {};
+                    if (action.parameters?.amount) payParams.amount = String(action.parameters.amount);
+                    router.push({ pathname: `/customer/${customer_id}/${target}`, params: payParams });
                   }
                 }}>
                   <Text style={styles.actionEditText}>Edit</Text>
@@ -3456,7 +3457,9 @@ export default function CustomerChatScreen() {
                 if (payAction) {
                   setPreviewVisible(false);
                   const target = payAction.action_type === 'record_payment' ? 'record-payment' : 'supplier-payment';
-                  router.push(`/customer/${customer_id}/${target}`);
+                  const payParams: Record<string, string> = {};
+                  if (payAction.parameters?.amount) payParams.amount = String(payAction.parameters.amount);
+                  router.push({ pathname: `/customer/${customer_id}/${target}`, params: payParams });
                 }
               }}>
                 <Text style={styles.editMasterText}>Edit</Text>

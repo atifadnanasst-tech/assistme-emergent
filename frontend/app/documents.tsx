@@ -619,11 +619,19 @@ export default function DocumentsScreen() {
 
       <View style={s.tabBarContainer}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.tabBar}>
-          {tabs.map(t => (
-            <TouchableOpacity key={t.key} style={[s.tab, activeTab === t.key && s.tabActive]} onPress={() => setActiveTab(t.key)}>
-              <Text style={[s.tabText, activeTab === t.key && s.tabTextActive]}>{t.label}{t.count > 0 ? ` (${t.count})` : ''}</Text>
-            </TouchableOpacity>
-          ))}
+          {tabs.map(t => {
+            // Purchase Bills / Payments Made get a visually distinct
+            // color (Aug 2026, Atif's own explicit request), reusing
+            // the same yellowish accent (#F59E0B) already established
+            // in this file for the Advance badge, rather than picking a
+            // new, unrelated color.
+            const isSupplierSide = t.key === 'purchase_bill' || t.key === 'supplier_payment';
+            return (
+              <TouchableOpacity key={t.key} style={[s.tab, activeTab === t.key && (isSupplierSide ? s.tabActiveSupplier : s.tabActive)]} onPress={() => setActiveTab(t.key)}>
+                <Text style={[s.tabText, activeTab === t.key && (isSupplierSide ? s.tabTextActiveSupplier : s.tabTextActive)]}>{t.label}{t.count > 0 ? ` (${t.count})` : ''}</Text>
+              </TouchableOpacity>
+            );
+          })}
         </ScrollView>
       </View>
 
@@ -762,8 +770,10 @@ const s = StyleSheet.create({
   tab: { paddingVertical: 12, paddingHorizontal: 18, alignItems: 'center', borderBottomWidth: 2, borderBottomColor: 'transparent' },
   sortBtn: { paddingHorizontal: 14, paddingVertical: 12, justifyContent: 'center', borderLeftWidth: 1, borderLeftColor: '#F0F0F0' },
   tabActive: { borderBottomColor: '#075E54' },
+  tabActiveSupplier: { borderBottomColor: '#F59E0B' },
   tabText: { fontSize: 13, fontWeight: '600', color: '#999' },
   tabTextActive: { color: '#075E54' },
+  tabTextActiveSupplier: { color: '#B45309' },
   row: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFFFFF', paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#F0F0F0' },
   advanceRow: { borderLeftWidth: 3, borderLeftColor: '#F59E0B' },
   advanceBadge: { backgroundColor: '#FEF3C7', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
