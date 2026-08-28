@@ -57,6 +57,7 @@
  */
 
 import { randomUUID } from 'crypto';
+import { getBusinessProfile } from '../capabilities/setBusinessProfileCapability.js';
 
 const istToday = () => {
   const now = new Date();
@@ -157,9 +158,34 @@ export async function recordPurchaseBill(supabase, orgId, customerId, items, opt
       (products || []).forEach(p => { productMap[p.id] = p; });
     }
 
+    // CGST/SGST/IGST split (Aug 2026, Atif's own design review) --
+    // mirrors calculateInvoiceTotals()'s exact interstate/intrastate
+    // determination in backend/src/index.js: same states or either
+    // unknown = intrastate = CGST+SGST; both known and different =
+    // interstate = IGST. Deliberately reused here rather than
+    // duplicated with different logic, per Atif's explicit ask.
+    // Lives INSIDE this shared primitive (not in either caller) so both
+    // Spark's create_purchase_bill case and the manual UI get it
+    // automatically, with zero Spark-specific changes needed.
+    let supplierState = null, customerState = null;
+    try {
+      const orgProfile = await getBusinessProfile(orgId, supabase);
+      supplierState = orgProfile?.state || null;
+    } catch {}
+    try {
+      const { data: addrs } = await supabase
+        .from('customer_addresses').select('state')
+        .eq('customer_id', customerId).eq('organisation_id', orgId)
+        .eq('type', 'billing').limit(1);
+      customerState = addrs?.[0]?.state || null;
+    } catch {}
+    const isInterstate = !!(supplierState && customerState &&
+      supplierState.toLowerCase() !== customerState.toLowerCase());
+
     let subtotal = 0;
     let totalTax = 0;
     let totalDiscount = 0;
+    let cgstTotal = 0, sgstTotal = 0, igstTotal = 0;
 
     const resolvedItems = items.map((item, idx) => {
       const qty = Number(item.quantity) || 1;
@@ -176,6 +202,15 @@ export async function recordPurchaseBill(supabase, orgId, customerId, items, opt
       totalTax += taxAmt;
       totalDiscount += discountAmt;
 
+      if (taxAmt > 0) {
+        if (isInterstate) {
+          igstTotal += taxAmt;
+        } else {
+          cgstTotal += taxAmt / 2;
+          sgstTotal += taxAmt / 2;
+        }
+      }
+
       return {
         product_id: item.product_id || null,
         description: item.description || productMap[item.product_id]?.name || 'Item',
@@ -191,6 +226,9 @@ export async function recordPurchaseBill(supabase, orgId, customerId, items, opt
     subtotal = Math.round(subtotal * 100) / 100;
     totalTax = Math.round(totalTax * 100) / 100;
     totalDiscount = Math.round(totalDiscount * 100) / 100;
+    cgstTotal = Math.round(cgstTotal * 100) / 100;
+    sgstTotal = Math.round(sgstTotal * 100) / 100;
+    igstTotal = Math.round(igstTotal * 100) / 100;
     const totalAmount = Math.round((subtotal + totalTax) * 100) / 100;
 
     const { data: bill, error: billErr } = await supabase
@@ -215,8 +253,14 @@ export async function recordPurchaseBill(supabase, orgId, customerId, items, opt
         is_historical: false,
         historical_source: opts.historicalSource || null,
         import_metadata: { operation_id: operationId },
+        // Matches the exact same pattern invoices already use (Aug
+        // 2026, Atif's own design review) -- custom_fields is the only
+        // place this breakdown lives for invoices too (no dedicated
+        // cgst/sgst/igst columns exist on either table), so this is
+        // consistent, not a new pattern.
+        custom_fields: { cgst_amount: cgstTotal, sgst_amount: sgstTotal, igst_amount: igstTotal, is_interstate: isInterstate },
       })
-      .select('id, bill_number, total_amount')
+      .select('id, bill_number, total_amount, custom_fields')
       .single();
 
     if (billErr || !bill) {
@@ -388,6 +432,12 @@ export async function recordPurchaseBill(supabase, orgId, customerId, items, opt
       amount_due: totalAmount,
       due_date: dueDate,
       entity_name: entity.name,
+      // GST breakdown (Aug 2026, Atif's own design review), additive --
+      // existing callers reading this object are unaffected by new keys.
+      cgst_amount: cgstTotal,
+      sgst_amount: sgstTotal,
+      igst_amount: igstTotal,
+      is_interstate: isInterstate,
     };
 
   } catch (err) {

@@ -5,7 +5,7 @@ import {
   Keyboard, Modal, Pressable, ScrollView, InteractionManager, LayoutAnimation, Animated, AppState,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useRouter, useLocalSearchParams } from 'expo-router';
+import { useRouter, useLocalSearchParams, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { useAuth } from '../../contexts/AuthContext';
@@ -724,6 +724,28 @@ export default function CustomerChatScreen() {
 
   // ── Load conversation ──────────────────────────────────────
   useEffect(() => { loadChat(); }, [customer_id]);
+
+  // Real gap fixed (Aug 2026, found via Atif's live testing): Spark's
+  // own "Confirm All" flow explicitly re-fetches via loadChat() right
+  // after actions execute, so ITS header always stays correct -- but no
+  // equivalent existed for any OTHER screen (Purchase Bill, and
+  // potentially Invoice/Quote/Record Payment too) that navigates away
+  // and back via router.back(). The realtime broadcast alone isn't
+  // enough -- it only refreshes messages, never the customer/balance
+  // object. This quietly re-fetches (markRead: false, matching the
+  // existing pattern at the resume-listener call site above) whenever
+  // this screen regains focus, e.g. returning from any child screen
+  // that may have changed this customer's balance. Guarded against
+  // firing on the very first mount (isFirstFocus ref) since the
+  // useEffect above already covers that -- without the guard this would
+  // fetch twice on initial open.
+  const isFirstFocus = useRef(true);
+  useFocusEffect(
+    useCallback(() => {
+      if (isFirstFocus.current) { isFirstFocus.current = false; return; }
+      loadChat(false);
+    }, [customer_id])
+  );
 
   // ── GST context for Spark preview sheet -- reuses the already-built
   // /api/invoice/new endpoint rather than touching the large main chat

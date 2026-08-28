@@ -8155,6 +8155,13 @@ app.post('/api/purchase-bills', async (c) => {
           metadata: { sender_type: 'system', visibility: 'owner_only', message_type: 'system_alert', read_by_owner: true, preview_text: `Purchase bill ${result.bill_number} recorded` },
           tokens_input: 0, tokens_output: 0,
         });
+        // Real, precise gap found via Atif's live testing: the message
+        // insert alone isn't enough -- the chat screen doesn't discover
+        // it (or refresh the header) until an explicit realtime
+        // broadcast fires, exactly like every other message-creating
+        // path in this codebase already does. Without this, the
+        // message only ever appeared after a manual pull-to-refresh.
+        await broadcastNewMessage(organisationId, { conversation_id: pbConv.id });
       }
     } catch (msgErr) {
       console.warn('[POST /api/purchase-bills] confirmation message failed (non-fatal):', msgErr.message);
