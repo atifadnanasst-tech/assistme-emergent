@@ -3024,6 +3024,63 @@ app.post('/api/payments', async (c) => {
   }
 });
 
+// ─── POST /api/supplier-payments (Aug 2026) ──────────────────
+// Record Payment Made subtask -- the exact manual-UI caller
+// recordSupplierPayment.js's own header comment already planned for
+// ("POST /api/supplier-payments (manual UI — RecordPaymentSheet)").
+// Thin wrapper only, mirroring /api/payments above exactly: zero new
+// business logic, calls the same centralized recordSupplierPayment()
+// primitive already used successfully by Spark's record_supplier_payment
+// case. bill_id is optional: pass a specific bill to target it, or omit
+// it to auto-allocate across unpaid bills oldest-first (FIFO), identical
+// to how Spark itself behaves.
+app.post('/api/supplier-payments', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+
+    const body = await c.req.json();
+    const { customer_id, bill_id, amount, payment_date, payment_mode, notes, bank_account_id } = body;
+
+    if (!customer_id || !amount) {
+      return c.json({ error: 'missing_fields' }, 400);
+    }
+    if (typeof amount !== 'number' || amount <= 0) {
+      return c.json({ error: 'invalid_amount' }, 400);
+    }
+
+    const customer = await validateCustomer(customer_id, organisationId);
+    if (!customer) return c.json({ error: 'customer_not_found' }, 404);
+
+    const { recordSupplierPayment } = await import('./services/business/recordSupplierPayment.js');
+    const result = await recordSupplierPayment(supabase, organisationId, customer_id, amount, {
+      paymentDate: payment_date || null,
+      paymentMethod: payment_mode || null,
+      billId: bill_id || null,
+      notes: notes || null,
+      bankAccountId: bank_account_id || null,
+    });
+
+    if (result.status === 'failed') {
+      return c.json({ error: result.error || 'payment_failed', detail: result }, 400);
+    }
+
+    return c.json({
+      status: result.status,
+      operation_id: result.operation_id,
+      events: result.events,
+      total_applied: result.total_applied,
+      bills_affected: result.bills_affected,
+      entity_name: result.entity_name,
+    });
+
+  } catch (error) {
+    console.error('POST /api/supplier-payments error:', error);
+    return c.json({ error: 'server_error' }, 500);
+  }
+});
+
 // ─── GET /api/customer/:customer_id/unpaid-invoices (Aug 2026) ──
 // Payment recording subtask 2. Backs the optional "apply to a specific
 // invoice" picker on the Record Payment form. Same status filter
@@ -3050,6 +3107,37 @@ app.get('/api/customer/:customer_id/unpaid-invoices', async (c) => {
     return c.json({ invoices: invoices || [] });
   } catch (err) {
     console.error('[GET /api/customer/:customer_id/unpaid-invoices] Error:', err.message);
+    return c.json({ error: 'internal_error' }, 500);
+  }
+});
+
+// ─── GET /api/customer/:customer_id/unpaid-purchase-bills (Aug 2026) ──
+// Record Payment Made subtask. Exact mirror of unpaid-invoices above,
+// for the reverse direction -- backs the optional "apply to a specific
+// bill" picker on the Record Payment Made form. Same status filter
+// recordSupplierPayment() itself uses internally for FIFO
+// auto-allocation, kept consistent so the manual picker and the
+// auto-allocate path agree on what counts as "unpaid".
+app.get('/api/customer/:customer_id/unpaid-purchase-bills', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+    const customerId = c.req.param('customer_id');
+
+    const { data: bills } = await supabase
+      .from('purchase_bills')
+      .select('id, bill_number, total_amount, amount_paid, amount_due')
+      .eq('organisation_id', organisationId)
+      .eq('customer_id', customerId)
+      .eq('is_historical', false)
+      .not('status', 'in', '("paid","cancelled")')
+      .is('deleted_at', null)
+      .order('issue_date', { ascending: true });
+
+    return c.json({ bills: bills || [] });
+  } catch (err) {
+    console.error('[GET /api/customer/:customer_id/unpaid-purchase-bills] Error:', err.message);
     return c.json({ error: 'internal_error' }, 500);
   }
 });
