@@ -3066,6 +3066,31 @@ app.post('/api/supplier-payments', async (c) => {
       return c.json({ error: result.error || 'payment_failed', detail: result }, 400);
     }
 
+    // Real gap fixed (Aug 2026, found via Atif's live testing) --
+    // exactly the same fix already applied to /api/purchase-bills after
+    // the same discovery there: a confirmation message plus explicit
+    // realtime broadcast, matching every other message-creating path in
+    // the codebase. Without both, the payment succeeded silently with
+    // no trace in chat and no live header refresh.
+    try {
+      const { data: spConv } = await supabase
+        .from('conversations').select('id')
+        .eq('organisation_id', organisationId).eq('entity_type', 'customer')
+        .eq('entity_id', customer_id).eq('status', 'active').maybeSingle();
+      if (spConv) {
+        await supabase.from('messages').insert({
+          organisation_id: organisationId, conversation_id: spConv.id,
+          role: 'system',
+          content: `✓ Payment made — ${result.entity_name || ''} · ₹${(result.total_applied || 0).toLocaleString('en-IN')}`,
+          metadata: { sender_type: 'system', visibility: 'owner_only', message_type: 'system_alert', read_by_owner: true, preview_text: `Payment made ₹${(result.total_applied || 0).toLocaleString('en-IN')}` },
+          tokens_input: 0, tokens_output: 0,
+        });
+        await broadcastNewMessage(organisationId, { conversation_id: spConv.id });
+      }
+    } catch (msgErr) {
+      console.warn('[POST /api/supplier-payments] confirmation message failed (non-fatal):', msgErr.message);
+    }
+
     return c.json({
       status: result.status,
       operation_id: result.operation_id,
