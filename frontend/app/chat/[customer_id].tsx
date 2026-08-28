@@ -2382,10 +2382,10 @@ export default function CustomerChatScreen() {
     // Purchase Bill / Supplier Payment subtask 4 (Aug 2026, Atif's own
     // design): the mirror-image pair of Create invoice / Record payment
     // received, for the reverse direction of the same customer-or-
-    // supplier relationship. "Create purchase bill" now wired -- its
-    // screen exists (subtask 2). "Record payment made" still points to
-    // its screen once subtask 3 builds it.
+    // supplier relationship. Both now wired -- their screens exist
+    // (subtasks 2 and 3).
     { icon: 'cart-outline', label: 'Create purchase bill', action: () => { setMenuVisible(false); router.push(`/customer/${customer_id}/purchase-bill`); } },
+    { icon: 'cash-outline', label: 'Record payment made', action: () => { setMenuVisible(false); router.push(`/customer/${customer_id}/supplier-payment`); } },
     { divider: true },
     // Unified Documents surface subtask I (Aug 2026): moved here per
     // Atif's feedback -- logically belongs right next to Create invoice.
