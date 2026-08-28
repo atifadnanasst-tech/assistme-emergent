@@ -35,7 +35,7 @@ import BottomSheet from '../components/primitives/BottomSheet';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { getMonthBounds, getFYQuarterBounds } from '../lib/periodBounds';
 
-type TabType = 'invoice' | 'challan' | 'quote' | 'draft' | 'receipt' | 'balance_sheet';
+type TabType = 'invoice' | 'challan' | 'quote' | 'draft' | 'receipt' | 'purchase_bill' | 'supplier_payment' | 'balance_sheet';
 
 interface InvoiceDoc {
   id: string; invoice_number: string; customer_id: string; customer_name: string;
@@ -58,6 +58,20 @@ interface ReceiptDoc {
   type: 'payment' | 'advance'; id: string; customer_id: string; customer_name: string;
   amount: number; date: string; payment_mode: string | null;
   invoice_number?: string | null; purpose?: string | null; status?: string;
+}
+// Purchase Bill / Supplier Payment tabs (Aug 2026, Atif's own design):
+// three separate tabs, not one combined direction, matching how Invoice
+// already has its own dedicated tab. Neither has a PDF generation step
+// today (unlike invoices), so both render as read-only rows, matching
+// how the Receipt tab's own rows are already read-only (no onPress).
+interface PurchaseBillDoc {
+  id: string; bill_number: string; supplier_bill_number: string | null;
+  customer_id: string; customer_name: string; total_amount: number;
+  issue_date: string; status: string;
+}
+interface SupplierPaymentDoc {
+  id: string; customer_id: string; customer_name: string;
+  amount: number; date: string; payment_mode: string | null; bill_number: string | null;
 }
 // Balance Sheet tab (Aug 2026). Customer-scoped only -- a running
 // balance across multiple customers mixed together wouldn't mean
@@ -82,6 +96,8 @@ export default function DocumentsScreen() {
   const [quotes, setQuotes] = useState<QuoteDoc[]>([]);
   const [drafts, setDrafts] = useState<DraftDoc[]>([]);
   const [receipts, setReceipts] = useState<ReceiptDoc[]>([]);
+  const [purchaseBills, setPurchaseBills] = useState<PurchaseBillDoc[]>([]);
+  const [supplierPayments, setSupplierPayments] = useState<SupplierPaymentDoc[]>([]);
 
   // Balance Sheet state (Aug 2026, customer-scoped only).
   const [periodMode, setPeriodMode] = useState<PeriodMode>('month');
@@ -188,6 +204,8 @@ export default function DocumentsScreen() {
         setQuotes(data.quotes || []);
         setDrafts(data.drafts || []);
         setReceipts(data.receipts || []);
+        setPurchaseBills(data.purchase_bills || []);
+        setSupplierPayments(data.supplier_payments || []);
       }
     } catch {} finally { setLoading(false); }
   };
@@ -345,7 +363,13 @@ export default function DocumentsScreen() {
     { key: 'challan', label: 'Challan', count: invoices.filter(i => i.has_challan).length },
     { key: 'quote', label: 'Quote', count: quotes.length },
     { key: 'draft', label: 'Draft', count: drafts.length },
-    { key: 'receipt', label: 'Receipt', count: receipts.length },
+    // Renamed from "Receipt" to "Payments Received" (Aug 2026, Atif's
+    // own explicit request) -- purely a label change, this tab already
+    // existed and needed no other work, now sitting alongside its two
+    // new siblings below for clarity.
+    { key: 'receipt', label: 'Payments Received', count: receipts.length },
+    { key: 'purchase_bill', label: 'Purchase Bills', count: purchaseBills.length },
+    { key: 'supplier_payment', label: 'Payments Made', count: supplierPayments.length },
     // Customer-scoped only -- a running balance mixing multiple
     // customers together wouldn't mean anything coherent. Label shows
     // the closing balance at a glance (Aug 2026, Atif's feedback),
@@ -452,9 +476,33 @@ export default function DocumentsScreen() {
     </View>
   );
 
-  const emptyLabel = { invoice: 'No invoices yet', challan: 'No invoices yet', quote: 'No quotes yet', draft: 'No drafts', receipt: 'No payments received yet' }[activeTab];
+  const renderPurchaseBillRow = ({ item }: { item: PurchaseBillDoc }) => (
+    <View style={s.row}>
+      <View style={{ flex: 1 }}>
+        <Text style={s.rowTitle}>{item.bill_number}{item.supplier_bill_number ? ` (${item.supplier_bill_number})` : ''}</Text>
+        {!isCustomerScoped && <Text style={s.rowSubtitle}>{item.customer_name}</Text>}
+        <Text style={s.rowDate}>{fmtDate(item.issue_date)}</Text>
+      </View>
+      <Text style={s.rowAmount}>{fmt(item.total_amount)}</Text>
+    </View>
+  );
 
-  const currentData = activeTab === 'invoice' ? invoices : activeTab === 'challan' ? invoices : activeTab === 'quote' ? quotes : activeTab === 'draft' ? drafts : receipts;
+  const renderSupplierPaymentRow = ({ item }: { item: SupplierPaymentDoc }) => (
+    <View style={s.row}>
+      <View style={{ flex: 1 }}>
+        {!isCustomerScoped && <Text style={s.rowTitle}>{item.customer_name}</Text>}
+        <Text style={s.rowSubtitle}>{item.payment_mode || 'Payment'}{item.bill_number ? ` — ${item.bill_number}` : ''}</Text>
+      </View>
+      <View style={{ alignItems: 'flex-end' }}>
+        <Text style={s.rowAmount}>{fmt(item.amount)}</Text>
+        <Text style={s.rowDate}>{fmtDate(item.date)}</Text>
+      </View>
+    </View>
+  );
+
+  const emptyLabel = { invoice: 'No invoices yet', challan: 'No invoices yet', quote: 'No quotes yet', draft: 'No drafts', receipt: 'No payments received yet', purchase_bill: 'No purchase bills yet', supplier_payment: 'No payments made yet' }[activeTab];
+
+  const currentData = activeTab === 'invoice' ? invoices : activeTab === 'challan' ? invoices : activeTab === 'quote' ? quotes : activeTab === 'draft' ? drafts : activeTab === 'receipt' ? receipts : activeTab === 'purchase_bill' ? purchaseBills : activeTab === 'supplier_payment' ? supplierPayments : receipts;
   const sortedData = sortAscending ? [...currentData].reverse() : currentData;
 
   return (
@@ -696,7 +744,7 @@ export default function DocumentsScreen() {
         <FlatList
           data={sortedData}
           keyExtractor={(item: any) => item.id}
-          renderItem={activeTab === 'invoice' ? renderInvoiceRow : activeTab === 'challan' ? renderChallanRow : activeTab === 'quote' ? renderQuoteRow : activeTab === 'draft' ? renderDraftRow : renderReceiptRow}
+          renderItem={activeTab === 'invoice' ? renderInvoiceRow : activeTab === 'challan' ? renderChallanRow : activeTab === 'quote' ? renderQuoteRow : activeTab === 'draft' ? renderDraftRow : activeTab === 'receipt' ? renderReceiptRow : activeTab === 'purchase_bill' ? renderPurchaseBillRow : renderSupplierPaymentRow}
           ListEmptyComponent={<Text style={s.emptyText}>{emptyLabel}</Text>}
           contentContainerStyle={{ paddingBottom: 20 }}
         />

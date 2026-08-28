@@ -3068,8 +3068,14 @@ export default function CustomerChatScreen() {
                      action.action_type === 'create_purchase_bill' ? 'Purchase Bill' :
                      action.action_type === 'schedule_delivery' ? 'Delivery' :
                      action.action_type === 'set_reminder' ? (action.parameters?.title || 'Payment Reminder') :
-                     action.action_type === 'record_payment' ? 'Record Payment' :
-                     action.action_type === 'record_supplier_payment' ? 'Supplier Payment' :
+                     // Made explicit about direction (Aug 2026, Atif's own
+                     // request) -- "Record Payment" and "Supplier
+                     // Payment" read as vague/similar side by side;
+                     // matches the exact same "Received"/"Made" wording
+                     // already used on their own dedicated screens and
+                     // menu items.
+                     action.action_type === 'record_payment' ? 'Payment Received' :
+                     action.action_type === 'record_supplier_payment' ? 'Payment Made' :
                      action.action_type === 'goods_returned' ? 'Goods Returned' :
                      action.action_type === 'record_expense' ? 'Record Expense' :
                      action.action_type === 'record_opening_balance_receivable' ? 'Set Opening Balance' :
@@ -3369,6 +3375,18 @@ export default function CustomerChatScreen() {
                     setDateEditDesc(action.parameters?.description || action.details || '');
                     setShowDatePicker(Platform.OS === 'ios');
                     setDateEditVisible(true);
+                  } else if (action.action_type === 'record_payment' || action.action_type === 'record_supplier_payment') {
+                    // Real bug fixed (Aug 2026, found via Atif's live
+                    // testing): both payment action types fell through
+                    // this entire if/else chain with no matching branch
+                    // at all -- Edit did nothing. Neither screen accepts
+                    // pre-fill params today, so this opens a blank form
+                    // rather than a drafted one -- still real progress
+                    // over a dead tap, with true pre-fill a natural
+                    // small follow-up.
+                    setPreviewVisible(false);
+                    const target = action.action_type === 'record_payment' ? 'record-payment' : 'supplier-payment';
+                    router.push(`/customer/${customer_id}/${target}`);
                   }
                 }}>
                   <Text style={styles.actionEditText}>Edit</Text>
@@ -3415,18 +3433,31 @@ export default function CustomerChatScreen() {
                 // also recognize create_purchase_bill, matching the same
                 // fix already applied to the per-card Edit link above.
                 const docAction = previewActions.find((a: any) => a.action_type === 'create_invoice' || a.action_type === 'create_quote' || a.action_type === 'create_purchase_bill');
-                if (!docAction) return;
-                setPreviewVisible(false);
-                const p = docAction.parameters || {};
-                const params: Record<string, string> = {};
-                if (p.items) params.items = JSON.stringify(p.items);
-                if (p.due_date) params.due_date = p.due_date;
-                if (p.amount) params.amount = String(p.amount);
-                if (p.supplier_bill_number) params.supplier_bill_number = p.supplier_bill_number;
-                if (previewDraftId) params.draft_id = previewDraftId;
-                if (docAction.action_id) params.action_id = docAction.action_id;
-                const editTarget = docAction.action_type === 'create_quote' ? 'quote' : docAction.action_type === 'create_purchase_bill' ? 'purchase-bill' : 'invoice';
-                router.push({ pathname: `/customer/${customer_id}/${editTarget}`, params });
+                if (docAction) {
+                  setPreviewVisible(false);
+                  const p = docAction.parameters || {};
+                  const params: Record<string, string> = {};
+                  if (p.items) params.items = JSON.stringify(p.items);
+                  if (p.due_date) params.due_date = p.due_date;
+                  if (p.amount) params.amount = String(p.amount);
+                  if (p.supplier_bill_number) params.supplier_bill_number = p.supplier_bill_number;
+                  if (previewDraftId) params.draft_id = previewDraftId;
+                  if (docAction.action_id) params.action_id = docAction.action_id;
+                  const editTarget = docAction.action_type === 'create_quote' ? 'quote' : docAction.action_type === 'create_purchase_bill' ? 'purchase-bill' : 'invoice';
+                  router.push({ pathname: `/customer/${customer_id}/${editTarget}`, params });
+                  return;
+                }
+                // Real bug fixed (Aug 2026, found via Atif's live
+                // testing): if the only action in this preview is a
+                // payment (no invoice/quote/purchase bill present),
+                // this button previously did nothing at all. Same
+                // fallback logic as the per-card Edit link above.
+                const payAction = previewActions.find((a: any) => a.action_type === 'record_payment' || a.action_type === 'record_supplier_payment');
+                if (payAction) {
+                  setPreviewVisible(false);
+                  const target = payAction.action_type === 'record_payment' ? 'record-payment' : 'supplier-payment';
+                  router.push(`/customer/${customer_id}/${target}`);
+                }
               }}>
                 <Text style={styles.editMasterText}>Edit</Text>
               </TouchableOpacity>
