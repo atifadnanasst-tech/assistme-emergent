@@ -8891,7 +8891,50 @@ app.get('/api/documents', async (c) => {
       })),
     ].sort((x, y) => (y.date || '').localeCompare(x.date || ''));
 
-    return c.json({ invoices, quotes, drafts, receipts });
+    // Purchase bills -- mirrors the invoices query above exactly, for
+    // the reverse direction (Aug 2026, Purchase Bill / Supplier Payment
+    // feature, Documents tab subtask, Atif's own design: three separate
+    // tabs, not one combined direction, matching how Invoice already
+    // has its own dedicated tab).
+    let pbQuery = supabase.from('purchase_bills')
+      .select('id, bill_number, supplier_bill_number, customer_id, total_amount, issue_date, status, customers(name)')
+      .eq('organisation_id', organisationId)
+      .eq('is_historical', false)
+      .is('deleted_at', null)
+      .order('issue_date', { ascending: false })
+      .limit(200);
+    const { data: pbRows } = await applyScope(pbQuery);
+    const purchaseBills = (pbRows || []).map(b => ({
+      id: b.id,
+      bill_number: b.bill_number,
+      supplier_bill_number: b.supplier_bill_number,
+      customer_id: b.customer_id,
+      customer_name: b.customers?.name || 'Supplier',
+      total_amount: b.total_amount,
+      issue_date: b.issue_date,
+      status: b.status,
+    }));
+
+    // Supplier payments -- mirrors the payments query above exactly,
+    // for the reverse direction. Own dedicated tab, not folded into the
+    // existing Receipt tab (Atif's own design).
+    let spQuery = supabase.from('supplier_payments')
+      .select('id, bill_id, customer_id, amount, payment_date, payment_method, customers(name), purchase_bills(bill_number)')
+      .eq('organisation_id', organisationId)
+      .order('payment_date', { ascending: false })
+      .limit(200);
+    const { data: spRows } = await applyScope(spQuery);
+    const supplierPayments = (spRows || []).map(p => ({
+      id: p.id,
+      customer_id: p.customer_id,
+      customer_name: p.customers?.name || 'Supplier',
+      amount: p.amount,
+      date: p.payment_date,
+      payment_mode: p.payment_method,
+      bill_number: p.purchase_bills?.bill_number || null,
+    }));
+
+    return c.json({ invoices, quotes, drafts, receipts, purchase_bills: purchaseBills, supplier_payments: supplierPayments });
   } catch (err) {
     console.error('[GET /api/documents] Error:', err.message);
     return c.json({ error: 'internal_error' }, 500);
