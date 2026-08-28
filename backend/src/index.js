@@ -1497,9 +1497,11 @@ app.get('/api/gst-filing/history', async (c) => {
     const auth = await authenticateChat(c);
     if (!auth) return c.json({ error: 'unauthorized' }, 401);
     const { organisationId } = auth;
+    // purchase_bill_count added (Aug 2026, purchase-side GST report) --
+    // purely additive select, existing behavior unaffected.
     const { data, error } = await supabase
       .from('gst_filing_exports')
-      .select('id, period_type, period_start, period_end, invoice_count, created_at')
+      .select('id, period_type, period_start, period_end, invoice_count, purchase_bill_count, created_at')
       .eq('organisation_id', organisationId)
       .order('created_at', { ascending: false })
       .limit(50);
@@ -1514,21 +1516,29 @@ app.get('/api/gst-filing/history', async (c) => {
 // Mints a short-lived (10 min) signed URL on demand, same pattern as
 // /api/export/download -- looked up by audit-log id, not "the last one",
 // since gst_filing_exports keeps real per-period history.
+// ?type=sales|purchases added (Aug 2026, purchase-side GST report,
+// Atif's own design) -- defaults to 'sales' so any existing caller that
+// doesn't pass this param keeps working exactly as before.
 app.get('/api/gst-filing/:audit_id/download', async (c) => {
   try {
     const auth = await authenticateChat(c);
     if (!auth) return c.json({ error: 'unauthorized' }, 401);
     const { organisationId } = auth;
     const auditId = c.req.param('audit_id');
+    const fileType = c.req.query('type') === 'purchases' ? 'purchases' : 'sales';
     const { data: row } = await supabase
       .from('gst_filing_exports')
-      .select('storage_path, period_start, period_end')
+      .select('storage_path, purchase_storage_path, period_start, period_end')
       .eq('id', auditId).eq('organisation_id', organisationId).maybeSingle();
     if (!row) return c.json({ error: 'not_found' }, 404);
-    const fileName = `gst-filing_${row.period_start}_to_${row.period_end}.csv`;
+    const path = fileType === 'purchases' ? row.purchase_storage_path : row.storage_path;
+    if (!path) return c.json({ error: 'not_found' }, 404);
+    const fileName = fileType === 'purchases'
+      ? `gst-filing-purchases_${row.period_start}_to_${row.period_end}.csv`
+      : `gst-filing_${row.period_start}_to_${row.period_end}.csv`;
     const { data: signedData, error: signErr } = await supabase.storage
       .from('exports')
-      .createSignedUrl(row.storage_path, 600, { download: fileName });
+      .createSignedUrl(path, 600, { download: fileName });
     if (signErr) {
       console.error('[GET /api/gst-filing/:audit_id/download] sign error:', signErr.message);
       return c.json({ error: 'sign_failed' }, 500);

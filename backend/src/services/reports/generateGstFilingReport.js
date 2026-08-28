@@ -16,6 +16,19 @@
 // manual JS correlation (no embedded Supabase relation joins used
 // anywhere else in this codebase for invoices+customers, so this
 // matches real precedent rather than introducing an unverified pattern).
+//
+// PURCHASE-SIDE EXTENSION (Aug 2026, Atif's own design, after a real
+// GST-law discussion): generates a SECOND CSV, mirroring the sales-side
+// columns exactly, for purchase_bills. Important, deliberate caveat
+// this feature does NOT try to solve: under Indian GST law, Input Tax
+// Credit is legally gated by GSTR-2B (auto-generated from what
+// SUPPLIERS report in their own filings), not by a buyer's own purchase
+// records. This purchase-side file is a reconciliation aid for the CA
+// -- "what we believe we bought and paid GST on" -- to cross-check
+// against GSTR-2B, not a direct substitute for it or a basis for
+// claiming ITC on its own. Includes both our own bill_number AND the
+// supplier's own supplier_bill_number, since the latter is what
+// actually needs to match GSTR-2B.
 
 import { csvEscape, rowsToCSV } from '../export/generateOwnerDataExport.js';
 
@@ -87,6 +100,75 @@ export async function generateGstFilingReport({ orgId, userId, periodType, perio
 
   if (uploadErr) throw new Error(`Failed to upload report: ${uploadErr.message}`);
 
+  // ── Purchase side (mirrors everything above exactly) ──────────
+  const { data: bills, error: pbErr } = await supabase
+    .from('purchase_bills')
+    .select('id, bill_number, supplier_bill_number, issue_date, customer_id, subtotal, custom_fields, status')
+    .eq('organisation_id', orgId)
+    .eq('is_historical', false)
+    .is('deleted_at', null)
+    .gte('issue_date', periodStart)
+    .lte('issue_date', periodEnd)
+    .neq('status', 'draft')
+    .order('issue_date', { ascending: true });
+
+  if (pbErr) throw new Error(`Failed to fetch purchase bills: ${pbErr.message}`);
+
+  const pbFiltered = bills || [];
+
+  const supplierIds = [...new Set(pbFiltered.map(b => b.customer_id))];
+  const { data: suppliers } = await supabase
+    .from('customers').select('id, name, tax_id')
+    .in('id', supplierIds.length > 0 ? supplierIds : ['00000000-0000-0000-0000-000000000000']);
+  const supplierById = {};
+  (suppliers || []).forEach(c => { supplierById[c.id] = c; });
+
+  const billIds = pbFiltered.map(b => b.id);
+  const { data: pbItems } = await supabase
+    .from('purchase_bill_items').select('bill_id, quantity')
+    .in('bill_id', billIds.length > 0 ? billIds : ['00000000-0000-0000-0000-000000000000']);
+  const qtyByBill = {};
+  (pbItems || []).forEach(it => {
+    qtyByBill[it.bill_id] = (qtyByBill[it.bill_id] || 0) + (it.quantity || 0);
+  });
+
+  const purchaseHeaders = [
+    'Bill Date', 'Purchase Bill Number', 'Supplier Bill Number', 'Supplier Name',
+    'Supplier GSTIN', 'Taxable Value', 'Total Quantity', 'CGST Amount',
+    'SGST Amount', 'IGST Amount', 'Total Bill Value',
+  ];
+
+  const purchaseRows = pbFiltered.map(bill => {
+    const supplier = supplierById[bill.customer_id] || {};
+    const cgst = bill.custom_fields?.cgst_amount || 0;
+    const sgst = bill.custom_fields?.sgst_amount || 0;
+    const igst = bill.custom_fields?.igst_amount || 0;
+    const totalValue = Math.round((bill.subtotal + cgst + sgst + igst) * 100) / 100;
+    return {
+      'Bill Date': bill.issue_date,
+      'Purchase Bill Number': bill.bill_number,
+      'Supplier Bill Number': bill.supplier_bill_number || '',
+      'Supplier Name': supplier.name || '',
+      'Supplier GSTIN': supplier.tax_id || '',
+      'Taxable Value': bill.subtotal,
+      'Total Quantity': qtyByBill[bill.id] || 0,
+      'CGST Amount': cgst,
+      'SGST Amount': sgst,
+      'IGST Amount': igst,
+      'Total Bill Value': totalValue,
+    };
+  });
+
+  const purchaseCsv = rowsToCSV(purchaseHeaders, purchaseRows);
+  const purchaseFileName = `gst-filing-purchases_${periodStart}_to_${periodEnd}.csv`;
+  const purchaseStoragePath = `${orgId}/gst-filings/${purchaseFileName}`;
+
+  const { error: pbUploadErr } = await supabase.storage
+    .from('exports')
+    .upload(purchaseStoragePath, Buffer.from(purchaseCsv, 'utf-8'), { contentType: 'text/csv', upsert: true });
+
+  if (pbUploadErr) throw new Error(`Failed to upload purchase report: ${pbUploadErr.message}`);
+
   const { data: auditRow, error: auditErr } = await supabase
     .from('gst_filing_exports')
     .insert({
@@ -97,11 +179,17 @@ export async function generateGstFilingReport({ orgId, userId, periodType, perio
       period_end: periodEnd,
       invoice_count: filtered.length,
       storage_path: storagePath,
+      purchase_bill_count: pbFiltered.length,
+      purchase_storage_path: purchaseStoragePath,
     })
     .select('id')
     .single();
 
   if (auditErr) throw new Error(`Failed to log audit entry: ${auditErr.message}`);
 
-  return { storagePath, invoiceCount: filtered.length, auditId: auditRow.id };
+  return {
+    storagePath, invoiceCount: filtered.length,
+    purchaseStoragePath, purchaseBillCount: pbFiltered.length,
+    auditId: auditRow.id,
+  };
 }
