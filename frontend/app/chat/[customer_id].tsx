@@ -3343,22 +3343,22 @@ export default function CustomerChatScreen() {
                   )}
                 </View>
                 <TouchableOpacity style={styles.actionEditBtn} onPress={() => {
-                  if (action.action_type === 'create_invoice' || action.action_type === 'create_quote') {
+                  if (action.action_type === 'create_invoice' || action.action_type === 'create_quote' || action.action_type === 'create_purchase_bill') {
                     setPreviewVisible(false);
                     const p = action.parameters || {};
                     const params: Record<string, string> = {};
                     if (p.items) params.items = JSON.stringify(p.items);
                     if (p.due_date) params.due_date = p.due_date;
                     if (p.amount) params.amount = String(p.amount);
+                    if (p.supplier_bill_number) params.supplier_bill_number = p.supplier_bill_number;
                     if (previewDraftId) params.draft_id = previewDraftId;
                     if (action.action_id) params.action_id = action.action_id;
-                    // Real bug fixed Aug 2026 (Create Quote surface): both
-                    // action types previously always routed here to the
-                    // INVOICE screen, since quote.tsx was just a stub with
-                    // nowhere else to send them. Now branches correctly --
-                    // quote.tsx is a real screen, accepting the exact same
-                    // params.
-                    const editTarget = action.action_type === 'create_quote' ? 'quote' : 'invoice';
+                    // Real bug fixed Aug 2026 (Create Quote surface, later
+                    // extended to Purchase Bill): all three action types
+                    // previously always routed here to the INVOICE screen.
+                    // Now branches correctly across all three real screens,
+                    // each accepting the exact same params shape.
+                    const editTarget = action.action_type === 'create_quote' ? 'quote' : action.action_type === 'create_purchase_bill' ? 'purchase-bill' : 'invoice';
                     router.push({ pathname: `/customer/${customer_id}/${editTarget}`, params });
                   } else if (action.action_type === 'schedule_delivery' || action.action_type === 'set_reminder') {
                     const dateStr = action.action_type === 'schedule_delivery'
@@ -3411,7 +3411,10 @@ export default function CustomerChatScreen() {
                 // individually via their own per-card Edit link (which
                 // opens the date-edit sheet) remains the right place
                 // for that, not this master button.
-                const docAction = previewActions.find((a: any) => a.action_type === 'create_invoice' || a.action_type === 'create_quote');
+                // Extended Aug 2026 (found via Atif's live testing) to
+                // also recognize create_purchase_bill, matching the same
+                // fix already applied to the per-card Edit link above.
+                const docAction = previewActions.find((a: any) => a.action_type === 'create_invoice' || a.action_type === 'create_quote' || a.action_type === 'create_purchase_bill');
                 if (!docAction) return;
                 setPreviewVisible(false);
                 const p = docAction.parameters || {};
@@ -3419,9 +3422,10 @@ export default function CustomerChatScreen() {
                 if (p.items) params.items = JSON.stringify(p.items);
                 if (p.due_date) params.due_date = p.due_date;
                 if (p.amount) params.amount = String(p.amount);
+                if (p.supplier_bill_number) params.supplier_bill_number = p.supplier_bill_number;
                 if (previewDraftId) params.draft_id = previewDraftId;
                 if (docAction.action_id) params.action_id = docAction.action_id;
-                const editTarget = docAction.action_type === 'create_quote' ? 'quote' : 'invoice';
+                const editTarget = docAction.action_type === 'create_quote' ? 'quote' : docAction.action_type === 'create_purchase_bill' ? 'purchase-bill' : 'invoice';
                 router.push({ pathname: `/customer/${customer_id}/${editTarget}`, params });
               }}>
                 <Text style={styles.editMasterText}>Edit</Text>

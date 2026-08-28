@@ -53,12 +53,19 @@ import { useAuth } from '../../../contexts/AuthContext';
 import { supabase } from '../../../lib/supabase';
 import { authService } from '../../../lib/auth';
 
-interface Product { id: string; name: string; sku: string; selling_price: number; tax_rate: number; unit: string; hsn_code: string | null; }
-interface LineItem { product_id: string; product_name: string; quantity: number; unit_price: number; tax_rate: number; discount_pct: number; line_total: number; }
+interface Product { id: string; name: string; sku: string; selling_price: number; cost_price: number | null; tax_rate: number; unit: string; hsn_code: string | null; }
+interface LineItem { product_id: string; product_name: string; hsn_code: string | null; quantity: number; unit_price: number; tax_rate: number; discount_pct: number; line_total: number; }
 
 export default function NewPurchaseBillScreen() {
   const router = useRouter();
-  const params = useLocalSearchParams<{ id: string }>();
+  // Pre-fill support (Aug 2026, found via Atif's live testing): Spark's
+  // own confirmation-sheet Edit link/button already sends items/
+  // supplier_bill_number for a create_purchase_bill action, mirroring
+  // the exact same params invoice.tsx already accepts -- this screen
+  // simply never read them before, so tapping Edit on a Spark-drafted
+  // purchase bill silently opened a blank form instead of the drafted
+  // one.
+  const params = useLocalSearchParams<{ id: string; items?: string; supplier_bill_number?: string; draft_id?: string; action_id?: string }>();
   const id = params.id;
   const { setIsAuthenticated } = useAuth();
 
@@ -69,6 +76,12 @@ export default function NewPurchaseBillScreen() {
   const [customerId, setCustomerId] = useState(id || '');
   const [products, setProducts] = useState<Product[]>([]);
   const [items, setItems] = useState<LineItem[]>([]);
+  // CGST/SGST/IGST display (Aug 2026, Atif's own design review) --
+  // mirrors invoice.tsx's exact client-side preview math, sourced from
+  // the same fields the shared /api/invoice/new endpoint already
+  // returns for the interstate/intrastate comparison.
+  const [orgGstinState, setOrgGstinState] = useState<string | null>(null);
+  const [supplierState, setSupplierState] = useState<string | null>(null);
 
   const [supplierBillNumber, setSupplierBillNumber] = useState('');
   const [notes, setNotes] = useState('');
@@ -81,6 +94,7 @@ export default function NewPurchaseBillScreen() {
   const [newQty, setNewQty] = useState('');
   const [newPrice, setNewPrice] = useState('');
   const [newDiscount, setNewDiscount] = useState('');
+  const [newHsn, setNewHsn] = useState('');
 
   const getToken = async () => {
     const token = await authService.getAccessToken();
@@ -102,6 +116,36 @@ export default function NewPurchaseBillScreen() {
       setCustomerName(data.customer?.name || '');
       setCustomerId(data.customer?.id || id || '');
       setProducts(data.products || []);
+      setOrgGstinState(data.organisation?.gstin_state || null);
+      setSupplierState(data.billing_address?.state || null);
+
+      if (params.supplier_bill_number) setSupplierBillNumber(String(params.supplier_bill_number));
+
+      if (params.items) {
+        try {
+          const sparkItems = JSON.parse(params.items as string);
+          if (Array.isArray(sparkItems) && sparkItems.length > 0 && data.products) {
+            const lineItems: LineItem[] = sparkItems.map((si: any) => {
+              const match = (data.products || []).find((p: Product) =>
+                p.id === si.product_id || p.name.toLowerCase().includes((si.product_name || '').toLowerCase())
+              );
+              const qty = si.quantity || 1;
+              const price = si.unit_price ?? 0;
+              return {
+                product_id: match?.id || si.product_id || '',
+                product_name: match?.name || si.product_name || '',
+                hsn_code: si.hsn_code || match?.hsn_code || null,
+                quantity: qty,
+                unit_price: price,
+                tax_rate: match?.tax_rate || 0,
+                discount_pct: si.discount_pct || 0,
+                line_total: qty * price,
+              };
+            });
+            setItems(lineItems);
+          }
+        } catch (e) { console.warn('Failed to parse spark items:', e); }
+      }
     } catch {} finally { setLoading(false); }
   };
 
@@ -110,6 +154,15 @@ export default function NewPurchaseBillScreen() {
   const subtotal = items.reduce((s, i) => s + i.line_total, 0);
   const taxAmount = items.reduce((s, i) => s + (i.line_total * i.tax_rate / 100), 0);
   const total = subtotal + taxAmount;
+  // Same-state-or-unknown = CGST+SGST (half each); both known and
+  // different = IGST (full amount) -- matches recordPurchaseBill.js's
+  // own server-side calculation exactly, so this preview never drifts
+  // from what actually gets saved.
+  const isInterstate = !!(orgGstinState && supplierState &&
+    orgGstinState.toLowerCase() !== supplierState.toLowerCase());
+  const cgstAmount = isInterstate ? 0 : Math.round(taxAmount / 2 * 100) / 100;
+  const sgstAmount = isInterstate ? 0 : Math.round(taxAmount / 2 * 100) / 100;
+  const igstAmount = isInterstate ? Math.round(taxAmount * 100) / 100 : 0;
 
   const filteredProducts = products.filter(p =>
     p.name.toLowerCase().includes(productSearchQuery.toLowerCase())
@@ -118,11 +171,14 @@ export default function NewPurchaseBillScreen() {
   const handleSelectProduct = (productId: string) => {
     setSelectedProductId(productId);
     const product = products.find(p => p.id === productId);
-    // Cost price, not selling price, is the right default here -- this
-    // is what WE pay the supplier, not what we'd charge a customer.
-    // products.selling_price is the only price field GET /api/invoice/new
-    // currently returns; the owner can still type the real cost freely.
-    if (product) setNewPrice('');
+    // Auto-fills cost_price (Aug 2026, Atif's own design review) --
+    // what WE pay the supplier, not selling_price which is what we'd
+    // charge a customer. GET /api/invoice/new now also returns
+    // cost_price (purely additive addition, invoice.tsx/quote.tsx
+    // unaffected). Falls back to empty, still freely editable, if the
+    // product has no cost price on file yet.
+    if (product) setNewPrice(product.cost_price != null ? String(product.cost_price) : '');
+    if (product) setNewHsn(product.hsn_code || '');
     setProductSearchQuery('');
     setTimeout(() => quantityInputRef.current?.focus(), 100);
   };
@@ -138,7 +194,7 @@ export default function NewPurchaseBillScreen() {
     const lineSubtotal = qty * price;
     const lineTotal = Math.round((lineSubtotal - (lineSubtotal * discount / 100)) * 100) / 100;
     const newLine: LineItem = {
-      product_id: product.id, product_name: product.name,
+      product_id: product.id, product_name: product.name, hsn_code: newHsn || product.hsn_code,
       quantity: qty, unit_price: price, tax_rate: product.tax_rate, discount_pct: discount, line_total: lineTotal,
     };
     if (editingItemIndex !== null) {
@@ -148,7 +204,7 @@ export default function NewPurchaseBillScreen() {
     } else {
       setItems(prev => [...prev, newLine]);
     }
-    setSelectedProductId(''); setNewQty(''); setNewPrice(''); setNewDiscount('');
+    setSelectedProductId(''); setNewQty(''); setNewPrice(''); setNewDiscount(''); setNewHsn('');
   };
 
   const handleRemoveItem = (index: number) => { setItems(prev => prev.filter((_, i) => i !== index)); };
@@ -159,6 +215,7 @@ export default function NewPurchaseBillScreen() {
     setNewQty(String(item.quantity));
     setNewPrice(String(item.unit_price));
     setNewDiscount(item.discount_pct ? String(item.discount_pct) : '');
+    setNewHsn(item.hsn_code || '');
     setEditingItemIndex(index);
     setAddingItem(true);
   };
@@ -245,7 +302,7 @@ export default function NewPurchaseBillScreen() {
         method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           customer_id: customerId,
-          items: items.map(i => ({ product_id: i.product_id, quantity: i.quantity, unit_price: i.unit_price, discount_pct: i.discount_pct, tax_rate: i.tax_rate })),
+          items: items.map(i => ({ product_id: i.product_id, quantity: i.quantity, unit_price: i.unit_price, discount_pct: i.discount_pct, tax_rate: i.tax_rate, hsn_code: i.hsn_code })),
           supplier_bill_number: supplierBillNumber || null,
           notes: notes || null,
         }),
@@ -285,7 +342,15 @@ export default function NewPurchaseBillScreen() {
       </View>
 
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <ScrollView contentContainerStyle={s.scrollContent}>
+        {/* Real bug fixed (Aug 2026, found via Atif's live testing,
+            already solved for invoice.tsx): with no
+            keyboardShouldPersistTaps set, the default behavior is
+            'never' -- a tap on a product while the keyboard is open
+            first dismisses the keyboard (consuming that tap) instead of
+            selecting the product, requiring a second tap. 'handled'
+            lets taps on interactive elements go through immediately,
+            matching invoice.tsx's own proven fix exactly. */}
+        <ScrollView contentContainerStyle={s.scrollContent} keyboardShouldPersistTaps="handled">
           <Text style={s.sectionLabel}>SUPPLIER</Text>
           <View style={s.card}>
             <Text style={s.supplierName}>{customerName || 'Unknown supplier'}</Text>
@@ -323,6 +388,7 @@ export default function NewPurchaseBillScreen() {
               <TouchableOpacity style={{ flex: 1 }} onPress={() => handleEditItem(index)}>
                 <Text style={s.itemName}>{item.product_name}</Text>
                 <Text style={s.itemMeta}>{item.quantity} × ₹{item.unit_price.toFixed(2)}{item.discount_pct ? ` (−${item.discount_pct}%)` : ''}</Text>
+                <Text style={s.itemMeta}>HSN: {item.hsn_code || '—'}  ·  Discount: {item.discount_pct || 0}%</Text>
               </TouchableOpacity>
               <Text style={s.itemTotal}>₹{item.line_total.toFixed(2)}</Text>
               <TouchableOpacity onPress={() => handleRemoveItem(index)} style={s.itemRemoveBtn}>
@@ -366,8 +432,9 @@ export default function NewPurchaseBillScreen() {
                 <TextInput style={[s.input, { flex: 1 }]} value={newPrice} onChangeText={setNewPrice} placeholder="Unit price paid" keyboardType="numeric" placeholderTextColor="#AAA" />
               </View>
               <TextInput style={s.input} value={newDiscount} onChangeText={setNewDiscount} placeholder="Discount % (optional)" keyboardType="numeric" placeholderTextColor="#AAA" />
+              <TextInput style={s.input} value={newHsn} onChangeText={setNewHsn} placeholder="HSN code (optional)" placeholderTextColor="#AAA" />
               <View style={s.addItemActions}>
-                <TouchableOpacity style={s.cancelItemBtn} onPress={() => { setAddingItem(false); setEditingItemIndex(null); setSelectedProductId(''); setNewQty(''); setNewPrice(''); setNewDiscount(''); }}>
+                <TouchableOpacity style={s.cancelItemBtn} onPress={() => { setAddingItem(false); setEditingItemIndex(null); setSelectedProductId(''); setNewQty(''); setNewPrice(''); setNewDiscount(''); setNewHsn(''); }}>
                   <Text style={s.cancelItemText}>Cancel</Text>
                 </TouchableOpacity>
                 <TouchableOpacity style={s.addToListBtn} onPress={handleAddItem}>
@@ -389,16 +456,28 @@ export default function NewPurchaseBillScreen() {
 
           <View style={s.totalsCard}>
             <View style={s.totalsRow}><Text style={s.totalsLabel}>Subtotal</Text><Text style={s.totalsValue}>₹{subtotal.toFixed(2)}</Text></View>
-            <View style={s.totalsRow}><Text style={s.totalsLabel}>Tax</Text><Text style={s.totalsValue}>₹{taxAmount.toFixed(2)}</Text></View>
+            {isInterstate ? (
+              <View style={s.totalsRow}><Text style={s.totalsLabel}>IGST</Text><Text style={s.totalsValue}>₹{igstAmount.toFixed(2)}</Text></View>
+            ) : (
+              <>
+                <View style={s.totalsRow}><Text style={s.totalsLabel}>CGST</Text><Text style={s.totalsValue}>₹{cgstAmount.toFixed(2)}</Text></View>
+                <View style={s.totalsRow}><Text style={s.totalsLabel}>SGST</Text><Text style={s.totalsValue}>₹{sgstAmount.toFixed(2)}</Text></View>
+              </>
+            )}
             <View style={[s.totalsRow, s.totalsRowFinal]}><Text style={s.totalsLabelFinal}>Total</Text><Text style={s.totalsValueFinal}>₹{total.toFixed(2)}</Text></View>
           </View>
         </ScrollView>
 
-        <View style={s.footer}>
+        {/* Real bug fixed (Aug 2026, found via Atif's live testing):
+            this footer overlapped Android's system navigation buttons.
+            invoice.tsx's own proven fix wraps its equivalent footer in
+            a SEPARATE SafeAreaView with edges={['bottom']} rather than
+            a plain View -- matched here exactly. */}
+        <SafeAreaView style={s.footer} edges={['bottom']}>
           <TouchableOpacity style={s.submitBtn} onPress={handleSubmit} disabled={submitting}>
             {submitting ? <ActivityIndicator size="small" color="#FFF" /> : <Text style={s.submitText}>Record Purchase Bill</Text>}
           </TouchableOpacity>
-        </View>
+        </SafeAreaView>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );

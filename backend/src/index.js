@@ -8080,7 +8080,12 @@ app.get('/api/invoice/new', async (c) => {
       .eq('organisation_id', organisationId).eq('status', 'active').is('deleted_at', null).order('name');
 
     // Q4: Products (with images)
-    const { data: products } = await supabase.from('products').select('id, name, sku, selling_price, tax_rate, unit, image_url, custom_fields')
+    // cost_price added (Aug 2026, Purchase Bill subtask) -- purely
+    // additive, existing consumers (invoice.tsx, quote.tsx) are
+    // unaffected by one new key on each product object. Needed so the
+    // Purchase Bill screen can auto-fill what we'd pay a supplier,
+    // mirroring how invoice.tsx already auto-fills selling_price.
+    const { data: products } = await supabase.from('products').select('id, name, sku, selling_price, cost_price, tax_rate, unit, image_url, custom_fields')
       .eq('organisation_id', organisationId).eq('is_active', true).order('name');
 
     return c.json({
@@ -8090,7 +8095,7 @@ app.get('/api/invoice/new', async (c) => {
       billing_address: billingAddress,
       shipping_address: shippingAddress,
       products: (products || []).map(p => ({
-        id: p.id, name: p.name, sku: p.sku, selling_price: p.selling_price,
+        id: p.id, name: p.name, sku: p.sku, selling_price: p.selling_price, cost_price: p.cost_price || null,
         tax_rate: p.tax_rate || 0, unit: p.unit || 'unit', hsn_code: p.custom_fields?.hsn_code || null,
         image_url: p.image_url || null,
       })),

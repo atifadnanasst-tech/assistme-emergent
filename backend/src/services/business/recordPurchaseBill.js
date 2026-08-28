@@ -152,7 +152,10 @@ export async function recordPurchaseBill(supabase, orgId, customerId, items, opt
     if (productIds.length > 0) {
       const { data: products } = await supabase
         .from('products')
-        .select('id, name, cost_price, track_inventory, is_raw_material')
+        // custom_fields added (Aug 2026) -- hsn_code lives there, not a
+        // dedicated column, matching the same storage pattern products
+        // already use everywhere else in this codebase.
+        .select('id, name, cost_price, track_inventory, is_raw_material, custom_fields')
         .in('id', productIds)
         .eq('organisation_id', orgId);
       (products || []).forEach(p => { productMap[p.id] = p; });
@@ -220,6 +223,9 @@ export async function recordPurchaseBill(supabase, orgId, customerId, items, opt
         tax_rate: taxRate,
         line_total: lineTotal,
         sort_order: idx,
+        // HSN parity with invoice_items (Aug 2026, Atif's own design
+        // review) -- purely additive, nullable column.
+        hsn_code: item.hsn_code || productMap[item.product_id]?.custom_fields?.hsn_code || null,
       };
     });
 
