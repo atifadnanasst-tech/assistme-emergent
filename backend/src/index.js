@@ -5876,6 +5876,14 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
           details = `Send on: ${ent.due_date || 'TBD'}`;
         } else if (action.action_type === 'record_payment') {
           details = ent.amount ? `₹${ent.amount.toLocaleString('en-IN')}` : 'Amount TBD';
+        } else if (action.action_type === 'record_supplier_payment') {
+          // Real gap fixed (Aug 2026, found via Atif's live testing):
+          // this branch never existed at all, so a supplier-payment
+          // action fell through to the generic fallback below with no
+          // amount shown -- confirmed via direct code trace, not a
+          // frontend display bug. Matches record_payment's own pattern
+          // exactly, just for the reverse direction.
+          details = ent.amount ? `₹${ent.amount.toLocaleString('en-IN')}` : 'Amount TBD';
         } else if (action.action_type === 'record_opening_balance_receivable' || action.action_type === 'record_opening_balance_payable') {
           details = ent.amount ? `₹${ent.amount.toLocaleString('en-IN')}` : 'Amount TBD';
         }
