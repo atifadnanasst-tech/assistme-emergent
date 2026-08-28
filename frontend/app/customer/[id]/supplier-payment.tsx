@@ -64,7 +64,17 @@ export default function RecordSupplierPaymentScreen() {
   const [paymentDate, setPaymentDate] = useState(new Date());
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [paymentMode, setPaymentMode] = useState<string | null>(null);
-  const [selectedBillId, setSelectedBillId] = useState<string | null>(null);
+  // Multi-select via long-press (Aug 2026, Atif's own design), matching
+  // the standard mobile pattern: a normal tap selects just one bill and
+  // auto-fills the amount; a long-press enters multi-select, letting
+  // further taps toggle bills in/out, summing their amounts due. No new
+  // backend support needed for multiple bills -- if exactly one is
+  // selected, its bill_id is still passed directly (the existing,
+  // proven path); if several are selected, no specific bill_id is sent
+  // at all, letting the backend's existing FIFO auto-allocation apply
+  // naturally to those same (typically oldest) bills.
+  const [selectedBillIds, setSelectedBillIds] = useState<string[]>([]);
+  const [multiSelectMode, setMultiSelectMode] = useState(false);
   const [notes, setNotes] = useState('');
 
   const getToken = async () => {
@@ -105,6 +115,34 @@ export default function RecordSupplierPaymentScreen() {
 
   const totalDue = unpaidBills.reduce((s, b) => s + b.amount_due, 0);
 
+  const sumDue = (ids: string[]) => unpaidBills.filter(b => ids.includes(b.id)).reduce((s, b) => s + b.amount_due, 0);
+
+  const handleTapBill = (billId: string) => {
+    if (multiSelectMode) {
+      const next = selectedBillIds.includes(billId)
+        ? selectedBillIds.filter(id => id !== billId)
+        : [...selectedBillIds, billId];
+      setSelectedBillIds(next);
+      if (next.length > 0) setAmount(String(sumDue(next)));
+      if (next.length === 0) setMultiSelectMode(false);
+    } else {
+      setSelectedBillIds([billId]);
+      setAmount(String(unpaidBills.find(b => b.id === billId)?.amount_due || 0));
+    }
+  };
+
+  const handleLongPressBill = (billId: string) => {
+    setMultiSelectMode(true);
+    const next = selectedBillIds.includes(billId) ? selectedBillIds : [...selectedBillIds, billId];
+    setSelectedBillIds(next);
+    setAmount(String(sumDue(next)));
+  };
+
+  const handleSelectAutoAllocate = () => {
+    setSelectedBillIds([]);
+    setMultiSelectMode(false);
+  };
+
   const handleSubmit = async () => {
     const amt = parseFloat(amount);
     if (!amt || amt <= 0) { Alert.alert('Error', 'Enter a valid amount'); return; }
@@ -119,7 +157,7 @@ export default function RecordSupplierPaymentScreen() {
         method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           customer_id: customerId,
-          bill_id: selectedBillId || null,
+          bill_id: selectedBillIds.length === 1 ? selectedBillIds[0] : null,
           amount: amt,
           payment_date: toISODate(paymentDate),
           payment_mode: paymentMode,
@@ -222,23 +260,24 @@ export default function RecordSupplierPaymentScreen() {
             <Text style={s.sectionLabel}>APPLY TO A SPECIFIC BILL (OPTIONAL)</Text>
             <Text style={s.helperText}>Leave unselected to apply oldest-first automatically.</Text>
             <TouchableOpacity
-              style={[s.billRow, !selectedBillId && s.billRowActive]}
-              onPress={() => setSelectedBillId(null)}
+              style={[s.billRow, selectedBillIds.length === 0 && s.billRowActive]}
+              onPress={handleSelectAutoAllocate}
             >
               <Text style={s.billRowText}>Auto-allocate (oldest first)</Text>
-              {!selectedBillId && <Ionicons name="checkmark-circle" size={20} color="#075E54" />}
+              {selectedBillIds.length === 0 && <Ionicons name="checkmark-circle" size={20} color="#075E54" />}
             </TouchableOpacity>
             {unpaidBills.map(bill => (
               <TouchableOpacity
                 key={bill.id}
-                style={[s.billRow, selectedBillId === bill.id && s.billRowActive]}
-                onPress={() => setSelectedBillId(bill.id)}
+                style={[s.billRow, selectedBillIds.includes(bill.id) && s.billRowActive]}
+                onPress={() => handleTapBill(bill.id)}
+                onLongPress={() => handleLongPressBill(bill.id)}
               >
                 <View>
                   <Text style={s.billRowText}>{bill.bill_number}</Text>
                   <Text style={s.billRowMeta}>{fmt(bill.amount_due)} due of {fmt(bill.total_amount)}</Text>
                 </View>
-                {selectedBillId === bill.id && <Ionicons name="checkmark-circle" size={20} color="#075E54" />}
+                {selectedBillIds.includes(bill.id) && <Ionicons name="checkmark-circle" size={20} color="#075E54" />}
               </TouchableOpacity>
             ))}
           </>
