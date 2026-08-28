@@ -32,6 +32,23 @@
 
 import { csvEscape, rowsToCSV } from '../export/generateOwnerDataExport.js';
 
+// Natural numeric sort (Aug 2026, Atif's own explicit request) --
+// a plain string sort on values like "INV-100" vs "INV-59" would put
+// INV-100 first ('1' < '5' character-by-character), which is not what
+// a CA reviewing these sequentially would expect. Extracts the
+// trailing numeric run from each value (falling back to 0, and to a
+// full string comparison as a tiebreaker for any non-numeric suffix)
+// and sorts by that instead. Shared by both the sales and purchase
+// sections below rather than duplicated.
+function naturalSort(a, b, keyFn) {
+  const av = keyFn(a) || '';
+  const bv = keyFn(b) || '';
+  const aNum = parseInt((av.match(/(\d+)(?!.*\d)/) || [])[1] || '0', 10);
+  const bNum = parseInt((bv.match(/(\d+)(?!.*\d)/) || [])[1] || '0', 10);
+  if (aNum !== bNum) return aNum - bNum;
+  return av.localeCompare(bv);
+}
+
 export async function generateGstFilingReport({ orgId, userId, periodType, periodStart, periodEnd, supabase }) {
   const { data: invoices, error: invErr } = await supabase
     .from('invoices')
@@ -67,6 +84,8 @@ export async function generateGstFilingReport({ orgId, userId, periodType, perio
     'Taxable Value', 'Total Quantity', 'CGST Amount', 'SGST Amount',
     'IGST Amount', 'Total Invoice Value',
   ];
+
+  filtered.sort((a, b) => naturalSort(a, b, x => x.invoice_number));
 
   const rows = filtered.map(inv => {
     const cust = customerById[inv.customer_id] || {};
@@ -137,6 +156,8 @@ export async function generateGstFilingReport({ orgId, userId, periodType, perio
     'Supplier GSTIN', 'Taxable Value', 'Total Quantity', 'CGST Amount',
     'SGST Amount', 'IGST Amount', 'Total Bill Value',
   ];
+
+  pbFiltered.sort((a, b) => naturalSort(a, b, x => x.bill_number));
 
   const purchaseRows = pbFiltered.map(bill => {
     const supplier = supplierById[bill.customer_id] || {};
