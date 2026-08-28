@@ -59,6 +59,7 @@ interface FilingRecord {
   period_start: string;
   period_end: string;
   invoice_count: number;
+  purchase_bill_count: number;
   created_at: string;
 }
 
@@ -75,6 +76,7 @@ export default function GstFilingReportScreen() {
 
   const [history, setHistory] = useState<FilingRecord[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(true);
+  const [justGenerated, setJustGenerated] = useState<FilingRecord | null>(null);
 
   const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
 
@@ -116,12 +118,20 @@ export default function GstFilingReportScreen() {
     : mode === 'quarter' ? getFYQuarterBounds(refDate)
     : { start: customStart, end: customEnd, label: 'Custom Range' };
 
-  const downloadFiling = async (auditId: string, periodStart: string, periodEnd: string) => {
+  // fileType param added (Aug 2026, purchase-side GST report, Atif's
+  // own design) -- 'sales' default matches prior behavior exactly for
+  // any existing caller. expo-sharing's shareAsync() only accepts one
+  // file at a time, so a single click can't hand both files to the
+  // native share sheet at once -- instead, generating downloads both
+  // files locally right away, and the person gets a separate Share
+  // button per file, avoiding two share sheets popping up back-to-back
+  // unprompted.
+  const downloadFiling = async (auditId: string, periodStart: string, periodEnd: string, fileType: 'sales' | 'purchases' = 'sales') => {
     setDownloading(true);
     try {
       const token = await getToken();
       if (!token) return;
-      const res = await fetch(`${backendUrl}/api/gst-filing/${auditId}/download`, {
+      const res = await fetch(`${backendUrl}/api/gst-filing/${auditId}/download?type=${fileType}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!res.ok) {
@@ -140,7 +150,7 @@ export default function GstFilingReportScreen() {
       if (canShare) {
         await Sharing.shareAsync(localFile.uri, {
           mimeType: 'text/csv',
-          dialogTitle: `GST Filing Report (${periodStart} to ${periodEnd})`,
+          dialogTitle: `GST Filing Report — ${fileType === 'purchases' ? 'Purchases' : 'Sales'} (${periodStart} to ${periodEnd})`,
         });
       } else {
         Alert.alert('Downloaded', `Saved to: ${localFile.uri}`);
@@ -156,6 +166,7 @@ export default function GstFilingReportScreen() {
   const handleGenerate = async () => {
     if (generating) return;
     setGenerating(true);
+    setJustGenerated(null);
     try {
       const token = await getToken();
       if (!token) return;
@@ -173,7 +184,11 @@ export default function GstFilingReportScreen() {
       }
       const json = await res.json();
       await loadHistory();
-      await downloadFiling(json.auditId, periodStart, periodEnd);
+      setJustGenerated({
+        id: json.auditId, period_type: mode, period_start: periodStart, period_end: periodEnd,
+        invoice_count: json.invoiceCount || 0, purchase_bill_count: json.purchaseBillCount || 0,
+        created_at: new Date().toISOString(),
+      });
     } catch (err) {
       console.error('GST filing generate error:', err);
       Alert.alert('Generation failed', 'Could not generate the report. Please try again.');
@@ -286,6 +301,28 @@ export default function GstFilingReportScreen() {
           )}
         </TouchableOpacity>
 
+        {justGenerated && (
+          <View style={styles.generatedCard}>
+            <Text style={styles.generatedTitle}>Report ready — {justGenerated.period_start} to {justGenerated.period_end}</Text>
+            <TouchableOpacity
+              style={styles.shareBtn}
+              onPress={() => downloadFiling(justGenerated.id, justGenerated.period_start, justGenerated.period_end, 'sales')}
+              disabled={downloading}
+            >
+              <Ionicons name="share-outline" size={18} color="#075E54" />
+              <Text style={styles.shareBtnText}>Share Sales Report ({justGenerated.invoice_count} invoices)</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.shareBtn}
+              onPress={() => downloadFiling(justGenerated.id, justGenerated.period_start, justGenerated.period_end, 'purchases')}
+              disabled={downloading}
+            >
+              <Ionicons name="share-outline" size={18} color="#075E54" />
+              <Text style={styles.shareBtnText}>Share Purchases Report ({justGenerated.purchase_bill_count} bills)</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
         <Text style={styles.sectionLabel}>PAST FILINGS</Text>
         {loadingHistory ? (
           <ActivityIndicator color="#075E54" style={{ marginTop: 12 }} />
@@ -293,17 +330,18 @@ export default function GstFilingReportScreen() {
           <Text style={styles.emptyText}>No filings generated yet.</Text>
         ) : (
           history.map(f => (
-            <TouchableOpacity
-              key={f.id}
-              style={styles.historyRow}
-              onPress={() => downloadFiling(f.id, f.period_start, f.period_end)}
-            >
+            <View key={f.id} style={styles.historyRow}>
               <View style={{ flex: 1 }}>
                 <Text style={styles.historyPeriod}>{f.period_start} to {f.period_end}</Text>
-                <Text style={styles.historyMeta}>{f.invoice_count} invoices · {new Date(f.created_at).toLocaleDateString('en-IN')}</Text>
+                <Text style={styles.historyMeta}>{f.invoice_count} invoices · {f.purchase_bill_count || 0} purchase bills · {new Date(f.created_at).toLocaleDateString('en-IN')}</Text>
               </View>
-              <Ionicons name="download-outline" size={20} color="#075E54" />
-            </TouchableOpacity>
+              <TouchableOpacity onPress={() => downloadFiling(f.id, f.period_start, f.period_end, 'sales')} style={{ padding: 6 }}>
+                <Ionicons name="download-outline" size={20} color="#075E54" />
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => downloadFiling(f.id, f.period_start, f.period_end, 'purchases')} style={{ padding: 6 }}>
+                <Ionicons name="download-outline" size={20} color="#F59E0B" />
+              </TouchableOpacity>
+            </View>
           ))
         )}
       </ScrollView>
@@ -334,6 +372,10 @@ const styles = StyleSheet.create({
   generateBtnDisabled: { opacity: 0.6 },
   generateBtnText: { color: '#FFF', fontSize: 16, fontWeight: '600' },
   emptyText: { color: '#999', fontSize: 14, marginTop: 8 },
+  generatedCard: { backgroundColor: '#F0FDF4', borderRadius: 10, padding: 14, marginTop: 20, borderWidth: 1, borderColor: '#BBF7D0' },
+  generatedTitle: { fontSize: 14, fontWeight: '700', color: '#166534', marginBottom: 10 },
+  shareBtn: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#FFF', borderRadius: 8, borderWidth: 1, borderColor: '#075E54', paddingVertical: 10, paddingHorizontal: 12, marginTop: 8 },
+  shareBtnText: { fontSize: 13, fontWeight: '600', color: '#075E54' },
   historyRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#EEE' },
   historyPeriod: { fontSize: 14, fontWeight: '600', color: '#333' },
   historyMeta: { fontSize: 12, color: '#888', marginTop: 2 },
