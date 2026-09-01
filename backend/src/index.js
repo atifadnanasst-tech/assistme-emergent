@@ -283,7 +283,7 @@ async function broadcastNewMessage(orgId, payload) {
 }
 
 // ─── Cross-Org Card Mirror Helper ────────────────────────────
-async function mirrorCardToReceiverOrg({ supabase, senderOrgId, senderUserId, customerPhone, originalMetadata, originalContent }) {
+async function mirrorCardToReceiverOrg({ supabase, senderOrgId, senderUserId, customerPhone, originalMetadata, originalContent, transportId }) {
   try {
     if (!customerPhone) return;
     const normalizePhone = (p) => p ? p.replace(/\D/g, '').padStart(12, '').slice(-12).replace(/^0+/, '') : null;
@@ -345,6 +345,7 @@ async function mirrorCardToReceiverOrg({ supabase, senderOrgId, senderUserId, cu
         read_by_owner: false,
         sender_org_id: senderOrgId,
       },
+      transport_id: transportId || null,
       tokens_input: 0,
       tokens_output: 0,
     });
@@ -3596,9 +3597,11 @@ async function postInvoiceCardToChat({ organisationId, userId, customerId, custo
   if (!conv) return { shared: false, message_id: null, error: 'no_conversation' };
 
   const label = isQuote ? 'Quote' : 'Invoice';
+  const transportId = crypto.randomUUID();
   const { data: msg, error: msgErr } = await supabase.from('messages').insert({
     organisation_id: organisationId, conversation_id: conv.id,
     role: 'tool', content: `${label} ${invoiceNumber} created`,
+    transport_id: transportId,
     metadata: {
       sender_type: 'system', visibility: 'both', message_type: 'invoice_card',
       read_by_owner: true, preview_text: `${label} ${invoiceNumber} - ₹${totalAmount}`,
@@ -3620,6 +3623,7 @@ async function postInvoiceCardToChat({ organisationId, userId, customerId, custo
     supabase, senderOrgId: organisationId, senderUserId: userId,
     customerPhone, originalMetadata: msg?.metadata || {},
     originalContent: msg?.content || '',
+    transportId,
   });
 
   return { shared: true, message_id: msg.id, pdf_url: pdfUrl || null };
@@ -6231,11 +6235,13 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
             }
 
             if (conv) {
+              const transportId = crypto.randomUUID();
               const { data: cardMsg } = await supabase.from('messages').insert({
                 organisation_id: organisationId,
                 conversation_id: conv.id,
                 role: 'tool',
                 content: `Invoice #${invoiceNumber} created`,
+                transport_id: transportId,
                 metadata: {
                   sender_type: 'system',
                   visibility: 'both',
@@ -6271,6 +6277,7 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
                 customerPhone: customer?.phone,
                 originalMetadata: cardMsg?.metadata || {},
                 originalContent: cardMsg?.content || '',
+                transportId,
               });
             }
 
@@ -6605,11 +6612,13 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
               console.warn('[PDF] Quote PDF generation failed:', pdfErr.message);
             }
             if (qtConv) {
+              const transportId = crypto.randomUUID();
               const { data: cardMsg } = await supabase.from('messages').insert({
                 organisation_id: organisationId,
                 conversation_id: qtConv.id,
                 role: 'tool',
                 content: `Quote ${quoteNumber} created`,
+                transport_id: transportId,
                 metadata: {
                   sender_type: 'system',
                   visibility: 'both',
@@ -6639,6 +6648,7 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
                 customerPhone: customer?.phone,
                 originalMetadata: cardMsg?.metadata || {},
                 originalContent: cardMsg?.content || '',
+                transportId,
               });
             }
             executed.push(actionId);
@@ -6751,9 +6761,11 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
               .eq('organisation_id', organisationId).eq('entity_type', 'customer')
               .eq('entity_id', customerId).eq('status', 'active').maybeSingle();
             if (convConv) {
+              const transportId = crypto.randomUUID();
               const { data: cardMsg } = await supabase.from('messages').insert({
                 organisation_id: organisationId, conversation_id: convConv.id,
                 role: 'tool', content: `Invoice #${invoiceNumber} created`,
+                transport_id: transportId,
                 metadata: {
                   sender_type: 'system', visibility: 'both', message_type: 'invoice_card',
                   read_by_owner: true, preview_text: `Invoice #${invoiceNumber} created`,
@@ -6777,6 +6789,7 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
                 customerPhone: customer?.phone,
                 originalMetadata: cardMsg?.metadata || {},
                 originalContent: cardMsg?.content || '',
+                transportId,
               });
             }
 
@@ -9522,9 +9535,11 @@ app.post('/api/invoices/:invoice_id/share', async (c) => {
 
       console.log(`📱 [SHARE] PDF URL: ${attachment?.public_url || 'None'}`);
 
+      const transportId = crypto.randomUUID();
       const { data: msg, error: msgErr } = await supabase.from('messages').insert({
         organisation_id: organisationId, conversation_id: conv.id,
         role: 'tool', content: `Invoice #${invoice.invoice_number} created`,
+        transport_id: transportId,
         metadata: {
           sender_type: 'system', visibility: 'both', message_type: 'invoice_card',
           read_by_owner: true, preview_text: `Invoice #${invoice.invoice_number} - ₹${invoice.total_amount}`,
@@ -9552,6 +9567,7 @@ app.post('/api/invoices/:invoice_id/share', async (c) => {
         customerPhone: customer?.phone,
         originalMetadata: msg?.metadata || {},
         originalContent: msg?.content || '',
+        transportId,
       });
 
       // Delivery Challan (Aug 2026): owner_only visibility, deliberately NOT
