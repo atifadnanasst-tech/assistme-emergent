@@ -357,6 +357,35 @@ async function mirrorCardToReceiverOrg({ supabase, senderOrgId, senderUserId, cu
   }
 }
 
+// Fetches full structured line items for an invoice, used when mirroring
+// a card cross-org: the receiver's own Acknowledge action needs real
+// line items (not just the summary text) to create their own Purchase
+// Bill. product_id is intentionally dropped before this data is ever
+// used to create a record in the RECEIVER's org (see the acknowledge
+// endpoint) -- it refers to the SENDER's own product catalog and has no
+// meaning in the receiver's org. Kept here only for potential future
+// same-org uses of this helper.
+async function fetchInvoiceItemsForCard(invoiceId, organisationId) {
+  try {
+    const { data: rows } = await supabase.from('invoice_items')
+      .select('product_id, description, quantity, unit_price, discount_pct, tax_rate, hsn_code')
+      .eq('invoice_id', invoiceId).eq('organisation_id', organisationId)
+      .is('deleted_at', null).order('sort_order');
+    return (rows || []).map(r => ({
+      product_id: r.product_id || null,
+      description: r.description || 'Item',
+      quantity: r.quantity,
+      unit_price: r.unit_price,
+      discount_pct: r.discount_pct || 0,
+      tax_rate: r.tax_rate || 0,
+      hsn_code: r.hsn_code || null,
+    }));
+  } catch (err) {
+    console.warn('[MIRROR] fetchInvoiceItemsForCard failed:', err?.message);
+    return [];
+  }
+}
+
 // Create Hono app
 const app = new Hono();
 
@@ -3559,7 +3588,7 @@ app.get('/api/quotes/:quote_id', async (c) => {
 // worth it. Unlike the Spark convert_quote_to_invoice decision, this is
 // Claude's own recent code (not a hard-won, battle-tested path), so a
 // careful, verified extraction here is low-risk.
-async function postInvoiceCardToChat({ organisationId, userId, customerId, customerPhone, invoiceId, invoiceNumber, totalAmount, dueDate, statusLabel, itemsSummary, pdfUrl, isQuote }) {
+async function postInvoiceCardToChat({ organisationId, userId, customerId, customerPhone, invoiceId, invoiceNumber, totalAmount, dueDate, statusLabel, itemsSummary, pdfUrl, isQuote, items }) {
   const { data: conv } = await supabase.from('conversations').select('id')
     .eq('organisation_id', organisationId).eq('entity_type', 'customer')
     .eq('entity_id', customerId).eq('status', 'active').maybeSingle();
@@ -3579,6 +3608,7 @@ async function postInvoiceCardToChat({ organisationId, userId, customerId, custo
         total_amount: totalAmount, due_date: dueDate,
         status: statusLabel, items_summary: itemsSummary,
         pdf_url: pdfUrl || null, is_quote: !!isQuote,
+        items: items || [],
       },
     },
     tokens_input: 0, tokens_output: 0,
@@ -3625,6 +3655,7 @@ app.post('/api/quotes/:quote_id/share', async (c) => {
         invoiceId: quoteId, invoiceNumber: quote.quote_number, totalAmount: quote.total_amount,
         dueDate: quote.expiry_date, statusLabel: quote.status, itemsSummary,
         pdfUrl: attachment?.public_url || null, isQuote: true,
+        items: [], // quotes are excluded from Acknowledge/Dispute -- no financial record is created from a quote
       });
       if (!result.shared) return c.json(result, result.error === 'no_conversation' ? 200 : 500);
       return c.json(result);
@@ -3665,11 +3696,13 @@ app.post('/api/quotes/:quote_id/convert', async (c) => {
     });
     if (result.error) return c.json({ error: 'server_error', detail: result.error }, 500);
 
+    const convertedItems = await fetchInvoiceItemsForCard(result.invoice_id, organisationId);
     const cardResult = await postInvoiceCardToChat({
       organisationId, userId, customerId: quote.customer_id, customerPhone: customer?.phone,
       invoiceId: result.invoice_id, invoiceNumber: result.invoice_number, totalAmount: result.total_amount,
       dueDate: new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0], statusLabel: 'sent',
       itemsSummary: `Converted from ${result.quote_number}`, pdfUrl: result.pdf_url, isQuote: false,
+      items: convertedItems,
     });
 
     return c.json({ ...result, ...cardResult });
@@ -6218,6 +6251,14 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
                     status: 'sent',
                     items_summary: itemsSummary,
                     pdf_url: invoicePdfUrl,
+                    items: (totals.line_items || []).map(li => ({
+                      product_id: li.product_id || null,
+                      description: li.product_name || 'Item',
+                      quantity: li.quantity,
+                      unit_price: li.unit_price,
+                      discount_pct: li.discount_pct || 0,
+                      tax_rate: li.tax_rate || 0,
+                    })),
                   },
                 },
                 tokens_input: 0, tokens_output: 0,
@@ -6585,6 +6626,7 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
                     items_summary: itemsArr.map(i => `${i.product_name} × ${i.quantity || 1}`).join(', '),
                     pdf_url: quotePdfUrl,
                     is_quote: true,
+                    items: [], // quotes are excluded from Acknowledge/Dispute -- no financial record is created from a quote
                   },
                 },
                 tokens_input: 0, tokens_output: 0,
@@ -6722,6 +6764,7 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
                     due_date: params.due_date || new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0],
                     status: 'sent', items_summary: `Converted from ${quote.quote_number}`,
                     pdf_url: convertedPdfUrl,
+                    items: await fetchInvoiceItemsForCard(newInv.id, organisationId),
                   },
                 },
                 tokens_input: 0, tokens_output: 0,
@@ -9468,9 +9511,10 @@ app.post('/api/invoices/:invoice_id/share', async (c) => {
       
       console.log(`📱 [SHARE] Found conversation: ${conv.id}`);
       
-      // Fetch items summary
+      // Fetch items summary (display) + full structured items (for cross-org Acknowledge)
       const { data: items } = await supabase.from('invoice_items').select('description, quantity').eq('invoice_id', invoiceId).limit(3);
       const itemsSummary = (items || []).map(i => `${i.description} × ${i.quantity}`).join(', ');
+      const fullItems = await fetchInvoiceItemsForCard(invoiceId, organisationId);
 
       // Get PDF URL
       const { data: attachment } = await supabase.from('attachments').select('public_url')
@@ -9490,6 +9534,7 @@ app.post('/api/invoices/:invoice_id/share', async (c) => {
             total_amount: invoice.total_amount, due_date: invoice.due_date,
             status: invoice.status, items_summary: itemsSummary,
             pdf_url: attachment?.public_url || null,
+            items: fullItems,
           },
         },
         tokens_input: 0, tokens_output: 0,
