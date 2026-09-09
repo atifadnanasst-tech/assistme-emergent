@@ -2469,6 +2469,36 @@ app.get('/api/chat/:customer_id', async (c) => {
           transport_id: m.transport_id || null,
           metadata: m.metadata || {},
         })).reverse();
+
+        // Batch-attach Acknowledge/Dispute status to invoice cards on this
+        // page, keyed by transport_id -- the same identity shared between
+        // the sender's own card and the receiver's mirrored copy (see
+        // v1.3.517/518). One query for the whole page, not one per card,
+        // so BOTH sides can render the correct pill/buttons without a
+        // second round-trip. Purely additive -- card_data keeps every
+        // field it already had; ack_status/ack_is_receiver are new.
+        const invoiceCardTransportIds = messages
+          .filter(m => m.card_type === 'invoice_card' && m.transport_id)
+          .map(m => m.transport_id);
+        if (invoiceCardTransportIds.length > 0) {
+          const { data: ackRows } = await supabase.from('card_acknowledgements')
+            .select('transport_id, status, receiver_org_id')
+            .in('transport_id', invoiceCardTransportIds);
+          const ackByTransportId = {};
+          (ackRows || []).forEach(r => { ackByTransportId[r.transport_id] = r; });
+          messages = messages.map(m => {
+            const ack = m.card_type === 'invoice_card' && m.transport_id ? ackByTransportId[m.transport_id] : null;
+            if (!ack) return m;
+            return {
+              ...m,
+              card_data: {
+                ...m.card_data,
+                ack_status: ack.status,
+                ack_is_receiver: ack.receiver_org_id === organisationId,
+              },
+            };
+          });
+        }
       }
 
       // 4. Mark conversation viewed (Conversation Visibility Doctrine)

@@ -243,6 +243,13 @@ export default function CustomerChatScreen() {
   const [previewInsight, setPreviewInsight] = useState<string | null>(null);
   const [checkedActions, setCheckedActions] = useState<Set<string>>(new Set());
   const [confirming, setConfirming] = useState(false);
+  // Acknowledge/Dispute (cross-org card reconciliation) -- per-message
+  // in-flight guard so a slow network can't let a double-tap through
+  // client-side (the backend's own UNIQUE constraint is the real guard;
+  // this is just to keep the UI from looking broken while a request is out).
+  const [ackInFlight, setAckInFlight] = useState<Set<string>>(new Set());
+  const [disputingMsgId, setDisputingMsgId] = useState<string | null>(null);
+  const [disputeReasonText, setDisputeReasonText] = useState('');
   // Auto-confirm banner
   const [bannerVisible, setBannerVisible] = useState(false);
   const [bannerText, setBannerText] = useState('');
@@ -1999,6 +2006,60 @@ export default function CustomerChatScreen() {
     );
   };
 
+  // ── Acknowledge / Dispute handlers (cross-org card reconciliation) ──
+  const handleAcknowledgeCard = async (msg: ChatMessage) => {
+    if (!msg.transport_id || ackInFlight.has(msg.id)) return;
+    setAckInFlight(prev => new Set(prev).add(msg.id));
+    try {
+      const token = await getToken();
+      if (!token) return;
+      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+      const res = await fetch(`${backendUrl}/api/cards/${msg.transport_id}/acknowledge`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        Alert.alert('Could not acknowledge', data?.error === 'already_decided' ? 'This has already been acted on.' : 'Something went wrong. Please try again.');
+        return;
+      }
+      await loadChat(false);
+    } catch (err) {
+      Alert.alert('Error', 'Could not acknowledge this invoice. Check your connection and try again.');
+    } finally {
+      setAckInFlight(prev => { const next = new Set(prev); next.delete(msg.id); return next; });
+    }
+  };
+
+  const handleSubmitDispute = async (msg: ChatMessage) => {
+    const reason = disputeReasonText.trim();
+    if (!reason) { Alert.alert('Reason required', 'Please describe the issue before submitting.'); return; }
+    if (!msg.transport_id || ackInFlight.has(msg.id)) return;
+    setAckInFlight(prev => new Set(prev).add(msg.id));
+    try {
+      const token = await getToken();
+      if (!token) return;
+      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+      const res = await fetch(`${backendUrl}/api/cards/${msg.transport_id}/dispute`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        Alert.alert('Could not submit dispute', data?.error === 'already_decided' ? 'This has already been acted on.' : 'Something went wrong. Please try again.');
+        return;
+      }
+      setDisputingMsgId(null);
+      setDisputeReasonText('');
+      await loadChat(false);
+    } catch (err) {
+      Alert.alert('Error', 'Could not submit dispute. Check your connection and try again.');
+    } finally {
+      setAckInFlight(prev => { const next = new Set(prev); next.delete(msg.id); return next; });
+    }
+  };
+
   const renderInvoiceCard = (msg: ChatMessage) => {
     const cd = msg.card_data || {};
     const invoiceId = cd.invoice_id;
@@ -2058,6 +2119,80 @@ export default function CustomerChatScreen() {
               </View>
             </TouchableOpacity>
           </View>
+          {msg.metadata?.cross_org === true && !cd.is_quote && !cd.is_statement && !cd.is_receipt && (
+            cd.ack_status === 'acknowledged' ? (
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 8, marginTop: 8, backgroundColor: '#E8F5E9', borderRadius: 8 }}>
+                <Ionicons name="checkmark-circle" size={16} color="#4CAF50" />
+                <Text style={{ fontSize: 14, fontWeight: '600', color: '#4CAF50' }}>Acknowledged</Text>
+              </View>
+            ) : cd.ack_status === 'disputed' ? (
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 8, marginTop: 8, backgroundColor: '#FCE4EC', borderRadius: 8 }}>
+                <Ionicons name="close-circle" size={16} color="#D32F2F" />
+                <Text style={{ fontSize: 14, fontWeight: '600', color: '#D32F2F' }}>Disputed</Text>
+              </View>
+            ) : disputingMsgId === msg.id ? (
+              <View style={{ marginTop: 8, backgroundColor: '#FCE4EC', borderRadius: 8, padding: 10 }}>
+                <Text style={{ fontSize: 13, fontWeight: '600', color: '#AD1457', marginBottom: 6 }}>What's the issue?</Text>
+                <TextInput
+                  value={disputeReasonText}
+                  onChangeText={setDisputeReasonText}
+                  placeholder="Describe the dispute..."
+                  placeholderTextColor="#C48B9F"
+                  multiline
+                  style={{ backgroundColor: '#FFF', borderRadius: 6, padding: 8, fontSize: 14, color: '#333', minHeight: 60, textAlignVertical: 'top' }}
+                />
+                <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
+                  <TouchableOpacity
+                    onPress={() => { setDisputingMsgId(null); setDisputeReasonText(''); }}
+                    disabled={ackInFlight.has(msg.id)}
+                    style={{ flex: 1 }}
+                  >
+                    <View style={{ paddingVertical: 8, borderRadius: 6, alignItems: 'center', backgroundColor: '#F0F0F0' }}>
+                      <Text style={{ fontSize: 13, fontWeight: '600', color: '#666' }}>Cancel</Text>
+                    </View>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={() => handleSubmitDispute(msg)}
+                    disabled={ackInFlight.has(msg.id)}
+                    style={{ flex: 1 }}
+                  >
+                    <View style={{ paddingVertical: 8, borderRadius: 6, alignItems: 'center', backgroundColor: ackInFlight.has(msg.id) ? '#E0A8B8' : '#D32F2F' }}>
+                      {ackInFlight.has(msg.id)
+                        ? <ActivityIndicator size="small" color="#FFF" />
+                        : <Text style={{ fontSize: 13, fontWeight: '600', color: '#FFF' }}>Submit</Text>}
+                    </View>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ) : (
+              <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
+                <TouchableOpacity
+                  onPress={() => handleAcknowledgeCard(msg)}
+                  disabled={ackInFlight.has(msg.id)}
+                  style={{ flex: 1 }}
+                >
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 8, paddingHorizontal: 12, backgroundColor: ackInFlight.has(msg.id) ? '#A5D6A7' : '#4CAF50', borderRadius: 8 }}>
+                    {ackInFlight.has(msg.id)
+                      ? <ActivityIndicator size="small" color="#FFF" />
+                      : (<>
+                          <Ionicons name="checkmark" size={16} color="#FFF" />
+                          <Text style={{ fontSize: 14, fontWeight: '600', color: '#FFF' }}>Acknowledge</Text>
+                        </>)}
+                  </View>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => { setDisputingMsgId(msg.id); setDisputeReasonText(''); }}
+                  disabled={ackInFlight.has(msg.id)}
+                  style={{ flex: 1 }}
+                >
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 8, paddingHorizontal: 12, backgroundColor: '#FFEBEE', borderRadius: 8 }}>
+                    <Ionicons name="alert-circle-outline" size={16} color="#D32F2F" />
+                    <Text style={{ fontSize: 14, fontWeight: '600', color: '#D32F2F' }}>Dispute</Text>
+                  </View>
+                </TouchableOpacity>
+              </View>
+            )
+          )}
         </View>
       </View>
     );
