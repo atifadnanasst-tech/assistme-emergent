@@ -3629,6 +3629,234 @@ async function postInvoiceCardToChat({ organisationId, userId, customerId, custo
   return { shared: true, message_id: msg.id, pdf_url: pdfUrl || null };
 }
 
+// ─── Acknowledge / Dispute (cross-org card reconciliation) ────────────
+// Only the RECEIVER of a mirrored card can acknowledge or dispute it.
+// The sender's own copy is read-only -- it just displays whatever
+// status ends up in card_acknowledgements, keyed by the shared
+// transport_id both copies carry (see v1.3.517).
+//
+// No permission/role check in v1 (Atif's explicit call, flat-permission
+// multi-seat environment) -- any logged-in user at the receiver org can
+// act; who actually did it is captured in acted_by_user_id for the
+// owner to see later.
+//
+// Concurrency: the claim insert below relies on card_acknowledgements'
+// UNIQUE(transport_id, receiver_org_id) constraint as the real race
+// guard -- a simultaneous double-tap gets rejected by the database
+// itself (23505), not just by a disabled button in the app, so it's
+// structurally impossible to create two Purchase Bills from one card.
+
+app.post('/api/cards/:transport_id/acknowledge', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId, userId } = auth;
+    const transportId = c.req.param('transport_id');
+    if (!transportId) return c.json({ error: 'transport_id_required' }, 400);
+
+    const { data: mirroredMsg } = await supabase.from('messages')
+      .select('id, conversation_id, metadata')
+      .eq('transport_id', transportId)
+      .eq('organisation_id', organisationId)
+      .eq('metadata->>cross_org', 'true')
+      .maybeSingle();
+    if (!mirroredMsg) return c.json({ error: 'card_not_found' }, 404);
+
+    const cardType = mirroredMsg.metadata?.card_type;
+    const cardData = mirroredMsg.metadata?.card_data || {};
+    const senderOrgId = mirroredMsg.metadata?.sender_org_id;
+    if (cardType !== 'invoice_card') return c.json({ error: 'unsupported_card_type' }, 400);
+    if (cardData.is_quote) return c.json({ error: 'quotes_not_acknowledgeable' }, 400);
+    if (!senderOrgId) return c.json({ error: 'sender_org_unknown' }, 500);
+
+    // Friendly pre-check (nice error) -- the insert below is the real guard.
+    const { data: existing } = await supabase.from('card_acknowledgements')
+      .select('status').eq('transport_id', transportId).eq('receiver_org_id', organisationId).maybeSingle();
+    if (existing && existing.status !== 'pending') {
+      return c.json({ error: 'already_decided', status: existing.status }, 409);
+    }
+
+    const { data: claimedRow, error: claimErr } = await supabase.from('card_acknowledgements')
+      .insert({
+        transport_id: transportId,
+        sender_org_id: senderOrgId,
+        receiver_org_id: organisationId,
+        card_action_type: cardType,
+        status: 'pending',
+      })
+      .select('id').single();
+    if (claimErr) {
+      if (claimErr.code === '23505') return c.json({ error: 'already_decided' }, 409);
+      console.error('[ACKNOWLEDGE] claim insert failed:', claimErr.message);
+      return c.json({ error: 'server_error' }, 500);
+    }
+    const ackRowId = claimedRow.id;
+
+    const { data: conv } = await supabase.from('conversations')
+      .select('entity_id').eq('id', mirroredMsg.conversation_id).eq('organisation_id', organisationId).maybeSingle();
+    const receiverCustomerId = conv?.entity_id;
+    if (!receiverCustomerId) {
+      await supabase.from('card_acknowledgements').delete().eq('id', ackRowId);
+      return c.json({ error: 'customer_lookup_failed' }, 500);
+    }
+
+    // product_id in the mirrored items refers to the SENDER's own
+    // catalog -- meaningless in the receiver's org, dropped before
+    // recordPurchaseBill ever sees it (description-only match).
+    const items = (cardData.items || []).map(i => ({
+      product_id: null,
+      description: i.description,
+      quantity: i.quantity,
+      unit_price: i.unit_price,
+      discount_pct: i.discount_pct || 0,
+      tax_rate: i.tax_rate || 0,
+      hsn_code: i.hsn_code || null,
+    }));
+    if (items.length === 0) {
+      await supabase.from('card_acknowledgements').delete().eq('id', ackRowId);
+      return c.json({ error: 'no_items_on_card' }, 422);
+    }
+
+    const { recordPurchaseBill } = await import('./services/business/recordPurchaseBill.js');
+    const pbResult = await recordPurchaseBill(supabase, organisationId, receiverCustomerId, items, {
+      dueDate: cardData.due_date || null,
+      supplierBillNumber: cardData.invoice_number || null,
+      notes: `Acknowledged from cross-org invoice ${cardData.invoice_number || ''}`.trim(),
+    });
+
+    if (pbResult.status !== 'success') {
+      // Fail closed: no Purchase Bill was actually created, so this
+      // card must not show as Acknowledged. Roll back the claim so the
+      // user can retry.
+      await supabase.from('card_acknowledgements').delete().eq('id', ackRowId);
+      console.error('[ACKNOWLEDGE] recordPurchaseBill failed:', pbResult.error, pbResult.message);
+      return c.json({ error: 'purchase_bill_creation_failed', detail: pbResult.error }, 502);
+    }
+
+    await supabase.from('card_acknowledgements').update({
+      status: 'acknowledged',
+      acted_by_user_id: userId,
+      acted_at: new Date().toISOString(),
+      created_record_type: 'purchase_bill',
+      created_record_id: pbResult.bill_id,
+      updated_at: new Date().toISOString(),
+    }).eq('id', ackRowId);
+
+    // Nudge both sides to refetch -- reuses the existing broadcast
+    // channel the chat screen already listens to for new messages.
+    await broadcastNewMessage(organisationId, { conversation_id: mirroredMsg.conversation_id });
+    const { data: senderMsg } = await supabase.from('messages')
+      .select('conversation_id').eq('transport_id', transportId).eq('organisation_id', senderOrgId).maybeSingle();
+    if (senderMsg) await broadcastNewMessage(senderOrgId, { conversation_id: senderMsg.conversation_id });
+
+    return c.json({
+      status: 'acknowledged',
+      bill_id: pbResult.bill_id,
+      bill_number: pbResult.bill_number,
+      total_amount: pbResult.total_amount,
+    });
+  } catch (err) {
+    console.error('[ACKNOWLEDGE] unexpected error:', err.message);
+    return c.json({ error: 'server_error' }, 500);
+  }
+});
+
+app.post('/api/cards/:transport_id/dispute', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId, userId } = auth;
+    const transportId = c.req.param('transport_id');
+    if (!transportId) return c.json({ error: 'transport_id_required' }, 400);
+
+    const body = await c.req.json().catch(() => ({}));
+    const reason = (body.reason || '').trim();
+    if (!reason) return c.json({ error: 'reason_required' }, 400);
+    if (reason.length > 2000) return c.json({ error: 'reason_too_long' }, 400);
+
+    const { data: mirroredMsg } = await supabase.from('messages')
+      .select('id, conversation_id, metadata')
+      .eq('transport_id', transportId)
+      .eq('organisation_id', organisationId)
+      .eq('metadata->>cross_org', 'true')
+      .maybeSingle();
+    if (!mirroredMsg) return c.json({ error: 'card_not_found' }, 404);
+
+    const cardType = mirroredMsg.metadata?.card_type;
+    const cardData = mirroredMsg.metadata?.card_data || {};
+    const senderOrgId = mirroredMsg.metadata?.sender_org_id;
+    if (cardType !== 'invoice_card') return c.json({ error: 'unsupported_card_type' }, 400);
+    if (cardData.is_quote) return c.json({ error: 'quotes_not_disputable' }, 400);
+    if (!senderOrgId) return c.json({ error: 'sender_org_unknown' }, 500);
+
+    const { data: existing } = await supabase.from('card_acknowledgements')
+      .select('status').eq('transport_id', transportId).eq('receiver_org_id', organisationId).maybeSingle();
+    if (existing && existing.status !== 'pending') {
+      return c.json({ error: 'already_decided', status: existing.status }, 409);
+    }
+
+    const { data: claimedRow, error: claimErr } = await supabase.from('card_acknowledgements')
+      .insert({
+        transport_id: transportId,
+        sender_org_id: senderOrgId,
+        receiver_org_id: organisationId,
+        card_action_type: cardType,
+        status: 'pending',
+      })
+      .select('id').single();
+    if (claimErr) {
+      if (claimErr.code === '23505') return c.json({ error: 'already_decided' }, 409);
+      console.error('[DISPUTE] claim insert failed:', claimErr.message);
+      return c.json({ error: 'server_error' }, 500);
+    }
+    const ackRowId = claimedRow.id;
+
+    const { data: senderMsg } = await supabase.from('messages')
+      .select('conversation_id').eq('transport_id', transportId).eq('organisation_id', senderOrgId).maybeSingle();
+    if (!senderMsg) {
+      await supabase.from('card_acknowledgements').delete().eq('id', ackRowId);
+      return c.json({ error: 'sender_conversation_not_found' }, 500);
+    }
+
+    const { data: disputeMsg, error: disputeMsgErr } = await supabase.from('messages').insert({
+      organisation_id: senderOrgId,
+      conversation_id: senderMsg.conversation_id,
+      role: 'tool',
+      content: `Disputed: Invoice ${cardData.invoice_number || ''} — ${reason}`.trim(),
+      metadata: {
+        sender_type: 'system', visibility: 'both', message_type: 'dispute_notice',
+        read_by_owner: false,
+        preview_text: `Dispute on Invoice ${cardData.invoice_number || ''}`,
+        card_type: 'dispute_notice',
+        related_transport_id: transportId,
+        dispute_reason: reason,
+      },
+      tokens_input: 0, tokens_output: 0,
+    }).select('id').single();
+    if (disputeMsgErr || !disputeMsg) {
+      await supabase.from('card_acknowledgements').delete().eq('id', ackRowId);
+      console.error('[DISPUTE] dispute message insert failed:', disputeMsgErr?.message);
+      return c.json({ error: 'dispute_message_failed' }, 500);
+    }
+
+    await supabase.from('card_acknowledgements').update({
+      status: 'disputed',
+      acted_by_user_id: userId,
+      acted_at: new Date().toISOString(),
+      dispute_message_id: disputeMsg.id,
+      updated_at: new Date().toISOString(),
+    }).eq('id', ackRowId);
+
+    await broadcastNewMessage(organisationId, { conversation_id: mirroredMsg.conversation_id });
+    await broadcastNewMessage(senderOrgId, { conversation_id: senderMsg.conversation_id });
+
+    return c.json({ status: 'disputed' });
+  } catch (err) {
+    console.error('[DISPUTE] unexpected error:', err.message);
+    return c.json({ error: 'server_error' }, 500);
+  }
+});
+
 app.post('/api/quotes/:quote_id/share', async (c) => {
   try {
     const auth = await authenticateChat(c);
