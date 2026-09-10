@@ -30,6 +30,12 @@ export interface ProductFormData {
   costPrice: string;
   hsnCode: string;
   imageUri?: string;
+  // Starting stock -- only meaningful on 'add' (a brand-new product
+  // always starts at zero; this is simply the first increment if the
+  // trader tells us how many they already have on hand). Never shown
+  // or sent on 'edit' -- editing a product's details should never
+  // silently move stock.
+  quantity?: string;
 }
 
 interface ProductFormSheetProps {
@@ -53,6 +59,7 @@ export default function ProductFormSheet({
   const [hsnCode, setHsnCode] = useState('');
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [imageUri, setImageUri] = useState<string | null>(null);
+  const [quantity, setQuantity] = useState('');
 
   useEffect(() => {
     if (visible && initialValues) {
@@ -67,6 +74,7 @@ export default function ProductFormSheet({
     if (!visible) {
       setName(''); setCategory(''); setSellingPrice('');
       setTaxRate(0); setCostPrice(''); setHsnCode(''); setShowSuggestions(false); setImageUri(null);
+      setQuantity('');
     }
   }, [visible]);
 
@@ -93,7 +101,11 @@ export default function ProductFormSheet({
 
   const handleSubmit = () => {
     if (!canSubmit) return;
-    onSubmit({ name: name.trim(), category: category.trim(), sellingPrice, taxRate, costPrice, hsnCode: hsnCode.trim(), imageUri: imageUri || undefined });
+    onSubmit({
+      name: name.trim(), category: category.trim(), sellingPrice, taxRate, costPrice,
+      hsnCode: hsnCode.trim(), imageUri: imageUri || undefined,
+      quantity: mode === 'add' ? quantity : undefined,
+    });
   };
 
   return (
@@ -163,6 +175,16 @@ export default function ProductFormSheet({
         style={styles.input} placeholder="e.g. 3304" placeholderTextColor="#999"
         keyboardType="numeric" value={hsnCode} onChangeText={setHsnCode}
       />
+
+      {mode === 'add' && (
+        <>
+          <Text style={styles.label}>How many do you have right now? <Text style={styles.optional}>(optional)</Text></Text>
+          <TextInput
+            style={styles.input} placeholder="0" placeholderTextColor="#999"
+            keyboardType="numeric" value={quantity} onChangeText={setQuantity}
+          />
+        </>
+      )}
 
       <View style={styles.actions}>
         <TouchableOpacity style={styles.cancelBtn} onPress={onDismiss} disabled={loading}>
