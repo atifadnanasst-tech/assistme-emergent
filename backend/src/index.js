@@ -9524,8 +9524,16 @@ app.post('/api/invoices', async (c) => {
         igstTotal += itemTax;
       }
 
+      // description: was always hardcoded to the product's own name, with
+      // no way to add per-sale detail (customization, batch notes, specs)
+      // without polluting the catalog product's own identity. Now
+      // respects an optional per-line override, same pattern already
+      // used for unit_price/discount_pct/hsn_code above -- falls back to
+      // the product name when not provided.
+      const lineDescription = (item.description && item.description.trim()) ? item.description.trim() : product.name;
+
       computedItems.push({
-        product_id: product.id, description: product.name, quantity: qty,
+        product_id: product.id, description: lineDescription, quantity: qty,
         unit_price: unitPrice, tax_rate: taxRate, discount_pct: discountPct,
         line_total: lineTotal, sort_order: computedItems.length + 1, hsn_code: hsnCode,
       });
@@ -9650,19 +9658,45 @@ app.post('/api/invoices', async (c) => {
         .update({ outstanding_balance: (customer.outstanding_balance || 0) + totalAmount })
         .eq('id', customer_id).eq('organisation_id', organisationId);
 
+      // Vendor allocation on invoice creation (Sept 2026, basic
+      // inventory module) -- optional, form-only (not Spark, not quote
+      // conversion; neither has a UI surface for this). One vendor per
+      // WHOLE INVOICE, matching bulk import's own whole-batch design --
+      // not per line item, pending real usage signal before expanding.
+      // Same resolution logic as bulk import's confirm route: an
+      // explicit vendor_id is used directly; a typed vendor_name with
+      // no selection is resolved by exact case-insensitive match
+      // against existing contacts, or a new one is created with just
+      // that name if none matches.
+      let resolvedVendorId = body.vendor_id || null;
+      if (!resolvedVendorId && body.vendor_name?.trim()) {
+        const trimmedVendorName = body.vendor_name.trim();
+        const { data: existingVendor } = await supabase.from('customers')
+          .select('id').eq('organisation_id', organisationId)
+          .ilike('name', trimmedVendorName).is('deleted_at', null).limit(1).maybeSingle();
+        if (existingVendor) {
+          resolvedVendorId = existingVendor.id;
+        } else {
+          const { data: newVendor, error: vendorErr } = await supabase.from('customers')
+            .insert({ organisation_id: organisationId, name: trimmedVendorName })
+            .select('id').single();
+          if (!vendorErr && newVendor) resolvedVendorId = newVendor.id;
+          else console.warn('[INVOICE] vendor auto-create failed (non-fatal, invoice continues without vendor attribution):', vendorErr?.message);
+        }
+      }
+
       // Decrement inventory for each sold item (Sept 2026, basic
       // inventory module). Only fires once an invoice actually
       // finalizes -- drafts never move stock, matching the same
       // status!=='draft' gate used for outstanding_balance above, so a
       // draft resumed and later finalized decrements exactly once, at
-      // the point it actually finalizes. No vendor specified here
-      // (that's a future optional field on invoice creation) --
+      // the point it actually finalizes. When no vendor is given,
       // adjustInventory() falls back to largest-pool-first automatically.
       const { adjustInventory } = await import('./services/business/adjustInventory.js');
       for (const item of computedItems) {
         if (!item.product_id) continue;
         await adjustInventory({
-          supabase, organisationId, productId: item.product_id, delta: -item.quantity,
+          supabase, organisationId, productId: item.product_id, delta: -item.quantity, vendorId: resolvedVendorId,
           referenceType: 'invoice', referenceId: newInvoice.id,
           notes: `Invoice ${invoiceNumber || ''}`.trim(),
         });

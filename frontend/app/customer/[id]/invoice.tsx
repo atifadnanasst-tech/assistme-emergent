@@ -14,7 +14,7 @@ import AddressPickerSheet from '../../../components/primitives/AddressPickerShee
 import TransportPickerSheet from '../../../components/primitives/TransportPickerSheet';
 
 interface Product { id: string; name: string; sku: string; selling_price: number; tax_rate: number; unit: string; hsn_code: string | null; image_url: string | null; }
-interface LineItem { product_id: string; product_name: string; hsn_code: string | null; quantity: number; unit_price: number; tax_rate: number; discount_pct: number; line_total: number; }
+interface LineItem { product_id: string; product_name: string; hsn_code: string | null; quantity: number; unit_price: number; tax_rate: number; discount_pct: number; line_total: number; description?: string; }
 interface Customer { id: string; name: string; phone: string; }
 
 const PAYMENT_TERMS_OPTIONS = ['Due on Receipt', 'Net 15', 'Net 30', 'Net 45'];
@@ -91,6 +91,15 @@ export default function NewInvoiceScreen() {
   const [newPrice, setNewPrice] = useState('');
   const [newDiscount, setNewDiscount] = useState('');
   const [newHsn, setNewHsn] = useState('');
+  const [newDescription, setNewDescription] = useState('');
+  // Vendor allocation on invoice creation (Sept 2026, basic inventory
+  // module). Optional, invoice-level (matches bulk import's own
+  // whole-batch design) -- not per line item, pending real usage
+  // signal before expanding. Form-only by design, not available from
+  // Spark's quick-create flow.
+  const [vendorName, setVendorName] = useState('');
+  const [vendorId, setVendorId] = useState<string | null>(null);
+  const [vendorSuggestions, setVendorSuggestions] = useState<{ id: string; name: string; phone?: string }[]>([]);
 
   const [aiSuggestion, setAiSuggestion] = useState<string | null>(null);
 
@@ -197,6 +206,7 @@ export default function NewInvoiceScreen() {
                 tax_rate: match?.tax_rate || 0,
                 discount_pct: di.discount_pct || 0,
                 line_total: di.quantity * di.unit_price,
+                description: di.description || undefined,
               };
             });
             setItems(resumedItems);
@@ -266,6 +276,7 @@ export default function NewInvoiceScreen() {
     const newLine = {
       product_id: product.id, product_name: product.name, hsn_code: newHsn || product.hsn_code,
       quantity: qty, unit_price: price, tax_rate: product.tax_rate, discount_pct: discount, line_total: lineTotal,
+      description: newDescription.trim() || undefined,
     };
     if (editingItemIndex !== null) {
       // Editing an existing line (Aug 2026) -- replace in place instead of
@@ -279,7 +290,7 @@ export default function NewInvoiceScreen() {
       // Stay open (no setAddingItem(false)) -- ready for the next line immediately,
       // matching Atif's "no unnecessary click" spec.
     }
-    setSelectedProductId(''); setNewQty(''); setNewPrice(''); setNewDiscount(''); setNewHsn(''); setAiSuggestion(null);
+    setSelectedProductId(''); setNewQty(''); setNewPrice(''); setNewDiscount(''); setNewHsn(''); setNewDescription(''); setAiSuggestion(null);
   };
 
   const handleRemoveItem = (index: number) => { setItems(prev => prev.filter((_, i) => i !== index)); };
@@ -293,6 +304,27 @@ export default function NewInvoiceScreen() {
     setProductSearchQuery('');
     setTimeout(() => quantityInputRef.current?.focus(), 100);
   };
+
+  const searchVendors = async (q: string) => {
+    if (q.trim().length < 2) { setVendorSuggestions([]); return; }
+    try {
+      const token = await getToken();
+      if (!token) return;
+      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+      const res = await fetch(`${backendUrl}/api/customers/search?q=${encodeURIComponent(q.trim())}`, {
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      if (!res.ok) { setVendorSuggestions([]); return; }
+      const data = await res.json();
+      setVendorSuggestions((data.customers || []).slice(0, 5));
+    } catch { setVendorSuggestions([]); }
+  };
+
+  useEffect(() => {
+    if (vendorId) return; // an explicit selection was already made -- don't re-search on its own name
+    const timer = setTimeout(() => searchVendors(vendorName), 400);
+    return () => clearTimeout(timer);
+  }, [vendorName, vendorId]);
 
   const handleAiSuggestion = async () => {
     if (!selectedProductId || !customerId) return;
@@ -363,9 +395,11 @@ export default function NewInvoiceScreen() {
           method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({
             customer_id: customerId,
-            items: items.map(i => ({ product_id: i.product_id, quantity: i.quantity, unit_price: i.unit_price, discount_pct: i.discount_pct, hsn_code: i.hsn_code })),
+            items: items.map(i => ({ product_id: i.product_id, quantity: i.quantity, unit_price: i.unit_price, discount_pct: i.discount_pct, hsn_code: i.hsn_code, description: i.description })),
             packing_handling: packingHandling, invoice_type: invoiceType, po_number: poNumber || null,
             existing_invoice_id: resumeDraftId || undefined,
+            vendor_id: vendorId || undefined,
+            vendor_name: vendorId ? undefined : (vendorName.trim() || undefined),
             // Fixed Aug 2026 (#13/14 subtask 3): Create/Share/WhatsApp all
             // finalize immediately by design -- Save Draft (a separate
             // function entirely) is the ONLY path that ever sends 'draft'.
@@ -537,9 +571,11 @@ export default function NewInvoiceScreen() {
         method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           customer_id: customerId,
-          items: items.map(i => ({ product_id: i.product_id, quantity: i.quantity, unit_price: i.unit_price, discount_pct: i.discount_pct, hsn_code: i.hsn_code })),
+          items: items.map(i => ({ product_id: i.product_id, quantity: i.quantity, unit_price: i.unit_price, discount_pct: i.discount_pct, hsn_code: i.hsn_code, description: i.description })),
           packing_handling: packingHandling, invoice_type: invoiceType, status: 'draft',
           existing_invoice_id: resumeDraftId || undefined,
+          vendor_id: vendorId || undefined,
+          vendor_name: vendorId ? undefined : (vendorName.trim() || undefined),
         }),
       });
       Alert.alert('Saved', 'Draft saved ✓');
@@ -683,6 +719,18 @@ export default function NewInvoiceScreen() {
               <View style={s.col}><Text style={s.miniLabel}>GST</Text><Text style={s.miniValue}>{taxId || '—'}</Text></View>
               <View style={s.col}><Text style={s.miniLabel}>PO NUMBER</Text><TextInput style={s.miniInput} value={poNumber} onChangeText={setPoNumber} placeholder="— (optional)" /></View>
             </View>
+            <Text style={s.miniLabel}>VENDOR <Text style={{ color: '#999', fontWeight: '400' }}>(optional -- which vendor's stock is this sale drawn from)</Text></Text>
+            <TextInput style={s.numInput} value={vendorName} onChangeText={v => { setVendorName(v); setVendorId(null); }} placeholder="Leave blank to use largest stock automatically" />
+            {vendorSuggestions.length > 0 && !vendorId && (
+              <View style={[s.productList, { marginTop: 8 }]}>
+                {vendorSuggestions.map(v => (
+                  <TouchableOpacity key={v.id} style={s.productChip} onPress={() => { setVendorId(v.id); setVendorName(v.name); setVendorSuggestions([]); }}>
+                    <Text style={s.productChipText}>{v.name}{v.phone ? ` · ${v.phone}` : ''}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+            {vendorId && <Text style={{ fontSize: 12, color: '#2E7D32', marginTop: 4 }}>✓ Matched to existing contact</Text>}
             <Text style={s.miniLabel}>PAYMENT TERMS</Text>
             <View style={s.toggleRow}>
               {PAYMENT_TERMS_OPTIONS.map(opt => (
@@ -778,10 +826,12 @@ export default function NewInvoiceScreen() {
               <View style={s.col}><Text style={s.miniLabel}>DISCOUNT %</Text><TextInput style={s.numInput} value={newDiscount} onChangeText={setNewDiscount} keyboardType="numeric" placeholder="0" /></View>
               <View style={s.col}><Text style={s.miniLabel}>HSN CODE</Text><TextInput style={s.numInput} value={newHsn} onChangeText={setNewHsn} keyboardType="numeric" placeholder="e.g. 3304" /></View>
             </View>
+            <Text style={s.miniLabel}>DESCRIPTION <Text style={{ color: '#999', fontWeight: '400' }}>(optional, e.g. customization, batch note)</Text></Text>
+            <TextInput style={s.numInput} value={newDescription} onChangeText={setNewDescription} placeholder={selectedProductId ? products.find(p => p.id === selectedProductId)?.name : 'e.g. Gift-wrapped, batch #4'} />
             <TouchableOpacity onPress={handleAiSuggestion}><Text style={s.aiSuggestLink}>✦ See AI Suggestion</Text></TouchableOpacity>
             {aiSuggestion && <Text style={s.aiSuggestText}>{aiSuggestion}</Text>}
             <View style={s.selectorBtns}>
-              <TouchableOpacity onPress={() => { setAddingItem(false); setEditingItemIndex(null); setAiSuggestion(null); setSelectedProductId(''); setNewQty(''); setNewPrice(''); setNewDiscount(''); setNewHsn(''); }}><Text style={s.cancelText}>Cancel</Text></TouchableOpacity>
+              <TouchableOpacity onPress={() => { setAddingItem(false); setEditingItemIndex(null); setAiSuggestion(null); setSelectedProductId(''); setNewQty(''); setNewPrice(''); setNewDiscount(''); setNewHsn(''); setNewDescription(''); }}><Text style={s.cancelText}>Cancel</Text></TouchableOpacity>
               <TouchableOpacity style={s.addToListBtn} onPress={handleAddItem}><Text style={s.addToListText}>{editingItemIndex !== null ? 'Update' : 'Add to List'}</Text></TouchableOpacity>
             </View>
           </View>
