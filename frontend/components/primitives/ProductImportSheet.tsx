@@ -354,14 +354,16 @@ export default function ProductImportSheet({ visible, onDismiss, onComplete, exi
               value={vendorName}
               onChangeText={v => { setVendorName(v); setVendorId(null); setVendorSuggestionsVisible(true); }}
               onFocus={() => setVendorSuggestionsVisible(true)}
-              onBlur={() => setTimeout(() => setVendorSuggestionsVisible(false), 150)}
+              onBlur={() => { setTimeout(() => setVendorSuggestionsVisible(false), 150); Keyboard.dismiss(); }}
+              onSubmitEditing={() => Keyboard.dismiss()}
+              returnKeyType="done"
               placeholder="Who is this from? (optional)"
             />
             {vendorSuggestionsVisible && vendorSuggestions.length > 0 && (
               <View style={s.catDropdown}>
                 {vendorSuggestions.map(v => (
                   <TouchableOpacity key={v.id} style={s.catDropdownItem}
-                    onPress={() => { setVendorId(v.id); setVendorName(v.name); setVendorSuggestions([]); setVendorSuggestionsVisible(false); }}>
+                    onPress={() => { setVendorId(v.id); setVendorName(v.name); setVendorSuggestions([]); setVendorSuggestionsVisible(false); Keyboard.dismiss(); }}>
                     <Text style={s.catDropdownText}>{v.name}{v.phone ? ` · ${v.phone}` : ''}</Text>
                   </TouchableOpacity>
                 ))}
