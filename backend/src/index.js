@@ -3732,9 +3732,28 @@ app.post('/api/cards/:transport_id/acknowledge', async (c) => {
 
     // product_id in the mirrored items refers to the SENDER's own
     // catalog -- meaningless in the receiver's org, dropped before
-    // recordPurchaseBill ever sees it (description-only match).
+    // recordPurchaseBill ever sees it.
+    //
+    // STOPGAP (v1.3.520): best-effort exact-name match against the
+    // receiver's own product catalog, so inventory moves when a real
+    // match exists instead of always skipping. This is intentionally
+    // NOT the final design -- it does not use the existing alias-
+    // matching system, does not prompt on ambiguity, and does not
+    // scope inventory per-vendor. All of that is being planned
+    // separately (see /areas/inventory-module.md) and will replace
+    // this block once built.
+    const itemDescriptions = (cardData.items || []).map(i => i.description).filter(Boolean);
+    let matchedProductByName = {};
+    if (itemDescriptions.length > 0) {
+      const { data: matchedProducts } = await supabase.from('products')
+        .select('id, name')
+        .eq('organisation_id', organisationId)
+        .is('deleted_at', null)
+        .in('name', itemDescriptions);
+      (matchedProducts || []).forEach(p => { matchedProductByName[p.name.toLowerCase()] = p.id; });
+    }
     const items = (cardData.items || []).map(i => ({
-      product_id: null,
+      product_id: matchedProductByName[(i.description || '').toLowerCase()] || null,
       description: i.description,
       quantity: i.quantity,
       unit_price: i.unit_price,

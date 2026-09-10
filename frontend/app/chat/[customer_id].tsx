@@ -2119,7 +2119,7 @@ export default function CustomerChatScreen() {
               </View>
             </TouchableOpacity>
           </View>
-          {msg.metadata?.cross_org === true && !cd.is_quote && !cd.is_statement && !cd.is_receipt && (
+          {!cd.is_quote && !cd.is_statement && !cd.is_receipt && (cd.ack_status || msg.metadata?.cross_org === true) && (
             cd.ack_status === 'acknowledged' ? (
               <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 8, marginTop: 8, backgroundColor: '#E8F5E9', borderRadius: 8 }}>
                 <Ionicons name="checkmark-circle" size={16} color="#4CAF50" />
@@ -2130,7 +2130,7 @@ export default function CustomerChatScreen() {
                 <Ionicons name="close-circle" size={16} color="#D32F2F" />
                 <Text style={{ fontSize: 14, fontWeight: '600', color: '#D32F2F' }}>Disputed</Text>
               </View>
-            ) : disputingMsgId === msg.id ? (
+            ) : msg.metadata?.cross_org !== true ? null : disputingMsgId === msg.id ? (
               <View style={{ marginTop: 8, backgroundColor: '#FCE4EC', borderRadius: 8, padding: 10 }}>
                 <Text style={{ fontSize: 13, fontWeight: '600', color: '#AD1457', marginBottom: 6 }}>What's the issue?</Text>
                 <TextInput
