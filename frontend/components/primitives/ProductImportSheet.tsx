@@ -59,6 +59,11 @@ interface ReviewItem extends ExtractedProduct {
   // exists -- never an overwrite of the existing quantity, same rule
   // as every other stock-capture path built this session.
   _edited_quantity: string;
+  // Sept 2026 -- unit was already captured end-to-end on the backend
+  // (extraction -> confirmImportedProducts, defaulting to 'pcs'), but
+  // had no visible/editable field here, so a trader could never see
+  // or correct what the AI guessed. Always defaults to 'pcs'.
+  _edited_unit: string;
 }
 
 interface ProductImportSheetProps {
@@ -166,6 +171,7 @@ export default function ProductImportSheet({ visible, onDismiss, onComplete, exi
         _edited_hsn: p.hsn_code != null ? String(p.hsn_code) : '',
         _edited_discount: p.discount_pct != null ? String(p.discount_pct) : '',
         _edited_quantity: p.quantity != null ? String(p.quantity) : '',
+        _edited_unit: p.unit?.trim() || 'pcs',
       })));
       setStep('review');
     } catch { Alert.alert('Error', 'Something went wrong during extraction.'); setStep('pick'); }
@@ -242,7 +248,7 @@ export default function ProductImportSheet({ visible, onDismiss, onComplete, exi
           action: i._action,
           matched_id: i._action === 'update' ? i.matched_product?.id : undefined,
           original_name: i._original_name !== i._edited_name ? i._original_name : undefined,
-          product_data: { name: i._edited_name, sku: i.sku || null, category: i._edited_category || null, unit: i.unit || null, selling_price: i._edited_selling_price ? Number(i._edited_selling_price) : null, cost_price: i._edited_cost_price ? Number(i._edited_cost_price) : null, tax_rate: i._edited_gst ? Number(i._edited_gst) : (i.tax_rate || null), brand: i.brand || null, hsn_code: i._edited_hsn || null, discount_pct: i._edited_discount ? Number(i._edited_discount) : null, description: i.description || null, quantity: i._edited_quantity ? Number(i._edited_quantity) : null },
+          product_data: { name: i._edited_name, sku: i.sku || null, category: i._edited_category || null, unit: i._edited_unit || 'pcs', selling_price: i._edited_selling_price ? Number(i._edited_selling_price) : null, cost_price: i._edited_cost_price ? Number(i._edited_cost_price) : null, tax_rate: i._edited_gst ? Number(i._edited_gst) : (i.tax_rate || null), brand: i.brand || null, hsn_code: i._edited_hsn || null, discount_pct: i._edited_discount ? Number(i._edited_discount) : null, description: i.description || null, quantity: i._edited_quantity ? Number(i._edited_quantity) : null },
         })) }),
       });
       if (!res.ok) { Alert.alert('Error', 'Import failed. Please try again.'); setStep('review'); return; }
@@ -355,6 +361,10 @@ export default function ProductImportSheet({ visible, onDismiss, onComplete, exi
                     <Text style={s.priceFieldLabel}>{item._action === 'update' ? 'ADD STOCK' : 'STARTING STOCK'}</Text>
                     <TextInput style={s.reviewGst} value={item._edited_quantity} onChangeText={v => { const u = [...items]; u[idx]._edited_quantity = v; setItems(u); }} keyboardType="numeric" placeholder="0" editable={item._action !== 'skip'} />
                   </View>
+                  <View style={s.priceField}>
+                    <Text style={s.priceFieldLabel}>UNIT</Text>
+                    <TextInput style={s.reviewGst} value={item._edited_unit} onChangeText={v => { const u = [...items]; u[idx]._edited_unit = v; setItems(u); }} placeholder="pcs" editable={item._action !== 'skip'} />
+                  </View>
                   {item._edited_hsn !== '' && (
                     <View style={s.priceField}>
                       <Text style={s.priceFieldLabel}>HSN</Text>
@@ -369,6 +379,7 @@ export default function ProductImportSheet({ visible, onDismiss, onComplete, exi
                   )}
                 </View>
                 <View>
+                  <Text style={s.priceFieldLabel}>CATEGORY</Text>
                   <TextInput
                     style={s.reviewCat}
                     value={item._edited_category}
