@@ -39,7 +39,8 @@ Schema per product (use null for missing fields):
   "discount_pct": number|null,
   "hsn_code": string|null,
   "brand": string|null,
-  "description": string|null
+  "description": string|null,
+  "quantity": number|null
 }
 
 Rules:
@@ -47,6 +48,7 @@ Rules:
 - If price appears without label, treat as selling_price.
 - Unit examples: pcs, kg, ml, box, dozen, set, ltr.
 - SKU: any alphanumeric code that appears to be a product code.
+- quantity: how many units are being received/listed, if a quantity column or count is visible (e.g. on a purchase bill or stock sheet). Never guess -- null if not shown.
 - Return [] if no products found.
 - Return only the JSON array.`;
 
@@ -182,13 +184,14 @@ export async function resolveImportedProducts({ products, organisationId, supaba
 }
 
 export async function confirmImportedProducts({ items, organisationId, supabase }) {
-  let created = 0, updated = 0, skipped = 0;
+  let created = 0, updated = 0, skipped = 0, quantityAdded = 0;
   const errors = [];
   const aliasItems = [];
 
   for (const item of items) {
     if (item.action === 'skip') { skipped++; continue; }
     const d = item.product_data;
+    const importQuantity = Number(d.quantity) || 0;
 
     const customFields = {};
     if (d.hsn_code) customFields.hsn_code = d.hsn_code;
@@ -214,6 +217,17 @@ export async function confirmImportedProducts({ items, organisationId, supabase 
         created++;
         if (item.original_name && item.original_name !== d.name)
           aliasItems.push({ product_id: result.product.id, raw_product_name: item.original_name, product_name: d.name });
+        // Starting stock (Sept 2026, basic inventory module) -- a
+        // brand-new product from import, same as any other creation
+        // path: always an increment from zero, never an overwrite.
+        if (importQuantity > 0) {
+          const { adjustInventory } = await import('./adjustInventory.js');
+          const invResult = await adjustInventory({
+            supabase, organisationId, productId: result.product.id, delta: importQuantity,
+            referenceType: 'manual_stock_entry', notes: 'Starting stock from catalog import',
+          });
+          if (invResult.status === 'success') quantityAdded += importQuantity;
+        }
       } else { errors.push({ name: d.name, error: result.error, message: result.message }); }
     } else if (item.action === 'update' && item.matched_id) {
       result = await updateProduct(supabase, organisationId, item.matched_id, data);
@@ -221,6 +235,20 @@ export async function confirmImportedProducts({ items, organisationId, supabase 
         updated++;
         if (item.original_name && item.original_name !== d.name)
           aliasItems.push({ product_id: item.matched_id, raw_product_name: item.original_name, product_name: d.name });
+        // Existing product matched during import: every OTHER field
+        // above already went through updateProduct() as a normal
+        // overwrite (new price replaces old price, etc). Quantity is
+        // deliberately never part of that `data` object and never
+        // overwritten -- it's always an ADDITIVE increment via
+        // adjustInventory(), on top of whatever stock already exists.
+        if (importQuantity > 0) {
+          const { adjustInventory } = await import('./adjustInventory.js');
+          const invResult = await adjustInventory({
+            supabase, organisationId, productId: item.matched_id, delta: importQuantity,
+            referenceType: 'manual_stock_entry', notes: 'Stock added via catalog import',
+          });
+          if (invResult.status === 'success') quantityAdded += importQuantity;
+        }
       } else { errors.push({ name: d.name, error: result.error, message: result.message }); }
     }
   }
@@ -228,5 +256,5 @@ export async function confirmImportedProducts({ items, organisationId, supabase 
   if (aliasItems.length > 0)
     await learnVocabularyAliases({ supabase, organisationId, items: aliasItems });
 
-  return { created, updated, skipped, errors };
+  return { created, updated, skipped, quantityAdded, errors };
 }

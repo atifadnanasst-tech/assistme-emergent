@@ -35,6 +35,7 @@ interface ExtractedProduct {
   brand?: string | null;
   hsn_code?: string | null;
   description?: string | null;
+  quantity?: number | null;
   resolution_status: 'new' | 'existing' | 'fuzzy';
   confidence: number;
   matched_product?: { id: string; name: string } | null;
@@ -52,12 +53,18 @@ interface ReviewItem extends ExtractedProduct {
   _price_locked: boolean;
   _edited_hsn: string;
   _edited_discount: string;
+  // Sept 2026, basic inventory module. Label and meaning depend on
+  // _action: 'create' -> starting stock (increment from zero);
+  // 'update' -> additive increment on top of whatever stock already
+  // exists -- never an overwrite of the existing quantity, same rule
+  // as every other stock-capture path built this session.
+  _edited_quantity: string;
 }
 
 interface ProductImportSheetProps {
   visible: boolean;
   onDismiss: () => void;
-  onComplete: (counts: { created: number; updated: number; skipped: number }) => void;
+  onComplete: (counts: { created: number; updated: number; skipped: number; quantityAdded?: number; errors?: { name: string; error?: string; message?: string }[] }) => void;
   existingCategories?: string[];
 }
 
@@ -158,6 +165,7 @@ export default function ProductImportSheet({ visible, onDismiss, onComplete, exi
         _price_locked: false,
         _edited_hsn: p.hsn_code != null ? String(p.hsn_code) : '',
         _edited_discount: p.discount_pct != null ? String(p.discount_pct) : '',
+        _edited_quantity: p.quantity != null ? String(p.quantity) : '',
       })));
       setStep('review');
     } catch { Alert.alert('Error', 'Something went wrong during extraction.'); setStep('pick'); }
@@ -234,13 +242,13 @@ export default function ProductImportSheet({ visible, onDismiss, onComplete, exi
           action: i._action,
           matched_id: i._action === 'update' ? i.matched_product?.id : undefined,
           original_name: i._original_name !== i._edited_name ? i._original_name : undefined,
-          product_data: { name: i._edited_name, sku: i.sku || null, category: i._edited_category || null, unit: i.unit || null, selling_price: i._edited_selling_price ? Number(i._edited_selling_price) : null, cost_price: i._edited_cost_price ? Number(i._edited_cost_price) : null, tax_rate: i._edited_gst ? Number(i._edited_gst) : (i.tax_rate || null), brand: i.brand || null, hsn_code: i._edited_hsn || null, discount_pct: i._edited_discount ? Number(i._edited_discount) : null, description: i.description || null },
+          product_data: { name: i._edited_name, sku: i.sku || null, category: i._edited_category || null, unit: i.unit || null, selling_price: i._edited_selling_price ? Number(i._edited_selling_price) : null, cost_price: i._edited_cost_price ? Number(i._edited_cost_price) : null, tax_rate: i._edited_gst ? Number(i._edited_gst) : (i.tax_rate || null), brand: i.brand || null, hsn_code: i._edited_hsn || null, discount_pct: i._edited_discount ? Number(i._edited_discount) : null, description: i.description || null, quantity: i._edited_quantity ? Number(i._edited_quantity) : null },
         })) }),
       });
       if (!res.ok) { Alert.alert('Error', 'Import failed. Please try again.'); setStep('review'); return; }
       const data = await res.json();
       reset();
-      onComplete({ created: data.created, updated: data.updated, skipped: data.skipped });
+      onComplete({ created: data.created, updated: data.updated, skipped: data.skipped, quantityAdded: data.quantityAdded, errors: data.errors });
     } catch { Alert.alert('Error', 'Something went wrong.'); setStep('review'); }
   };
 
@@ -342,6 +350,10 @@ export default function ProductImportSheet({ visible, onDismiss, onComplete, exi
                   <View style={s.priceField}>
                     <Text style={s.priceFieldLabel}>GST%</Text>
                     <TextInput style={s.reviewGst} value={item._edited_gst} onChangeText={v => { const u = [...items]; u[idx]._edited_gst = v; setItems(u); }} keyboardType="numeric" placeholder="—" editable={item._action !== 'skip'} />
+                  </View>
+                  <View style={s.priceField}>
+                    <Text style={s.priceFieldLabel}>{item._action === 'update' ? 'ADD STOCK' : 'STARTING STOCK'}</Text>
+                    <TextInput style={s.reviewGst} value={item._edited_quantity} onChangeText={v => { const u = [...items]; u[idx]._edited_quantity = v; setItems(u); }} keyboardType="numeric" placeholder="0" editable={item._action !== 'skip'} />
                   </View>
                   {item._edited_hsn !== '' && (
                     <View style={s.priceField}>

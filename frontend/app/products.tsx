@@ -696,10 +696,17 @@ export default function ProductsCatalogScreen() {
         visible={importVisible}
         onDismiss={() => setImportVisible(false)}
         existingCategories={categories}
-        onComplete={({ created, updated, skipped }) => {
+        onComplete={({ created, updated, skipped, quantityAdded, errors }) => {
           setImportVisible(false);
           loadCatalog();
-          Alert.alert('Import Complete', `${created} created · ${updated} updated · ${skipped} skipped`);
+          let msg = `${created} created · ${updated} updated · ${skipped} skipped`;
+          if (quantityAdded) msg += ` · ${quantityAdded} units added to stock`;
+          if (errors && errors.length > 0) {
+            msg += `\n\n${errors.length} item(s) failed:\n` + errors.map(e => `• ${e.name}: ${e.message || e.error || 'unknown error'}`).join('\n');
+            Alert.alert('Import Complete — with errors', msg);
+          } else {
+            Alert.alert('Import Complete', msg);
+          }
         }}
       />
 
