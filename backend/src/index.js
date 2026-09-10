@@ -4574,6 +4574,22 @@ async function convertQuoteToInvoiceRecord({ organisationId, customerId, userId,
     });
   }
 
+  // Decrement inventory for each converted item (Sept 2026, basic
+  // inventory module) -- a converted quote is a genuine sale, same as
+  // any other invoice. No vendor specified (future optional field) --
+  // falls back to largest-pool-first automatically.
+  {
+    const { adjustInventory } = await import('./services/business/adjustInventory.js');
+    for (const qi of (quoteItems || [])) {
+      if (!qi.product_id) continue;
+      await adjustInventory({
+        supabase, organisationId, productId: qi.product_id, delta: -qi.quantity,
+        referenceType: 'invoice', referenceId: newInv.id,
+        notes: `Invoice ${invoiceNumber || ''} (converted from quote)`.trim(),
+      });
+    }
+  }
+
   await supabase.from('quotations').update({ status: 'converted' }).eq('id', quoteId);
 
   await supabase.from('customers')
@@ -6441,6 +6457,25 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
                 sort_order: idx + 1,
               });
             }
+
+            // Decrement inventory for each sold item (Sept 2026, basic
+            // inventory module). Placed here, unconditionally within
+            // this case -- NOT inside the later `if (conv)` block below
+            // -- because inventory truth must not depend on whether a
+            // chat conversation happens to exist for this customer. No
+            // vendor specified (future optional field) -- falls back to
+            // largest-pool-first automatically.
+            {
+              const { adjustInventory } = await import('./services/business/adjustInventory.js');
+              for (const li of totals.line_items) {
+                if (!li.product_id) continue;
+                await adjustInventory({
+                  supabase, organisationId, productId: li.product_id, delta: -li.quantity,
+                  referenceType: 'invoice', referenceId: newInvoice.id,
+                  notes: `Invoice ${invoiceNumber || ''}`.trim(),
+                });
+              }
+            }
             // Alias learning — silent, behavioral, backend-owned
             // Uses raw_product_name (original OCR/input) vs product_name (resolved catalog name)
             // No extra DB fetch needed — raw signal preserved from Spark pipeline
@@ -7013,6 +7048,23 @@ app.post('/api/chat/:customer_id/spark/confirm', async (c) => {
                 line_total: qi.line_total,
                 sort_order: qi.sort_order,
               });
+            }
+
+            // Decrement inventory for each converted item (Sept 2026,
+            // basic inventory module) -- a converted quote is a genuine
+            // sale, same as any other invoice. No vendor specified
+            // (future optional field) -- falls back to largest-pool-first
+            // automatically.
+            {
+              const { adjustInventory } = await import('./services/business/adjustInventory.js');
+              for (const qi of (quoteItems || [])) {
+                if (!qi.product_id) continue;
+                await adjustInventory({
+                  supabase, organisationId, productId: qi.product_id, delta: -qi.quantity,
+                  referenceType: 'invoice', referenceId: newInv.id,
+                  notes: `Invoice ${invoiceNumber || ''} (converted from quote)`.trim(),
+                });
+              }
             }
 
             // Mark quote as converted
@@ -9597,6 +9649,24 @@ app.post('/api/invoices', async (c) => {
       await supabase.from('customers')
         .update({ outstanding_balance: (customer.outstanding_balance || 0) + totalAmount })
         .eq('id', customer_id).eq('organisation_id', organisationId);
+
+      // Decrement inventory for each sold item (Sept 2026, basic
+      // inventory module). Only fires once an invoice actually
+      // finalizes -- drafts never move stock, matching the same
+      // status!=='draft' gate used for outstanding_balance above, so a
+      // draft resumed and later finalized decrements exactly once, at
+      // the point it actually finalizes. No vendor specified here
+      // (that's a future optional field on invoice creation) --
+      // adjustInventory() falls back to largest-pool-first automatically.
+      const { adjustInventory } = await import('./services/business/adjustInventory.js');
+      for (const item of computedItems) {
+        if (!item.product_id) continue;
+        await adjustInventory({
+          supabase, organisationId, productId: item.product_id, delta: -item.quantity,
+          referenceType: 'invoice', referenceId: newInvoice.id,
+          notes: `Invoice ${invoiceNumber || ''}`.trim(),
+        });
+      }
     }
 
     return c.json({ invoice_id: newInvoice.id, invoice_number: invoiceNumber, total_amount: totalAmount, pdf_url: null });
