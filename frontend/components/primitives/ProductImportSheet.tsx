@@ -79,6 +79,14 @@ export default function ProductImportSheet({ visible, onDismiss, onComplete, exi
   const [step, setStep] = useState<Step>('pick');
   const [items, setItems] = useState<ReviewItem[]>([]);
   const [telemetry, setTelemetry] = useState<{ total_extracted: number; total_new: number; total_resolved: number; total_fuzzy: number; model_used: string } | null>(null);
+  // Vendor allocation (Sept 2026, basic inventory module). One vendor
+  // per whole import batch, not per item (Atif's explicit design).
+  // Auto-filled from the AI's detected_supplier_name when the source
+  // document names one; always freely editable/searchable regardless.
+  const [vendorName, setVendorName] = useState('');
+  const [vendorId, setVendorId] = useState<string | null>(null);
+  const [vendorSuggestions, setVendorSuggestions] = useState<{ id: string; name: string; phone?: string }[]>([]);
+  const [vendorSuggestionsVisible, setVendorSuggestionsVisible] = useState(false);
   const [activeCatIdx, setActiveCatIdx] = useState<number | null>(null);
   const [extractedPriceType, setExtractedPriceType] = useState<'selling' | 'cost'>('selling');
   const [keyboardHeight, setKeyboardHeight] = useState(0);
@@ -99,7 +107,10 @@ export default function ProductImportSheet({ visible, onDismiss, onComplete, exi
     return token;
   };
 
-  const reset = () => { setStep('pick'); setItems([]); setTelemetry(null); };
+  const reset = () => {
+    setStep('pick'); setItems([]); setTelemetry(null);
+    setVendorName(''); setVendorId(null); setVendorSuggestions([]); setVendorSuggestionsVisible(false);
+  };
   const handleDismiss = () => { reset(); onDismiss(); };
 
   const uploadFile = async (uri: string, mimeType: string, name: string) => {
@@ -151,6 +162,7 @@ export default function ProductImportSheet({ visible, onDismiss, onComplete, exi
       }
 
       setTelemetry({ total_extracted: data.total_extracted, total_new: data.total_new, total_resolved: data.total_resolved, total_fuzzy: data.total_fuzzy, model_used: data.model_used });
+      if (data.detected_supplier_name) setVendorName(data.detected_supplier_name);
 
       if (!data.products?.length) {
         Alert.alert('No products found', 'Could not extract any products from the selected files.');
@@ -234,6 +246,27 @@ export default function ProductImportSheet({ visible, onDismiss, onComplete, exi
     }));
   };
 
+  const searchVendors = async (q: string) => {
+    if (q.trim().length < 2) { setVendorSuggestions([]); return; }
+    try {
+      const token = await getToken();
+      if (!token) return;
+      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+      const res = await fetch(`${backendUrl}/api/customers/search?q=${encodeURIComponent(q.trim())}`, {
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      if (!res.ok) { setVendorSuggestions([]); return; }
+      const data = await res.json();
+      setVendorSuggestions((data.customers || []).slice(0, 5));
+    } catch { setVendorSuggestions([]); }
+  };
+
+  useEffect(() => {
+    if (vendorId) return; // an explicit selection was already made -- don't re-search on its own name
+    const timer = setTimeout(() => searchVendors(vendorName), 400);
+    return () => clearTimeout(timer);
+  }, [vendorName, vendorId]);
+
   const confirmImport = async () => {
     if (!items.filter(i => i._action !== 'skip').length) { Alert.alert('Nothing to import', 'All items are skipped.'); return; }
     setStep('confirming');
@@ -244,12 +277,16 @@ export default function ProductImportSheet({ visible, onDismiss, onComplete, exi
       const res = await fetch(`${backendUrl}/api/products/import/confirm`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ items: items.map(i => ({
+        body: JSON.stringify({
+          vendor_id: vendorId || undefined,
+          vendor_name: vendorId ? undefined : (vendorName.trim() || undefined),
+          items: items.map(i => ({
           action: i._action,
           matched_id: i._action === 'update' ? i.matched_product?.id : undefined,
           original_name: i._original_name !== i._edited_name ? i._original_name : undefined,
           product_data: { name: i._edited_name, sku: i.sku || null, category: i._edited_category || null, unit: i._edited_unit || 'pcs', selling_price: i._edited_selling_price ? Number(i._edited_selling_price) : null, cost_price: i._edited_cost_price ? Number(i._edited_cost_price) : null, tax_rate: i._edited_gst ? Number(i._edited_gst) : (i.tax_rate || null), brand: i.brand || null, hsn_code: i._edited_hsn || null, discount_pct: i._edited_discount ? Number(i._edited_discount) : null, description: i.description || null, quantity: i._edited_quantity ? Number(i._edited_quantity) : null },
-        })) }),
+          })),
+        }),
       });
       if (!res.ok) { Alert.alert('Error', 'Import failed. Please try again.'); setStep('review'); return; }
       const data = await res.json();
@@ -310,6 +347,28 @@ export default function ProductImportSheet({ visible, onDismiss, onComplete, exi
               <Text style={s.telemetryText}>✦ {telemetry.total_extracted} products found · {telemetry.total_new} to add · {telemetry.total_resolved} already in catalog · {telemetry.total_fuzzy} similar</Text>
             </View>
           )}
+          <View style={s.vendorRow}>
+            <Text style={s.priceFieldLabel}>VENDOR (applies to this whole batch)</Text>
+            <TextInput
+              style={s.reviewCat}
+              value={vendorName}
+              onChangeText={v => { setVendorName(v); setVendorId(null); setVendorSuggestionsVisible(true); }}
+              onFocus={() => setVendorSuggestionsVisible(true)}
+              onBlur={() => setTimeout(() => setVendorSuggestionsVisible(false), 150)}
+              placeholder="Who is this from? (optional)"
+            />
+            {vendorSuggestionsVisible && vendorSuggestions.length > 0 && (
+              <View style={s.catDropdown}>
+                {vendorSuggestions.map(v => (
+                  <TouchableOpacity key={v.id} style={s.catDropdownItem}
+                    onPress={() => { setVendorId(v.id); setVendorName(v.name); setVendorSuggestions([]); setVendorSuggestionsVisible(false); }}>
+                    <Text style={s.catDropdownText}>{v.name}{v.phone ? ` · ${v.phone}` : ''}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+            {vendorId && <Text style={s.vendorConfirmed}>✓ Matched to existing contact</Text>}
+          </View>
           {(() => {
             const unedited = items.filter(i => !i._price_locked).length;
             return (
@@ -481,4 +540,6 @@ const s = StyleSheet.create({
   priceField: { alignItems: 'center', gap: 2 },
   priceFieldLabel: { fontSize: 9, color: '#999', fontWeight: '700', letterSpacing: 0.5 },
   reviewPriceDim: { opacity: 0.3 },
+  vendorRow: { marginBottom: 8 },
+  vendorConfirmed: { fontSize: 11, color: '#2E7D32', marginTop: 4 },
 });

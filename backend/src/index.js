@@ -10129,7 +10129,7 @@ app.post('/api/products/import/extract', async (c) => {
     const plan = org?.subscription_plan || 'free';
 
     const { extractProductsFromFiles, resolveImportedProducts } = await import('./services/business/productImport.js');
-    const { products, totalExtracted, usedFallback, importModel } = await extractProductsFromFiles({ files, client, plan });
+    const { products, totalExtracted, usedFallback, importModel, detectedSupplierName } = await extractProductsFromFiles({ files, client, plan });
     const { resolved, totalResolved, totalNew, totalFuzzy } = await resolveImportedProducts({ products, organisationId, supabase });
 
     return c.json({
@@ -10141,6 +10141,7 @@ app.post('/api/products/import/extract', async (c) => {
       total_new: totalNew,
       total_fuzzy: totalFuzzy,
       model_used: importModel,
+      detected_supplier_name: detectedSupplierName,
     });
   } catch (err) {
     console.error('[POST /api/products/import/extract]', err.message);
@@ -10156,12 +10157,38 @@ app.post('/api/products/import/confirm', async (c) => {
     const { organisationId } = auth;
 
     const body = await c.req.json();
-    const { items } = body;
+    const { items, vendor_id, vendor_name } = body;
     if (!items || !Array.isArray(items))
       return c.json({ error: 'no_items' }, 400);
 
+    // Vendor resolution (Sept 2026, basic inventory module) -- a whole
+    // import batch is associated with ONE vendor (Atif's explicit
+    // design), not per item. An explicit vendor_id (selected from
+    // search) is used directly. Otherwise, a typed/detected vendor_name
+    // with no selection made is resolved against the existing customers
+    // table by exact case-insensitive name match; if no match exists,
+    // a new customer is created with just that name (schema-legal --
+    // only name is required) rather than silently dropping vendor
+    // attribution for the whole batch.
+    let resolvedVendorId = vendor_id || null;
+    if (!resolvedVendorId && vendor_name?.trim()) {
+      const trimmedName = vendor_name.trim();
+      const { data: existingVendor } = await supabase.from('customers')
+        .select('id').eq('organisation_id', organisationId)
+        .ilike('name', trimmedName).is('deleted_at', null).limit(1).maybeSingle();
+      if (existingVendor) {
+        resolvedVendorId = existingVendor.id;
+      } else {
+        const { data: newVendor, error: vendorErr } = await supabase.from('customers')
+          .insert({ organisation_id: organisationId, name: trimmedName })
+          .select('id').single();
+        if (!vendorErr && newVendor) resolvedVendorId = newVendor.id;
+        else console.warn('[IMPORT] vendor auto-create failed (non-fatal, import continues without vendor attribution):', vendorErr?.message);
+      }
+    }
+
     const { confirmImportedProducts } = await import('./services/business/productImport.js');
-    const result = await confirmImportedProducts({ items, organisationId, supabase });
+    const result = await confirmImportedProducts({ items, organisationId, supabase, vendorId: resolvedVendorId });
 
     return c.json(result);
   } catch (err) {

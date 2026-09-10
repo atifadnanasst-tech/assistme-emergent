@@ -25,7 +25,14 @@ const MAX_IMPORTED_FILES = 10;
 
 const PRODUCT_IMPORT_PROMPT = `You are extracting product catalog data from a business document.
 Extract every product visible in the source. For each product, extract all available fields.
-Return a JSON array only — no explanation, no markdown, no preamble.
+Also extract the supplier/vendor name if visible (e.g. on a letterhead, header, or "From:" line) -- this is a SINGLE document-level fact, not per-product.
+Return a JSON object only -- no explanation, no markdown, no preamble.
+
+Shape:
+{
+  "supplier_name": string|null,
+  "products": [ { ...one object per product, schema below... } ]
+}
 
 Schema per product (use null for missing fields):
 {
@@ -49,8 +56,9 @@ Rules:
 - Unit examples: pcs, kg, ml, box, dozen, set, ltr.
 - SKU: any alphanumeric code that appears to be a product code.
 - quantity: how many units are being received/listed, if a quantity column or count is visible (e.g. on a purchase bill or stock sheet). Never guess -- null if not shown.
-- Return [] if no products found.
-- Return only the JSON array.`;
+- supplier_name: the vendor/supplier's own business name if printed on the document, not anything we would generate. Never guess -- null if not visible.
+- Return "products": [] if no products found.
+- Return only the JSON object described above.`;
 
 export function getImportModelForPlan(plan) {
   return (plan === 'business' || plan === 'tajir') ? 'gpt-4o' : 'gpt-4o-mini';
@@ -61,6 +69,7 @@ export async function extractProductsFromFiles({ files, client, plan }) {
   const allExtracted = [];
   let usedFallback = false;
   const uploadedFileIds = [];
+  let detectedSupplierName = null;
 
   for (const file of files.slice(0, MAX_IMPORTED_FILES)) {
     try {
@@ -110,10 +119,17 @@ export async function extractProductsFromFiles({ files, client, plan }) {
         temperature: 0.1,
       });
 
-      const raw = res.choices?.[0]?.message?.content?.trim() || '[]';
+      const raw = res.choices?.[0]?.message?.content?.trim() || '{}';
       const clean = raw.replace(/```json|```/g, '').trim();
-      let extracted = [];
-      try { extracted = JSON.parse(clean); } catch { extracted = []; }
+      let parsed = {};
+      try { parsed = JSON.parse(clean); } catch { parsed = {}; }
+      const extracted = Array.isArray(parsed.products) ? parsed.products : [];
+      // First file to name a supplier wins -- an import batch is
+      // treated as one cohesive vendor, matching how the review sheet
+      // presents a single batch-level vendor field, not one per file.
+      if (!detectedSupplierName && parsed.supplier_name?.trim()) {
+        detectedSupplierName = parsed.supplier_name.trim();
+      }
 
       for (const p of extracted) {
         if (!p.name?.trim()) continue;
@@ -149,7 +165,7 @@ export async function extractProductsFromFiles({ files, client, plan }) {
 
   if (deduped.length > MAX_IMPORTED_PRODUCTS) deduped.splice(MAX_IMPORTED_PRODUCTS);
 
-  return { products: deduped, totalExtracted: allExtracted.length, usedFallback, importModel };
+  return { products: deduped, totalExtracted: allExtracted.length, usedFallback, importModel, detectedSupplierName };
 }
 
 export async function resolveImportedProducts({ products, organisationId, supabase }) {
@@ -183,7 +199,7 @@ export async function resolveImportedProducts({ products, organisationId, supaba
   return { resolved, totalResolved, totalNew, totalFuzzy };
 }
 
-export async function confirmImportedProducts({ items, organisationId, supabase }) {
+export async function confirmImportedProducts({ items, organisationId, supabase, vendorId }) {
   let created = 0, updated = 0, skipped = 0, quantityAdded = 0;
   const errors = [];
   const aliasItems = [];
@@ -223,7 +239,7 @@ export async function confirmImportedProducts({ items, organisationId, supabase 
         if (importQuantity > 0) {
           const { adjustInventory } = await import('./adjustInventory.js');
           const invResult = await adjustInventory({
-            supabase, organisationId, productId: result.product.id, delta: importQuantity,
+            supabase, organisationId, productId: result.product.id, delta: importQuantity, vendorId,
             referenceType: 'manual_stock_entry', notes: 'Starting stock from catalog import',
           });
           if (invResult.status === 'success') quantityAdded += importQuantity;
@@ -244,7 +260,7 @@ export async function confirmImportedProducts({ items, organisationId, supabase 
         if (importQuantity > 0) {
           const { adjustInventory } = await import('./adjustInventory.js');
           const invResult = await adjustInventory({
-            supabase, organisationId, productId: item.matched_id, delta: importQuantity,
+            supabase, organisationId, productId: item.matched_id, delta: importQuantity, vendorId,
             referenceType: 'manual_stock_entry', notes: 'Stock added via catalog import',
           });
           if (invResult.status === 'success') quantityAdded += importQuantity;
