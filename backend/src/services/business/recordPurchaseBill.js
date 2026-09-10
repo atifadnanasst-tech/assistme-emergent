@@ -65,7 +65,7 @@ const istToday = () => {
   return ist.toISOString().split('T')[0];
 };
 
-async function getOrCreateDefaultLocation(supabase, orgId) {
+export async function getOrCreateDefaultLocation(supabase, orgId) {
   try {
     const { data: existing } = await supabase
       .from('locations')
