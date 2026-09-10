@@ -347,30 +347,6 @@ export default function ProductImportSheet({ visible, onDismiss, onComplete, exi
               <Text style={s.telemetryText}>✦ {telemetry.total_extracted} products found · {telemetry.total_new} to add · {telemetry.total_resolved} already in catalog · {telemetry.total_fuzzy} similar</Text>
             </View>
           )}
-          <View style={s.vendorRow}>
-            <Text style={s.priceFieldLabel}>VENDOR (applies to this whole batch)</Text>
-            <TextInput
-              style={s.reviewCat}
-              value={vendorName}
-              onChangeText={v => { setVendorName(v); setVendorId(null); setVendorSuggestionsVisible(true); }}
-              onFocus={() => setVendorSuggestionsVisible(true)}
-              onBlur={() => { setTimeout(() => setVendorSuggestionsVisible(false), 150); Keyboard.dismiss(); }}
-              onSubmitEditing={() => Keyboard.dismiss()}
-              returnKeyType="done"
-              placeholder="Who is this from? (optional)"
-            />
-            {vendorSuggestionsVisible && vendorSuggestions.length > 0 && (
-              <View style={s.catDropdown}>
-                {vendorSuggestions.map(v => (
-                  <TouchableOpacity key={v.id} style={s.catDropdownItem}
-                    onPress={() => { setVendorId(v.id); setVendorName(v.name); setVendorSuggestions([]); setVendorSuggestionsVisible(false); Keyboard.dismiss(); }}>
-                    <Text style={s.catDropdownText}>{v.name}{v.phone ? ` · ${v.phone}` : ''}</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            )}
-            {vendorId && <Text style={s.vendorConfirmed}>✓ Matched to existing contact</Text>}
-          </View>
           {(() => {
             const unedited = items.filter(i => !i._price_locked).length;
             return (
@@ -387,6 +363,37 @@ export default function ProductImportSheet({ visible, onDismiss, onComplete, exi
           })()}
 
           <ScrollView style={{ maxHeight: 390 }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingBottom: keyboardHeight > 0 ? keyboardHeight + 40 : 24 }}>
+            {/* Vendor moved inside the ScrollView (Sept 2026) -- it
+                previously sat above as a sibling, and that structural
+                split was freezing scroll on the whole sheet after the
+                field was touched. Now it's just the first item in the
+                same unified scroll region as the product list -- it
+                scrolls out of view once you scroll down, which is
+                fine since it's a one-time, whole-batch selection. */}
+            <View style={s.vendorRow}>
+              <Text style={s.priceFieldLabel}>VENDOR (applies to this whole batch)</Text>
+              <TextInput
+                style={s.reviewCat}
+                value={vendorName}
+                onChangeText={v => { setVendorName(v); setVendorId(null); setVendorSuggestionsVisible(true); }}
+                onFocus={() => setVendorSuggestionsVisible(true)}
+                onBlur={() => { setTimeout(() => setVendorSuggestionsVisible(false), 150); Keyboard.dismiss(); }}
+                onSubmitEditing={() => Keyboard.dismiss()}
+                returnKeyType="done"
+                placeholder="Who is this from? (optional)"
+              />
+              {vendorSuggestionsVisible && vendorSuggestions.length > 0 && (
+                <View style={s.catDropdown}>
+                  {vendorSuggestions.map(v => (
+                    <TouchableOpacity key={v.id} style={s.catDropdownItem}
+                      onPress={() => { setVendorId(v.id); setVendorName(v.name); setVendorSuggestions([]); setVendorSuggestionsVisible(false); Keyboard.dismiss(); }}>
+                      <Text style={s.catDropdownText}>{v.name}{v.phone ? ` · ${v.phone}` : ''}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
+              {vendorId && <Text style={s.vendorConfirmed}>✓ Matched to existing contact</Text>}
+            </View>
             {items.map((item, idx) => (
               <View key={idx} style={[s.reviewRow, item._action === 'skip' && s.reviewRowSkipped]}>
                 <View style={s.reviewTop}>
