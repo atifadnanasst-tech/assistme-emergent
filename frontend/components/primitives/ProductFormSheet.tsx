@@ -72,6 +72,7 @@ interface ProductFormSheetProps {
 
 export default function ProductFormSheet({
   visible, mode, initialValues, categories = [], onSubmit, onDismiss, loading = false,
+  onNameChange, suggestions, matchedProduct, onSelectSuggestion, onClearMatch,
 }: ProductFormSheetProps) {
   const [name, setName] = useState('');
   const [category, setCategory] = useState('');
