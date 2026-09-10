@@ -41,6 +41,11 @@ export default function ProductsCatalogScreen() {
   const [formInitialValues, setFormInitialValues] = useState<Partial<ProductFormData>>({});
   const [formLoading, setFormLoading] = useState(false);
   const [formCategory, setFormCategory] = useState('');
+  // Duplicate-detection (Sept 2026, basic inventory module) -- separate
+  // from the existing `suggestions`/`Suggestion` state above, which is
+  // an unrelated AI pricing feature.
+  const [productMatchSuggestions, setProductMatchSuggestions] = useState<{ id: string; name: string; sellingPrice?: number }[]>([]);
+  const [matchedProduct, setMatchedProduct] = useState<{ id: string; name: string; sellingPrice?: number } | null>(null);
   const [editingProductId, setEditingProductId] = useState<string | null>(null);
   const [longPressProduct, setLongPressProduct] = useState<Product | null>(null);
   const [longPressMenuVisible, setLongPressMenuVisible] = useState(false);
@@ -260,6 +265,8 @@ export default function ProductsCatalogScreen() {
     setFormInitialValues(category ? { category } : {});
     setFormCategory(category || '');
     setEditingProductId(null);
+    setProductMatchSuggestions([]);
+    setMatchedProduct(null);
     setFormVisible(true);
   };
 
@@ -276,6 +283,45 @@ export default function ProductsCatalogScreen() {
     setEditingProductId(product.id);
     setFormVisible(true);
     setLongPressMenuVisible(false);
+  };
+
+  // Duplicate-detection (Sept 2026, basic inventory module). Reuses the
+  // SAME resolveProduct() engine already proven in Spark invoice
+  // creation and bulk/AI product import (POST /api/products/resolve)
+  // -- no new matching logic, just a new call site. ProductFormSheet
+  // debounces the raw keystrokes and calls this; the actual fetch
+  // stays here per the form's own "no API calls inside" rule.
+  const handleProductNameChange = async (name: string) => {
+    if (name.length < 2) { setProductMatchSuggestions([]); return; }
+    try {
+      const token = await getToken();
+      if (!token) return;
+      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+      const res = await fetch(`${backendUrl}/api/products/resolve`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+      if (!res.ok) { setProductMatchSuggestions([]); return; }
+      const data = await res.json().catch(() => ({}));
+      const candidates: any[] = [];
+      if (data.resolved) candidates.push(data.resolved);
+      if (Array.isArray(data.alternatives)) candidates.push(...data.alternatives);
+      setProductMatchSuggestions(
+        candidates.slice(0, 4).map(p => ({ id: p.id, name: p.name, sellingPrice: p.selling_price }))
+      );
+    } catch {
+      setProductMatchSuggestions([]);
+    }
+  };
+
+  const handleSelectProductMatch = (product: { id: string; name: string; sellingPrice?: number }) => {
+    setMatchedProduct(product);
+    setProductMatchSuggestions([]);
+  };
+
+  const handleClearProductMatch = () => {
+    setMatchedProduct(null);
   };
 
   const uploadProductImage = async (productId: string, imageUri: string) => {
@@ -319,6 +365,29 @@ export default function ProductsCatalogScreen() {
       const token = await getToken();
       if (!token) return;
       const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+
+      // Duplicate-detection: the trader tapped a suggested existing
+      // product instead of creating a new one -- add stock to it via
+      // PATCH's add-stock-only branch, skip product creation entirely.
+      if (data.matchedProductId) {
+        const res = await fetch(`${backendUrl}/api/products/${data.matchedProductId}`, {
+          method: 'PATCH',
+          headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ quantity: Number(data.quantity) || 0 }),
+        });
+        if (res.ok) {
+          setFormVisible(false);
+          setMatchedProduct(null);
+          await loadCatalog();
+          Alert.alert('Success', 'Stock added.');
+        } else {
+          const err = await res.json().catch(() => ({}));
+          Alert.alert('Error', err.message || 'Something went wrong.');
+        }
+        setFormLoading(false);
+        return;
+      }
+
       const body = {
         name: data.name,
         selling_price: Number(data.sellingPrice),
@@ -641,8 +710,13 @@ export default function ProductsCatalogScreen() {
         initialValues={formInitialValues}
         categories={categories}
         onSubmit={handleFormSubmit}
-        onDismiss={() => setFormVisible(false)}
+        onDismiss={() => { setFormVisible(false); setMatchedProduct(null); setProductMatchSuggestions([]); }}
         loading={formLoading}
+        onNameChange={handleProductNameChange}
+        suggestions={productMatchSuggestions}
+        matchedProduct={matchedProduct}
+        onSelectSuggestion={handleSelectProductMatch}
+        onClearMatch={handleClearProductMatch}
       />
     </SafeAreaView>
   );

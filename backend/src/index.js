@@ -10032,6 +10032,27 @@ app.patch('/api/products/:id', async (c) => {
       if (result.status === 'failed') return c.json({ error: result.error }, 500);
       return c.json({ success: true, operation: 'restore' });
     }
+
+    // Add-stock-only request (Sept 2026, basic inventory module) -- the
+    // "tap a suggested existing product instead of creating a
+    // duplicate" flow sends ONLY quantity, no name/price/etc fields.
+    // Handled as its own branch, before updateProduct(), which requires
+    // at least one real field to update and would otherwise reject
+    // this with no_fields.
+    const stockOnlyQuantity = Number(body.quantity) || 0;
+    const hasOtherFields = body.name !== undefined || body.selling_price !== undefined
+      || body.cost_price !== undefined || body.tax_rate !== undefined
+      || body.category !== undefined || body.unit !== undefined || body.hsn_code !== undefined;
+    if (stockOnlyQuantity > 0 && !hasOtherFields) {
+      const { adjustInventory } = await import('./services/business/adjustInventory.js');
+      const result = await adjustInventory({
+        supabase, organisationId, productId, delta: stockOnlyQuantity,
+        referenceType: 'manual_stock_entry', notes: 'Added via existing-product match',
+      });
+      if (result.status === 'failed') return c.json({ error: 'inventory_update_failed', detail: result.reason }, 500);
+      return c.json({ success: true, operation: 'add_stock', quantity_after: result.quantity_after });
+    }
+
     const result = await updateProduct(supabase, organisationId, productId, {
       name: body.name,
       sellingPrice: body.selling_price,
