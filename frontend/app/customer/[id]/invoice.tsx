@@ -206,7 +206,15 @@ export default function NewInvoiceScreen() {
                 tax_rate: match?.tax_rate || 0,
                 discount_pct: di.discount_pct || 0,
                 line_total: di.quantity * di.unit_price,
-                description: di.description || undefined,
+                // description deliberately NOT restored on resume -- the
+                // backend combines product name + description into a
+                // single string (Sept 2026 fix, after Atif found the
+                // product name was vanishing from PDFs entirely).
+                // Restoring that combined string here and resubmitting
+                // unchanged would double-prefix the product name. Same
+                // known limitation as vendor -- doesn't survive a
+                // draft-resume cycle, stated plainly rather than papered
+                // over with a partial fix.
               };
             });
             setItems(resumedItems);
@@ -766,6 +774,7 @@ export default function NewInvoiceScreen() {
               setNewPrice(item.unit_price.toString());
               setNewDiscount((item.discount_pct || 0).toString());
               setNewHsn(item.hsn_code || '');
+              setNewDescription(item.description || '');
               setAddingItem(true);
             }}
           >
@@ -773,6 +782,7 @@ export default function NewInvoiceScreen() {
               <Text style={s.itemName}>{item.product_name}</Text>
               <Text style={s.itemDetail}>{item.quantity} × {fmt(item.unit_price)}</Text>
               <Text style={{ fontSize: 11, color: '#999', marginTop: 2 }}>HSN: {item.hsn_code || '—'}  ·  Discount: {item.discount_pct || 0}%</Text>
+              {!!item.description && <Text style={{ fontSize: 11, color: '#075E54', marginTop: 2, fontStyle: 'italic' }}>{item.description}</Text>}
             </View>
             <Text style={s.itemTotal}>{fmt(item.line_total)}</Text>
             <TouchableOpacity onPress={() => handleRemoveItem(i)}><Text style={s.removeBtn}>×</Text></TouchableOpacity>

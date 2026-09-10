@@ -9526,11 +9526,17 @@ app.post('/api/invoices', async (c) => {
 
       // description: was always hardcoded to the product's own name, with
       // no way to add per-sale detail (customization, batch notes, specs)
-      // without polluting the catalog product's own identity. Now
-      // respects an optional per-line override, same pattern already
-      // used for unit_price/discount_pct/hsn_code above -- falls back to
-      // the product name when not provided.
-      const lineDescription = (item.description && item.description.trim()) ? item.description.trim() : product.name;
+      // without polluting the catalog product's own identity. First
+      // version of this fix REPLACED the product name outright when a
+      // description was typed -- confirmed by Atif via a real invoice
+      // (a PDF item literally showed "Batch 4" with no trace of the
+      // actual product sold) -- because this exact field is what the
+      // PDF template renders as the item's displayed name, not a
+      // separate secondary field. Now COMBINES both, so the product
+      // identity never disappears from a customer-facing document.
+      const lineDescription = (item.description && item.description.trim())
+        ? `${product.name} — ${item.description.trim()}`
+        : product.name;
 
       computedItems.push({
         product_id: product.id, description: lineDescription, quantity: qty,
