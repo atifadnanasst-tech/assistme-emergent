@@ -326,6 +326,8 @@ export default function ProductsCatalogScreen() {
         category: data.category || null,
         cost_price: Number(data.costPrice) || 0,
         hsn_code: data.hsnCode || null,
+        // Only ever populated on add mode -- see ProductFormSheet.
+        quantity: data.quantity ? Number(data.quantity) : 0,
       };
       const res = formMode === 'add'
         ? await fetch(`${backendUrl}/api/products`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) })

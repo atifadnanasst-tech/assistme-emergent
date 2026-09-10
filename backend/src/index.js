@@ -9990,6 +9990,20 @@ app.post('/api/products', async (c) => {
       customFields: body.hsn_code ? { hsn_code: body.hsn_code } : undefined,
     });
     if (result.status === 'failed') return c.json({ error: result.error, message: result.message }, 400);
+
+    // Starting stock capture (Sept 2026, basic inventory module). A
+    // brand-new product always starts at zero -- if the trader tells us
+    // how many they already have on hand right now, that's simply the
+    // first stock increment, not a separate "opening balance" concept.
+    const startingQuantity = Number(body.quantity) || 0;
+    if (startingQuantity > 0 && result.product?.id) {
+      const { adjustInventory } = await import('./services/business/adjustInventory.js');
+      await adjustInventory({
+        supabase, organisationId, productId: result.product.id, delta: startingQuantity,
+        referenceType: 'manual_stock_entry', notes: 'Starting stock at product creation',
+      });
+    }
+
     return c.json(result.product, 201);
   } catch (err) {
     console.error('[POST /api/products] Error:', err.message);
