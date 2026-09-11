@@ -52,6 +52,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../../contexts/AuthContext';
 import { supabase } from '../../../lib/supabase';
 import { authService } from '../../../lib/auth';
+import ProductImportSheet from '../../../components/primitives/ProductImportSheet';
 
 interface Product { id: string; name: string; sku: string; selling_price: number; cost_price: number | null; tax_rate: number; unit: string; hsn_code: string | null; }
 interface LineItem { product_id: string; product_name: string; hsn_code: string | null; quantity: number; unit_price: number; tax_rate: number; discount_pct: number; line_total: number; }
@@ -95,6 +96,13 @@ export default function NewPurchaseBillScreen() {
   const [newPrice, setNewPrice] = useState('');
   const [newDiscount, setNewDiscount] = useState('');
   const [newHsn, setNewHsn] = useState('');
+  // Sept 2026 -- unified resolve-review-confirm pipeline. Replaces the
+  // screen's own former crude, client-side substring matching entirely
+  // (it silently dropped anything that didn't match exactly, with no
+  // way to create a new product or correct a fuzzy match). Manual item
+  // entry below via the product dropdown is untouched -- that already
+  // selects a real, known product_id, so there's nothing to resolve.
+  const [importSheetVisible, setImportSheetVisible] = useState(false);
 
   const getToken = async () => {
     const token = await authService.getAccessToken();
@@ -220,75 +228,23 @@ export default function NewPurchaseBillScreen() {
     setAddingItem(true);
   };
 
-  // Image capture (Aug 2026) -- reuses the app's own already-proven
-  // ImagePicker pattern (same usage as ai.tsx's gallery/camera attach),
-  // requesting base64 directly so this screen can send it straight to
-  // the new extraction endpoint without a separate upload step.
-  const handleCaptureFromImage = async (source: 'camera' | 'gallery') => {
-    try {
-      const ImagePicker = await import('expo-image-picker');
-      const permission = source === 'camera'
-        ? await ImagePicker.requestCameraPermissionsAsync()
-        : await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (!permission.granted) {
-        Alert.alert('Permission Required', source === 'camera' ? 'Please allow camera access.' : 'Please allow access to your photo library.');
-        return;
-      }
-      const launchFn = source === 'camera' ? ImagePicker.launchCameraAsync : ImagePicker.launchImageLibraryAsync;
-      const result = await launchFn({ mediaTypes: 'images' as any, quality: 0.7, base64: true });
-      if (result.canceled || !result.assets?.[0]?.base64) return;
-
-      const asset = result.assets[0];
-      const ext = (asset.uri.split('.').pop() || 'jpg').toLowerCase();
-      const mime = ext === 'png' ? 'image/png' : 'image/jpeg';
-
-      setExtracting(true);
-      const token = await getToken();
-      if (!token) return;
-      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
-      const res = await fetch(`${backendUrl}/api/purchase-bills/extract-from-image`, {
-        method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image_base64: asset.base64, mime_type: mime }),
-      });
-
-      if (!res.ok) {
-        Alert.alert('Could Not Read Image', 'Try a clearer photo, or enter the details manually.');
-        return;
-      }
-      const extracted = await res.json();
-
-      if (extracted.supplier_bill_number) setSupplierBillNumber(extracted.supplier_bill_number);
-      if (extracted.notes) setNotes(extracted.notes);
-
-      const matchedItems: LineItem[] = (extracted.items || []).map((ei: any) => {
-        const match = products.find(p => p.name.toLowerCase().includes((ei.product_name || '').toLowerCase()) || (ei.product_name || '').toLowerCase().includes(p.name.toLowerCase()));
-        const qty = Number(ei.quantity) || 1;
-        const price = Number(ei.unit_price) || 0;
-        return {
-          product_id: match?.id || '',
-          product_name: match?.name || ei.product_name || 'Unrecognized item',
-          quantity: qty, unit_price: price, tax_rate: match?.tax_rate || 0, discount_pct: 0,
-          line_total: qty * price,
-        };
-      }).filter((li: LineItem) => li.product_id);
-
-      const unmatchedCount = (extracted.items || []).length - matchedItems.length;
-      if (matchedItems.length > 0) setItems(prev => [...prev, ...matchedItems]);
-
-      if (unmatchedCount > 0) {
-        Alert.alert(
-          'Some Items Not Added',
-          `${matchedItems.length} item(s) added. ${unmatchedCount} item(s) didn't match a product in your catalog and were skipped -- add those manually below.`
-        );
-      } else if (matchedItems.length === 0) {
-        Alert.alert('No Items Found', 'Could not confidently read any items from this image. Please add them manually.');
-      }
-    } catch (err) {
-      console.error('[handleCaptureFromImage]', err);
-      Alert.alert('Error', 'Could not process this image. Please try again or enter details manually.');
-    } finally {
-      setExtracting(false);
+  // Sept 2026 -- ProductImportSheet's onComplete after a successful
+  // purchase_bill-mode confirm. The bill was already created server-
+  // side (confirm-from-review does both product resolution AND bill
+  // creation in one step) -- this just closes the sheet and shows the
+  // same success framing handleSubmit below already uses for the
+  // manual-entry path, so both routes to a created bill feel the same.
+  const handleImportComplete = (result: { bill_id?: string; bill_number?: string; total_amount?: number; errors?: { name: string; error?: string; message?: string }[] }) => {
+    setImportSheetVisible(false);
+    if (!result.bill_id) {
+      Alert.alert('Error', 'Something went wrong creating the bill. Please try again or enter details manually.');
+      return;
     }
+    let msg = `${result.bill_number} — ₹${(result.total_amount || 0).toLocaleString('en-IN')}`;
+    if (result.errors && result.errors.length > 0) {
+      msg += `\n\n${result.errors.length} item(s) had issues:\n` + result.errors.map(e => `• ${e.name}: ${e.message || e.error || 'unknown error'}`).join('\n');
+    }
+    Alert.alert('Purchase Bill Recorded', msg, [{ text: 'OK', onPress: () => router.back() }]);
   };
 
   const handleSubmit = async () => {
@@ -357,21 +313,11 @@ export default function NewPurchaseBillScreen() {
           </View>
 
           <View style={s.captureRow}>
-            <TouchableOpacity style={s.captureBtn} onPress={() => handleCaptureFromImage('camera')} disabled={extracting}>
-              <Ionicons name="camera-outline" size={20} color="#075E54" />
-              <Text style={s.captureBtnText}>Camera</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={s.captureBtn} onPress={() => handleCaptureFromImage('gallery')} disabled={extracting}>
-              <Ionicons name="image-outline" size={20} color="#075E54" />
-              <Text style={s.captureBtnText}>From Gallery</Text>
+            <TouchableOpacity style={[s.captureBtn, { flex: undefined, width: '100%' }]} onPress={() => setImportSheetVisible(true)}>
+              <Ionicons name="scan-outline" size={20} color="#075E54" />
+              <Text style={s.captureBtnText}>Scan Purchase Bill (Camera / Gallery / PDF)</Text>
             </TouchableOpacity>
           </View>
-          {extracting && (
-            <View style={s.extractingRow}>
-              <ActivityIndicator size="small" color="#075E54" />
-              <Text style={s.extractingText}>Reading bill...</Text>
-            </View>
-          )}
 
           <Text style={s.sectionLabel}>SUPPLIER BILL NUMBER</Text>
           <TextInput
@@ -479,6 +425,14 @@ export default function NewPurchaseBillScreen() {
           </TouchableOpacity>
         </SafeAreaView>
       </KeyboardAvoidingView>
+
+      <ProductImportSheet
+        visible={importSheetVisible}
+        onDismiss={() => setImportSheetVisible(false)}
+        onComplete={handleImportComplete}
+        mode="purchase_bill"
+        customerId={customerId}
+      />
     </SafeAreaView>
   );
 }
