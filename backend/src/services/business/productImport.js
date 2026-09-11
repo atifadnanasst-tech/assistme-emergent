@@ -199,10 +199,17 @@ export async function resolveImportedProducts({ products, organisationId, supaba
   return { resolved, totalResolved, totalNew, totalFuzzy };
 }
 
-export async function confirmImportedProducts({ items, organisationId, supabase, vendorId }) {
+export async function confirmImportedProducts({ items, organisationId, supabase, vendorId, skipStockAdjustment = false }) {
   let created = 0, updated = 0, skipped = 0, quantityAdded = 0;
   const errors = [];
   const aliasItems = [];
+  // Sept 2026 -- resolvedItems is the real, resolved product_id for
+  // every successfully created/updated item, in the exact shape
+  // recordPurchaseBill() expects. Always returned (harmless for the
+  // plain catalog-import caller, which just doesn't use it) so a
+  // purchase-bill caller can hand this straight to recordPurchaseBill()
+  // without re-deriving anything.
+  const resolvedItems = [];
 
   for (const item of items) {
     if (item.action === 'skip') { skipped++; continue; }
@@ -233,10 +240,19 @@ export async function confirmImportedProducts({ items, organisationId, supabase,
         created++;
         if (item.original_name && item.original_name !== d.name)
           aliasItems.push({ product_id: result.product.id, raw_product_name: item.original_name, product_name: d.name });
+        resolvedItems.push({
+          product_id: result.product.id, description: d.name, quantity: importQuantity,
+          unit_price: d.cost_price ?? d.selling_price ?? 0, discount_pct: d.discount_pct || 0,
+          tax_rate: d.tax_rate ?? 0, hsn_code: d.hsn_code || null,
+        });
         // Starting stock (Sept 2026, basic inventory module) -- a
         // brand-new product from import, same as any other creation
         // path: always an increment from zero, never an overwrite.
-        if (importQuantity > 0) {
+        // Skipped entirely when skipStockAdjustment is set -- a
+        // purchase-bill caller increments stock itself via
+        // recordPurchaseBill(), which has its own proven increment
+        // logic; running both would double-count the same delivery.
+        if (!skipStockAdjustment && importQuantity > 0) {
           const { adjustInventory } = await import('./adjustInventory.js');
           const invResult = await adjustInventory({
             supabase, organisationId, productId: result.product.id, delta: importQuantity, vendorId,
@@ -251,13 +267,20 @@ export async function confirmImportedProducts({ items, organisationId, supabase,
         updated++;
         if (item.original_name && item.original_name !== d.name)
           aliasItems.push({ product_id: item.matched_id, raw_product_name: item.original_name, product_name: d.name });
+        resolvedItems.push({
+          product_id: item.matched_id, description: d.name, quantity: importQuantity,
+          unit_price: d.cost_price ?? d.selling_price ?? 0, discount_pct: d.discount_pct || 0,
+          tax_rate: d.tax_rate ?? 0, hsn_code: d.hsn_code || null,
+        });
         // Existing product matched during import: every OTHER field
         // above already went through updateProduct() as a normal
         // overwrite (new price replaces old price, etc). Quantity is
         // deliberately never part of that `data` object and never
         // overwritten -- it's always an ADDITIVE increment via
         // adjustInventory(), on top of whatever stock already exists.
-        if (importQuantity > 0) {
+        // Skipped entirely when skipStockAdjustment is set -- same
+        // double-count reasoning as the create branch above.
+        if (!skipStockAdjustment && importQuantity > 0) {
           const { adjustInventory } = await import('./adjustInventory.js');
           const invResult = await adjustInventory({
             supabase, organisationId, productId: item.matched_id, delta: importQuantity, vendorId,
@@ -272,5 +295,5 @@ export async function confirmImportedProducts({ items, organisationId, supabase,
   if (aliasItems.length > 0)
     await learnVocabularyAliases({ supabase, organisationId, items: aliasItems });
 
-  return { created, updated, skipped, quantityAdded, errors };
+  return { created, updated, skipped, quantityAdded, errors, resolvedItems };
 }
