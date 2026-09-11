@@ -62,13 +62,18 @@ interface UsageSummary {
   walletCreditsUsed: number;
   walletPercentUsed: number;
   subscriptionPeriodEndFormatted: string | null;
-  currentPeriod: {
-    periodType: string;
+  windowPeriod: {
     costUsedPaisa: number;
     ceilingPaisa: number;
     percentUsed: number;
     periodEndFormatted: string;
   };
+  monthPeriod: {
+    costUsedPaisa: number;
+    ceilingPaisa: number;
+    percentUsed: number;
+    periodEndFormatted: string;
+  } | null;
 }
 
 export default function SubscriptionBilling() {
@@ -442,21 +447,38 @@ export default function SubscriptionBilling() {
               <Text style={styles.usageValueBold}>{usage.walletCreditsRemaining}</Text>
             </View>
             <View style={styles.usageRow}>
-              <Text style={styles.usageLabel}>
-                {usage.currentPeriod.periodType === 'free_window' ? 'Current 5-hour window' : 'This month'}
-              </Text>
-              <Text style={styles.usageValue}>{usage.currentPeriod.percentUsed}% used</Text>
+              <Text style={styles.usageLabel}>Current 5-hour window</Text>
+              <Text style={styles.usageValue}>{usage.windowPeriod.percentUsed}% used</Text>
             </View>
             <View style={styles.progressTrack}>
               <View
                 style={[
                   styles.progressFill,
-                  { width: `${usage.currentPeriod.percentUsed > 0 ? Math.max(2, Math.min(100, usage.currentPeriod.percentUsed)) : 0}%` },
-                  getProgressBarColorStyle(usage.currentPeriod.percentUsed),
+                  { width: `${usage.windowPeriod.percentUsed > 0 ? Math.max(2, Math.min(100, usage.windowPeriod.percentUsed)) : 0}%` },
+                  getProgressBarColorStyle(usage.windowPeriod.percentUsed),
                 ]}
               />
             </View>
-            <Text style={styles.usageReset}>Resets {usage.currentPeriod.periodEndFormatted}</Text>
+            <Text style={styles.usageReset}>Resets {usage.windowPeriod.periodEndFormatted}</Text>
+
+            {usage.monthPeriod && (
+              <>
+                <View style={[styles.usageRow, { marginTop: 16 }]}>
+                  <Text style={styles.usageLabel}>This month</Text>
+                  <Text style={styles.usageValue}>{usage.monthPeriod.percentUsed}% used</Text>
+                </View>
+                <View style={styles.progressTrack}>
+                  <View
+                    style={[
+                      styles.progressFill,
+                      { width: `${usage.monthPeriod.percentUsed > 0 ? Math.max(2, Math.min(100, usage.monthPeriod.percentUsed)) : 0}%` },
+                      getProgressBarColorStyle(usage.monthPeriod.percentUsed),
+                    ]}
+                  />
+                </View>
+                <Text style={styles.usageReset}>Resets {usage.monthPeriod.periodEndFormatted}</Text>
+              </>
+            )}
 
             {usage.walletCreditsTotal > 0 && (
               <>
