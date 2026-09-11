@@ -69,13 +69,22 @@ interface ReviewItem extends ExtractedProduct {
 interface ProductImportSheetProps {
   visible: boolean;
   onDismiss: () => void;
-  onComplete: (counts: { created: number; updated: number; skipped: number; quantityAdded?: number; errors?: { name: string; error?: string; message?: string }[] }) => void;
+  onComplete: (counts: { created: number; updated: number; skipped: number; quantityAdded?: number; errors?: { name: string; error?: string; message?: string }[]; bill_id?: string; bill_number?: string; total_amount?: number }) => void;
   existingCategories?: string[];
+  // Sept 2026 -- unified resolve-review-confirm pipeline (Atif's
+  // design: one shared mechanism, multiple entry points). Defaults to
+  // 'catalog', the original behavior, completely unchanged for the
+  // existing products.tsx Import button -- it never sets this prop.
+  // 'purchase_bill' mode requires customerId (which supplier this
+  // bill is for) and posts to a different confirm endpoint that also
+  // creates the actual bill, not just catalog/stock updates.
+  mode?: 'catalog' | 'purchase_bill';
+  customerId?: string;
 }
 
 type Step = 'pick' | 'extracting' | 'review' | 'confirming';
 
-export default function ProductImportSheet({ visible, onDismiss, onComplete, existingCategories = [] }: ProductImportSheetProps) {
+export default function ProductImportSheet({ visible, onDismiss, onComplete, existingCategories = [], mode = 'catalog', customerId }: ProductImportSheetProps) {
   const [step, setStep] = useState<Step>('pick');
   const [items, setItems] = useState<ReviewItem[]>([]);
   const [telemetry, setTelemetry] = useState<{ total_extracted: number; total_new: number; total_resolved: number; total_fuzzy: number; model_used: string } | null>(null);
@@ -269,29 +278,44 @@ export default function ProductImportSheet({ visible, onDismiss, onComplete, exi
 
   const confirmImport = async () => {
     if (!items.filter(i => i._action !== 'skip').length) { Alert.alert('Nothing to import', 'All items are skipped.'); return; }
+    if (mode === 'purchase_bill' && !customerId) { Alert.alert('Error', 'Missing supplier -- cannot create bill.'); return; }
     setStep('confirming');
     try {
       const token = await getToken();
       if (!token) { setStep('review'); return; }
       const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
-      const res = await fetch(`${backendUrl}/api/products/import/confirm`, {
+      const mappedItems = items.map(i => ({
+        action: i._action,
+        matched_id: i._action === 'update' ? i.matched_product?.id : undefined,
+        original_name: i._original_name !== i._edited_name ? i._original_name : undefined,
+        product_data: { name: i._edited_name, sku: i.sku || null, category: i._edited_category || null, unit: i._edited_unit || 'pcs', selling_price: i._edited_selling_price ? Number(i._edited_selling_price) : null, cost_price: i._edited_cost_price ? Number(i._edited_cost_price) : null, tax_rate: i._edited_gst ? Number(i._edited_gst) : (i.tax_rate || null), brand: i.brand || null, hsn_code: i._edited_hsn || null, discount_pct: i._edited_discount ? Number(i._edited_discount) : null, description: i.description || null, quantity: i._edited_quantity ? Number(i._edited_quantity) : null },
+      }));
+      // Sept 2026 -- 'purchase_bill' mode posts to the new unified
+      // confirm-from-review route (resolves products AND creates the
+      // real bill in one step) instead of the plain catalog-only
+      // confirm route. 'catalog' mode (default) is byte-identical to
+      // the original behavior.
+      const endpoint = mode === 'purchase_bill' ? '/api/purchase-bills/confirm-from-review' : '/api/products/import/confirm';
+      const payload = mode === 'purchase_bill'
+        ? { customer_id: customerId, items: mappedItems }
+        : {
+            vendor_id: vendorId || undefined,
+            vendor_name: vendorId ? undefined : (vendorName.trim() || undefined),
+            items: mappedItems,
+          };
+      const res = await fetch(`${backendUrl}${endpoint}`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          vendor_id: vendorId || undefined,
-          vendor_name: vendorId ? undefined : (vendorName.trim() || undefined),
-          items: items.map(i => ({
-          action: i._action,
-          matched_id: i._action === 'update' ? i.matched_product?.id : undefined,
-          original_name: i._original_name !== i._edited_name ? i._original_name : undefined,
-          product_data: { name: i._edited_name, sku: i.sku || null, category: i._edited_category || null, unit: i._edited_unit || 'pcs', selling_price: i._edited_selling_price ? Number(i._edited_selling_price) : null, cost_price: i._edited_cost_price ? Number(i._edited_cost_price) : null, tax_rate: i._edited_gst ? Number(i._edited_gst) : (i.tax_rate || null), brand: i.brand || null, hsn_code: i._edited_hsn || null, discount_pct: i._edited_discount ? Number(i._edited_discount) : null, description: i.description || null, quantity: i._edited_quantity ? Number(i._edited_quantity) : null },
-          })),
-        }),
+        body: JSON.stringify(payload),
       });
-      if (!res.ok) { Alert.alert('Error', 'Import failed. Please try again.'); setStep('review'); return; }
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        Alert.alert('Error', errBody.detail || 'Import failed. Please try again.');
+        setStep('review'); return;
+      }
       const data = await res.json();
       reset();
-      onComplete({ created: data.created, updated: data.updated, skipped: data.skipped, quantityAdded: data.quantityAdded, errors: data.errors });
+      onComplete({ created: data.created, updated: data.updated, skipped: data.skipped, quantityAdded: data.quantityAdded, errors: data.errors, bill_id: data.bill_id, bill_number: data.bill_number, total_amount: data.total_amount });
     } catch { Alert.alert('Error', 'Something went wrong.'); setStep('review'); }
   };
 
@@ -370,6 +394,7 @@ export default function ProductImportSheet({ visible, onDismiss, onComplete, exi
                 same unified scroll region as the product list -- it
                 scrolls out of view once you scroll down, which is
                 fine since it's a one-time, whole-batch selection. */}
+            {mode !== 'purchase_bill' && (
             <View style={s.vendorRow}>
               <Text style={s.priceFieldLabel}>VENDOR (applies to this whole batch)</Text>
               <TextInput
@@ -394,6 +419,7 @@ export default function ProductImportSheet({ visible, onDismiss, onComplete, exi
               )}
               {vendorId && <Text style={s.vendorConfirmed}>✓ Matched to existing contact</Text>}
             </View>
+            )}
             {items.map((item, idx) => (
               <View key={idx} style={[s.reviewRow, item._action === 'skip' && s.reviewRowSkipped]}>
                 <View style={s.reviewTop}>
@@ -494,7 +520,7 @@ export default function ProductImportSheet({ visible, onDismiss, onComplete, exi
             <Text style={s.confirmCount}>{items.filter(i => i._action !== 'skip').length} of {items.length} selected</Text>
             <TouchableOpacity style={s.confirmBtn} onPress={confirmImport}>
               <Ionicons name="checkmark-circle" size={18} color="#FFF" />
-              <Text style={s.confirmBtnText}>Import All</Text>
+              <Text style={s.confirmBtnText}>{mode === 'purchase_bill' ? 'Create Bill & Update Stock' : 'Import All'}</Text>
             </TouchableOpacity>
           </View>
         </>
