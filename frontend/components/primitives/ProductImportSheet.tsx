@@ -96,6 +96,12 @@ export default function ProductImportSheet({ visible, onDismiss, onComplete, exi
   const [vendorId, setVendorId] = useState<string | null>(null);
   const [vendorSuggestions, setVendorSuggestions] = useState<{ id: string; name: string; phone?: string }[]>([]);
   const [vendorSuggestionsVisible, setVendorSuggestionsVisible] = useState(false);
+  // Sept 2026 -- purchase_bill mode only. The supplier's own bill
+  // number (e.g. "No: 728"), auto-detected the same way supplier_name
+  // already is, but genuinely editable -- if the scan misreads it (or
+  // finds nothing), the owner must be able to see and correct it
+  // before the bill is created, not have it silently carried through.
+  const [billNumber, setBillNumber] = useState('');
   const [activeCatIdx, setActiveCatIdx] = useState<number | null>(null);
   const [extractedPriceType, setExtractedPriceType] = useState<'selling' | 'cost'>('selling');
   const [keyboardHeight, setKeyboardHeight] = useState(0);
@@ -119,6 +125,7 @@ export default function ProductImportSheet({ visible, onDismiss, onComplete, exi
   const reset = () => {
     setStep('pick'); setItems([]); setTelemetry(null);
     setVendorName(''); setVendorId(null); setVendorSuggestions([]); setVendorSuggestionsVisible(false);
+    setBillNumber('');
   };
   const handleDismiss = () => { reset(); onDismiss(); };
 
@@ -172,6 +179,7 @@ export default function ProductImportSheet({ visible, onDismiss, onComplete, exi
 
       setTelemetry({ total_extracted: data.total_extracted, total_new: data.total_new, total_resolved: data.total_resolved, total_fuzzy: data.total_fuzzy, model_used: data.model_used });
       if (data.detected_supplier_name) setVendorName(data.detected_supplier_name);
+      if (data.detected_supplier_bill_number) setBillNumber(data.detected_supplier_bill_number);
 
       if (!data.products?.length) {
         Alert.alert('No products found', 'Could not extract any products from the selected files.');
@@ -297,7 +305,7 @@ export default function ProductImportSheet({ visible, onDismiss, onComplete, exi
       // the original behavior.
       const endpoint = mode === 'purchase_bill' ? '/api/purchase-bills/confirm-from-review' : '/api/products/import/confirm';
       const payload = mode === 'purchase_bill'
-        ? { customer_id: customerId, items: mappedItems }
+        ? { customer_id: customerId, items: mappedItems, supplier_bill_number: billNumber.trim() || undefined }
         : {
             vendor_id: vendorId || undefined,
             vendor_name: vendorId ? undefined : (vendorName.trim() || undefined),
@@ -418,6 +426,17 @@ export default function ProductImportSheet({ visible, onDismiss, onComplete, exi
                 </View>
               )}
               {vendorId && <Text style={s.vendorConfirmed}>✓ Matched to existing contact</Text>}
+            </View>
+            )}
+            {mode === 'purchase_bill' && (
+            <View style={s.vendorRow}>
+              <Text style={s.priceFieldLabel}>SUPPLIER'S BILL NUMBER <Text style={{ color: '#999', fontWeight: '400' }}>(optional -- check this is correct if scanned)</Text></Text>
+              <TextInput
+                style={s.reviewCat}
+                value={billNumber}
+                onChangeText={setBillNumber}
+                placeholder="e.g. 728 (leave blank if none)"
+              />
             </View>
             )}
             {items.map((item, idx) => (

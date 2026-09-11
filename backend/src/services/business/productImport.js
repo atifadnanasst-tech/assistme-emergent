@@ -31,6 +31,7 @@ Return a JSON object only -- no explanation, no markdown, no preamble.
 Shape:
 {
   "supplier_name": string|null,
+  "supplier_bill_number": string|null,
   "products": [ { ...one object per product, schema below... } ]
 }
 
@@ -57,6 +58,7 @@ Rules:
 - SKU: any alphanumeric code that appears to be a product code.
 - quantity: how many units are being received/listed, if a quantity column or count is visible (e.g. on a purchase bill or stock sheet). Never guess -- null if not shown.
 - supplier_name: the vendor/supplier's own business name if printed on the document, not anything we would generate. Never guess -- null if not visible.
+- supplier_bill_number: the supplier's OWN bill/invoice number as printed on their document (e.g. "No: 728", "Invoice #4521") -- this is THEIR reference number, not anything we would generate. Never guess -- null if not visible.
 - Return "products": [] if no products found.
 - Return only the JSON object described above.`;
 
@@ -70,6 +72,7 @@ export async function extractProductsFromFiles({ files, client, plan }) {
   let usedFallback = false;
   const uploadedFileIds = [];
   let detectedSupplierName = null;
+  let detectedSupplierBillNumber = null;
 
   for (const file of files.slice(0, MAX_IMPORTED_FILES)) {
     try {
@@ -130,6 +133,9 @@ export async function extractProductsFromFiles({ files, client, plan }) {
       if (!detectedSupplierName && parsed.supplier_name?.trim()) {
         detectedSupplierName = parsed.supplier_name.trim();
       }
+      if (!detectedSupplierBillNumber && parsed.supplier_bill_number?.trim()) {
+        detectedSupplierBillNumber = parsed.supplier_bill_number.trim();
+      }
 
       for (const p of extracted) {
         if (!p.name?.trim()) continue;
@@ -165,7 +171,7 @@ export async function extractProductsFromFiles({ files, client, plan }) {
 
   if (deduped.length > MAX_IMPORTED_PRODUCTS) deduped.splice(MAX_IMPORTED_PRODUCTS);
 
-  return { products: deduped, totalExtracted: allExtracted.length, usedFallback, importModel, detectedSupplierName };
+  return { products: deduped, totalExtracted: allExtracted.length, usedFallback, importModel, detectedSupplierName, detectedSupplierBillNumber };
 }
 
 export async function resolveImportedProducts({ products, organisationId, supabase }) {
