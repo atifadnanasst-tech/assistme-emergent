@@ -8706,6 +8706,84 @@ app.post('/api/purchase-bills', async (c) => {
   }
 });
 
+// ─── POST /api/purchase-bills/confirm-from-review (Sept 2026) ──
+// The confirm step for the unified resolve-review-confirm pipeline
+// Atif specified: one shared mechanism, multiple entry points
+// (cross-org Acknowledge, this photo-based Create Purchase Bill
+// screen, and Sparks own quick-create flow via its Edit link into the
+// full form). Unlike POST /api/purchase-bills above -- which assumes
+// items already carry real, resolved product_ids -- this route's
+// items are in the review-screen shape (action: create/update/skip,
+// product_data, matched_id, original_name), the exact same shape
+// ProductImportSheet already builds for plain catalog import.
+// Delegates entirely to resolveAndRecordPurchaseBill(), which resolves
+// products first (creating new ones and learning aliases as needed,
+// reusing confirmImportedProducts with skipStockAdjustment so nothing
+// double-increments) and only then creates the real bill via
+// recordPurchaseBill() -- the one place stock actually moves.
+app.post('/api/purchase-bills/confirm-from-review', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+    const body = await c.req.json();
+    const { customer_id, items, supplier_bill_number, due_date, notes } = body;
+
+    if (!customer_id) return c.json({ error: 'missing_customer_id' }, 400);
+    if (!Array.isArray(items) || items.length === 0) return c.json({ error: 'no_items' }, 400);
+
+    const { resolveAndRecordPurchaseBill } = await import('./services/business/resolveAndRecordPurchaseBill.js');
+    const result = await resolveAndRecordPurchaseBill({
+      supabase, organisationId, customerId: customer_id, items,
+      dueDate: due_date || null, supplierBillNumber: supplier_bill_number || null, notes: notes || null,
+    });
+
+    if (result.status === 'failed') {
+      // Fail closed -- per Atif's "absolute clarity" requirement, the
+      // response always distinguishes which products WERE resolved
+      // (created/updated, real catalog data, kept regardless) from
+      // whether the bill itself actually got created. A trader must
+      // never be left unsure whether their inventory update actually
+      // registered.
+      return c.json({
+        error: result.reason || 'failed', detail: result.detail,
+        created: result.created, updated: result.updated, skipped: result.skipped, errors: result.errors,
+      }, 400);
+    }
+
+    // Same confirmation-message pattern as the manual /api/purchase-bills
+    // route above, and Spark's own create_purchase_bill case -- every
+    // path that creates a purchase bill leaves the same visible trace
+    // in the conversation.
+    try {
+      const { data: pbConv } = await supabase
+        .from('conversations').select('id')
+        .eq('organisation_id', organisationId).eq('entity_type', 'customer')
+        .eq('entity_id', customer_id).eq('status', 'active').maybeSingle();
+      if (pbConv) {
+        await supabase.from('messages').insert({
+          organisation_id: organisationId, conversation_id: pbConv.id,
+          role: 'system',
+          content: `✓ Purchase bill ${result.bill_number} recorded — ₹${(result.total_amount || 0).toLocaleString('en-IN')}`,
+          metadata: { sender_type: 'system', visibility: 'owner_only', message_type: 'system_alert', read_by_owner: true, preview_text: `Purchase bill ${result.bill_number} recorded` },
+          tokens_input: 0, tokens_output: 0,
+        });
+        await broadcastNewMessage(organisationId, { conversation_id: pbConv.id });
+      }
+    } catch (msgErr) {
+      console.warn('[POST /api/purchase-bills/confirm-from-review] confirmation message failed (non-fatal):', msgErr.message);
+    }
+
+    return c.json({
+      bill_id: result.bill_id, bill_number: result.bill_number, total_amount: result.total_amount,
+      created: result.created, updated: result.updated, skipped: result.skipped, errors: result.errors,
+    });
+  } catch (error) {
+    console.error('POST /api/purchase-bills/confirm-from-review error:', error);
+    return c.json({ error: 'server_error' }, 500);
+  }
+});
+
 // ─── POST /api/purchase-bills/extract-from-image (Aug 2026) ──
 // Purchase Bill subtask 2 (image capture) -- Atif's own recollection
 // that Spark can already read a photo of a supplier's bill and extract
