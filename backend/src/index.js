@@ -10284,7 +10284,7 @@ app.post('/api/products/import/extract', async (c) => {
     const plan = org?.subscription_plan || 'free';
 
     const { extractProductsFromFiles, resolveImportedProducts } = await import('./services/business/productImport.js');
-    const { products, totalExtracted, usedFallback, importModel, detectedSupplierName, detectedSupplierBillNumber } = await extractProductsFromFiles({ files, client, plan });
+    const { products, totalExtracted, usedFallback, importModel, detectedSupplierName, detectedSupplierBillNumber, blockedFileCount } = await extractProductsFromFiles({ files, client, plan, orgId: organisationId, supabase });
     const { resolved, totalResolved, totalNew, totalFuzzy } = await resolveImportedProducts({ products, organisationId, supabase });
 
     return c.json({
@@ -10298,6 +10298,7 @@ app.post('/api/products/import/extract', async (c) => {
       model_used: importModel,
       detected_supplier_name: detectedSupplierName,
       detected_supplier_bill_number: detectedSupplierBillNumber,
+      blocked_file_count: blockedFileCount,
     });
   } catch (err) {
     console.error('[POST /api/products/import/extract]', err.message);

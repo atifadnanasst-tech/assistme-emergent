@@ -66,13 +66,23 @@ export function getImportModelForPlan(plan) {
   return (plan === 'business' || plan === 'tajir') ? 'gpt-4o' : 'gpt-4o-mini';
 }
 
-export async function extractProductsFromFiles({ files, client, plan }) {
+export async function extractProductsFromFiles({ files, client, plan, orgId, supabase }) {
   const importModel = getImportModelForPlan(plan);
   const allExtracted = [];
   let usedFallback = false;
   const uploadedFileIds = [];
   let detectedSupplierName = null;
   let detectedSupplierBillNumber = null;
+  // Sept 2026 -- extraction calls were entirely unwired from usage
+  // tracking, on any tier, since this file was first built. Confirmed
+  // as a real gap via a live device test (Atif's own bulk-import and
+  // purchase-bill-scan usage showed 0% on the tracking bar despite
+  // genuine gpt-4o-tier work). blockedFileCount lets the caller know if
+  // any file in a multi-file batch was skipped because the org was
+  // over budget at that point -- surfaced in the route response so a
+  // future UI enhancement can tell the trader clearly, rather than
+  // silently returning fewer products than were actually in the photos.
+  let blockedFileCount = 0;
 
   for (const file of files.slice(0, MAX_IMPORTED_FILES)) {
     try {
@@ -115,12 +125,21 @@ export async function extractProductsFromFiles({ files, client, plan }) {
         continue;
       }
 
-      const res = await client.chat.completions.create({
-        model: importModel,
-        messages,
-        max_tokens: 4000,
-        temperature: 0.1,
+      // Sept 2026 -- routed through runTrackedCompletion() (Step 5),
+      // the single entry point for every OpenAI call in this app. A
+      // blocked file is skipped (counted, not silently dropped) rather
+      // than aborting the whole batch -- other files in the same
+      // import may still have budget room if this is right at the edge.
+      const { runTrackedCompletion } = await import('../billing/usageTracking.js');
+      const { blocked, completion: res } = await runTrackedCompletion({
+        orgId, client,
+        requestParams: { model: importModel, messages, max_tokens: 4000, temperature: 0.1 },
+        supabase,
       });
+      if (blocked) {
+        blockedFileCount++;
+        continue;
+      }
 
       const raw = res.choices?.[0]?.message?.content?.trim() || '{}';
       const clean = raw.replace(/```json|```/g, '').trim();
@@ -171,7 +190,7 @@ export async function extractProductsFromFiles({ files, client, plan }) {
 
   if (deduped.length > MAX_IMPORTED_PRODUCTS) deduped.splice(MAX_IMPORTED_PRODUCTS);
 
-  return { products: deduped, totalExtracted: allExtracted.length, usedFallback, importModel, detectedSupplierName, detectedSupplierBillNumber };
+  return { products: deduped, totalExtracted: allExtracted.length, usedFallback, importModel, detectedSupplierName, detectedSupplierBillNumber, blockedFileCount };
 }
 
 export async function resolveImportedProducts({ products, organisationId, supabase }) {
