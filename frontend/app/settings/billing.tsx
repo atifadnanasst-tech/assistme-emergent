@@ -37,13 +37,14 @@ interface TierInfo {
   tier: 'free' | 'pro' | 'business';
   displayName: string;
   priceLabel: string;
+  yearlyPriceLabel?: string;
   rank: number;
 }
 
 const TIER_INFO: TierInfo[] = [
   { tier: 'free', displayName: 'Free', priceLabel: 'Free', rank: 0 },
-  { tier: 'pro', displayName: 'Pro', priceLabel: '₹499 + GST /month', rank: 1 },
-  { tier: 'business', displayName: 'Business', priceLabel: '₹1999 + GST /month', rank: 2 },
+  { tier: 'pro', displayName: 'Pro', priceLabel: '₹499 + GST /month', yearlyPriceLabel: '₹4990 + GST /year', rank: 1 },
+  { tier: 'business', displayName: 'Business', priceLabel: '₹1999 + GST /month', yearlyPriceLabel: '₹19990 + GST /year', rank: 2 },
 ];
 
 // Default trial length per tier, per Atif's explicit business decision.
@@ -62,6 +63,7 @@ interface UsageSummary {
   walletCreditsUsed: number;
   walletPercentUsed: number;
   subscriptionPeriodEndFormatted: string | null;
+  billingCycle: 'monthly' | 'yearly' | null;
   windowPeriod: {
     costUsedPaisa: number;
     ceilingPaisa: number;
@@ -80,6 +82,10 @@ export default function SubscriptionBilling() {
   const router = useRouter();
   const [purchasingTier, setPurchasingTier] = useState<number | null>(null);
   const [subscribingTier, setSubscribingTier] = useState<string | null>(null);
+  // Sept 2026 -- yearly subscriptions. Purely a display/intent toggle --
+  // does not itself change anything until the person actually taps a
+  // plan or the Switch to Yearly action.
+  const [isYearly, setIsYearly] = useState(false);
   const [usage, setUsage] = useState<UsageSummary | null>(null);
   const [loadingUsage, setLoadingUsage] = useState(true);
   const currentTier = usage?.plan || 'free';
@@ -196,11 +202,12 @@ export default function SubscriptionBilling() {
     targetTier: TierInfo,
     token: string,
     isTrial: boolean = false,
-    trialEndsAt: string | null = null
+    trialEndsAt: string | null = null,
+    cycle: 'monthly' | 'yearly' = 'monthly'
   ) => {
     const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
     const checkoutOptions = {
-      description: `AssistMe ${targetTier.displayName} — monthly subscription`,
+      description: `AssistMe ${targetTier.displayName} — ${cycle} subscription`,
       key: keyId,
       subscription_id: subscriptionId,
       name: 'AssistMe',
@@ -229,16 +236,17 @@ export default function SubscriptionBilling() {
     });
 
     if (verifyRes.ok) {
+      const effectivePriceLabel = cycle === 'yearly' && targetTier.yearlyPriceLabel ? targetTier.yearlyPriceLabel : targetTier.priceLabel;
       if (isTrial && trialEndsAt) {
         const trialEndDate = new Date(trialEndsAt).toLocaleDateString('en-IN', {
           day: 'numeric', month: 'short', year: 'numeric',
         });
         Alert.alert(
           "You're on the " + targetTier.displayName + ' plan',
-          `Free until ${trialEndDate}, then ${targetTier.priceLabel} automatically. Cancel anytime before then from this screen.`
+          `Free until ${trialEndDate}, then ${effectivePriceLabel} automatically. Cancel anytime before then from this screen.`
         );
       } else {
-        Alert.alert('Success', `You're now on the ${targetTier.displayName} plan.`);
+        Alert.alert('Success', `You're now on the ${targetTier.displayName} plan, billed ${cycle}.`);
       }
       fetchUsageSummary();
     } else {
@@ -249,6 +257,7 @@ export default function SubscriptionBilling() {
   const handleFreshSubscribe = async (targetTier: TierInfo, trialDays: number = 0) => {
     if (subscribingTier !== null) return;
     setSubscribingTier(targetTier.tier);
+    const cycle: 'monthly' | 'yearly' = isYearly ? 'yearly' : 'monthly';
     try {
       const token = await authService.getAccessToken();
       if (!token) { router.back(); return; }
@@ -257,14 +266,14 @@ export default function SubscriptionBilling() {
       const subRes = await fetch(`${backendUrl}/api/subscription/create`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ tier: targetTier.tier, trialDays }),
+        body: JSON.stringify({ tier: targetTier.tier, cycle, trialDays }),
       });
       if (!subRes.ok) {
         Alert.alert('Could not start subscription', 'Please try again.');
         return;
       }
       const sub = await subRes.json();
-      await openCheckoutAndVerify(sub.subscriptionId, sub.keyId, targetTier, token, sub.isTrial, sub.trialEndsAt);
+      await openCheckoutAndVerify(sub.subscriptionId, sub.keyId, targetTier, token, sub.isTrial, sub.trialEndsAt, cycle);
     } catch (err) {
       console.error('Subscribe error:', err);
       Alert.alert('Something went wrong', 'Please try again, or contact support if this continues.');
@@ -304,6 +313,52 @@ export default function SubscriptionBilling() {
     } finally {
       setSubscribingTier(null);
     }
+  };
+
+  // Sept 2026 -- monthly -> yearly, same tier. Deliberately a separate
+  // function from handleChangeTier above, not sharing its code path --
+  // a cycle change always requires fresh checkout (the backend never
+  // attempts an in-place update for this), so there is no "instant"
+  // branch here at all, unlike handleChangeTier's dual-path handling.
+  const handleChangeCycle = async (currentTierInfo: TierInfo) => {
+    if (subscribingTier !== null) return;
+    setSubscribingTier(currentTierInfo.tier);
+    try {
+      const token = await authService.getAccessToken();
+      if (!token) { router.back(); return; }
+      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+
+      const res = await fetch(`${backendUrl}/api/subscription/change-cycle`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ newTier: currentTierInfo.tier, newCycle: 'yearly' }),
+      });
+      if (!res.ok) {
+        Alert.alert('Could not switch to yearly', 'Please try again.');
+        return;
+      }
+      const result = await res.json();
+      if (result.needsReauth) {
+        await openCheckoutAndVerify(result.subscriptionId, result.keyId, currentTierInfo, token, false, null, 'yearly');
+      }
+    } catch (err) {
+      console.error('Change cycle error:', err);
+      Alert.alert('Something went wrong', 'Please try again, or contact support if this continues.');
+    } finally {
+      setSubscribingTier(null);
+    }
+  };
+
+  const handleSwitchToYearlyTap = (currentTierInfo: TierInfo) => {
+    if (subscribingTier !== null) return;
+    Alert.alert(
+      `Switch to Yearly?`,
+      `You'll forfeit the remaining days of your current billing period and pay ${currentTierInfo.yearlyPriceLabel} today, starting a fresh yearly cycle immediately. You may need to quickly re-confirm your payment method to complete the switch.`,
+      [
+        { text: 'Not now', style: 'cancel' },
+        { text: 'Switch to Yearly', onPress: () => handleChangeCycle(currentTierInfo) },
+      ]
+    );
   };
 
   const handleCancelToFree = async () => {
@@ -544,8 +599,43 @@ export default function SubscriptionBilling() {
             Your current plan is highlighted. Tap another to switch.
           </Text>
 
+          <View style={styles.cycleToggleRow}>
+            <TouchableOpacity
+              style={[styles.cycleToggleBtn, !isYearly && styles.cycleToggleBtnActive]}
+              onPress={() => setIsYearly(false)}
+            >
+              <Text style={[styles.cycleToggleText, !isYearly && styles.cycleToggleTextActive]}>Monthly</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.cycleToggleBtn, isYearly && styles.cycleToggleBtnActive]}
+              onPress={() => setIsYearly(true)}
+            >
+              <Text style={[styles.cycleToggleText, isYearly && styles.cycleToggleTextActive]}>Yearly</Text>
+              <View style={styles.savingsBurst}>
+                <Text style={styles.savingsBurstText}>SAVE 2{'\n'}MONTHS</Text>
+              </View>
+            </TouchableOpacity>
+          </View>
+
+          {isYearly && currentTier !== 'free' && usage?.billingCycle === 'monthly' && (
+            <TouchableOpacity
+              style={styles.switchYearlyBanner}
+              onPress={() => handleSwitchToYearlyTap(TIER_INFO.find((t) => t.tier === currentTier)!)}
+              disabled={subscribingTier !== null}
+            >
+              {subscribingTier === currentTier ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : (
+                <Text style={styles.switchYearlyBannerText}>
+                  Switch your {TIER_INFO.find((t) => t.tier === currentTier)?.displayName} plan to Yearly & Save →
+                </Text>
+              )}
+            </TouchableOpacity>
+          )}
+
           {TIER_INFO.map((tierRow) => {
             const isCurrent = tierRow.tier === currentTier;
+            const displayedPriceLabel = isYearly && tierRow.yearlyPriceLabel ? tierRow.yearlyPriceLabel : tierRow.priceLabel;
             return (
               <TouchableOpacity
                 key={tierRow.tier}
@@ -567,7 +657,7 @@ export default function SubscriptionBilling() {
                       </View>
                     )}
                   </View>
-                  <Text style={styles.tierCredits}>{tierRow.priceLabel}</Text>
+                  <Text style={styles.tierCredits}>{displayedPriceLabel}</Text>
                 </View>
                 {subscribingTier === tierRow.tier ? (
                   <ActivityIndicator size="small" color="#075E54" />
@@ -579,7 +669,7 @@ export default function SubscriptionBilling() {
           })}
 
           <Text style={styles.footnote}>
-            Prices shown are exclusive of GST. Billed monthly, switch or cancel any time.
+            Prices shown are exclusive of GST. {isYearly ? 'Yearly plans are billed once a year.' : 'Billed monthly, switch or cancel any time.'}
           </Text>
         </View>
 
@@ -684,6 +774,61 @@ const styles = StyleSheet.create({
   currentBadgeText: { fontSize: 9, fontWeight: '700', color: '#FFFFFF', letterSpacing: 0.5 },
   tierAmount: { fontSize: 17, fontWeight: '700', color: '#222' },
   tierCredits: { fontSize: 12, color: '#888', marginTop: 2 },
+  // Sept 2026 -- yearly subscriptions UI.
+  cycleToggleRow: {
+    flexDirection: 'row',
+    backgroundColor: '#F0F0F0',
+    borderRadius: 10,
+    padding: 3,
+    marginTop: 14,
+    marginBottom: 4,
+  },
+  cycleToggleBtn: {
+    flex: 1,
+    paddingVertical: 9,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+  },
+  cycleToggleBtnActive: {
+    backgroundColor: '#FFFFFF',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  cycleToggleText: { fontSize: 14, fontWeight: '600', color: '#888' },
+  cycleToggleTextActive: { color: '#075E54' },
+  // A "starburst"-style sticker callout -- a rotated, brightly colored
+  // badge, the common way to fake this effect in React Native without
+  // needing a custom SVG shape.
+  savingsBurst: {
+    position: 'absolute',
+    top: -14,
+    right: -8,
+    backgroundColor: '#D32F2F',
+    borderRadius: 20,
+    width: 40,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    transform: [{ rotate: '-12deg' }],
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
+  },
+  savingsBurstText: { fontSize: 7, fontWeight: '800', color: '#FFFFFF', textAlign: 'center', lineHeight: 8 },
+  switchYearlyBanner: {
+    backgroundColor: '#075E54',
+    borderRadius: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 10,
+  },
+  switchYearlyBannerText: { fontSize: 13, fontWeight: '700', color: '#FFFFFF', textAlign: 'center' },
   footnote: { fontSize: 11, color: '#999', marginTop: 14, lineHeight: 16, textAlign: 'center' },
   comingSoonCard: { opacity: 0.7 },
   usageHeaderRow: {
