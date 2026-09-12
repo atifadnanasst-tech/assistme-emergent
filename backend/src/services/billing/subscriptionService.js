@@ -34,6 +34,7 @@
 
 import Razorpay from 'razorpay';
 import { validateWebhookSignature, validatePaymentVerification } from 'razorpay/dist/utils/razorpay-utils.js';
+import { sendTelegramAlert } from './telegramNotify.js';
 
 const PLAN_IDS = {
   pro: { monthly: 'plan_TMlrUSFrLzANMV', yearly: 'plan_Tb9bRLuNqaS1Us' },
@@ -360,6 +361,19 @@ export async function requestCancellation({ orgId, supabase }) {
     return { success: false, error: 'db_update_failed' };
   }
 
+  // Sept 2026 -- fire-and-forget, never awaited or allowed to affect the
+  // response the customer is waiting on. This is the single,
+  // unambiguous point for a cancellation alert -- no risk of firing on
+  // an abandoned action or duplicating with any other event.
+  supabase.from('organisations').select('name').eq('id', orgId).maybeSingle()
+    .then(({ data: org }) => {
+      const activeUntilFormatted = sub.current_period_end
+        ? new Date(sub.current_period_end).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+        : 'end of current period';
+      sendTelegramAlert(`❌ <b>Subscription Cancelled</b>\n${org?.name || orgId}\n${sub.plan_tier} plan — active until ${activeUntilFormatted}`).catch(() => {});
+    })
+    .catch(() => {});
+
   return { success: true, activeUntil: sub.current_period_end };
 }
 
@@ -400,6 +414,22 @@ export async function activateSubscriptionClientSide({ orgId, tier, supabase }) 
     .from('organisations')
     .update({ subscription_plan: tier })
     .eq('id', orgId);
+
+  // Sept 2026 -- fire-and-forget, never awaited or allowed to affect the
+  // response the customer is waiting on. This is the CONFIRMED-PAYMENT
+  // point, shared by all three flows (fresh signup, tier change, cycle
+  // change) -- deliberately not fired earlier at "Razorpay subscription
+  // object created," which could still be abandoned before checkout
+  // completes. One generic message covers all three flows for now,
+  // rather than risk ambiguity trying to distinguish them here --
+  // clearer per-flow labeling can be added later if it turns out to
+  // matter in practice.
+  Promise.all([
+    supabase.from('organisations').select('name').eq('id', orgId).maybeSingle(),
+    supabase.from('subscriptions').select('billing_cycle').eq('organisation_id', orgId).maybeSingle(),
+  ]).then(([{ data: org }, { data: sub }]) => {
+    sendTelegramAlert(`💳 <b>Subscription Activated</b>\n${org?.name || orgId}\n${tier} plan, billed ${sub?.billing_cycle || 'monthly'}`).catch(() => {});
+  }).catch(() => {});
 }
 
 export function verifySubscriptionWebhookSignature({ rawBody, signature }) {
