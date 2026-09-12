@@ -1946,10 +1946,15 @@ app.get('/api/billing/usage-summary', async (c) => {
     const walletPercentUsed = walletCreditsTotal > 0 ? Math.round((walletCreditsUsed / walletCreditsTotal) * 100) : 0;
 
     let subscriptionPeriodEndFormatted = null;
+    // Sept 2026 -- yearly subscriptions. billingCycle lets the frontend
+    // know whether to show a "Switch to Yearly" action at all (only
+    // meaningful for an existing monthly paid subscriber) -- reuses this
+    // already-existing subscriptions fetch rather than adding a new query.
+    let billingCycle = null;
     if (plan !== 'free') {
       const { data: sub } = await supabase
         .from('subscriptions')
-        .select('current_period_end')
+        .select('current_period_end, billing_cycle')
         .eq('organisation_id', organisationId)
         .maybeSingle();
       if (sub?.current_period_end) {
@@ -1957,6 +1962,7 @@ app.get('/api/billing/usage-summary', async (c) => {
           timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', year: 'numeric',
         });
       }
+      billingCycle = sub?.billing_cycle || 'monthly';
     }
 
     // Sept 2026 -- two-meter usage system (Step 5). getUsageSummary()
@@ -1984,6 +1990,7 @@ app.get('/api/billing/usage-summary', async (c) => {
       walletCreditsUsed,
       walletPercentUsed,
       subscriptionPeriodEndFormatted,
+      billingCycle,
       windowPeriod: {
         costUsedPaisa: usageSummary.window.usedPaisa,
         ceilingPaisa: usageSummary.window.ceilingPaisa,
