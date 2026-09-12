@@ -21,7 +21,7 @@ import { extractBankAccountFromImage } from './services/ai/extractBankAccountFro
 import { getFinancialPosition } from './services/ai/queryEngine/primitives.js';
 import { checkUsageAllowed, runTrackedCompletion } from './services/billing/usageTracking.js';
 import { createWalletOrder, creditWalletTopup, verifyClientPayment, verifyWebhookSignature } from './services/billing/walletService.js';
-import { createSubscription, requestCancellation, handleSubscriptionEvent, verifySubscriptionWebhookSignature, jobDowngradeCancelledSubscriptions, verifyClientSubscriptionPayment, activateSubscriptionClientSide, changeSubscriptionTier } from './services/billing/subscriptionService.js';
+import { createSubscription, requestCancellation, handleSubscriptionEvent, verifySubscriptionWebhookSignature, jobDowngradeCancelledSubscriptions, verifyClientSubscriptionPayment, activateSubscriptionClientSide, changeSubscriptionTier, changeSubscriptionCycle } from './services/billing/subscriptionService.js';
 import { createSeatSubscription, verifyClientSeatPayment, activateSeatSubscriptionClientSide, verifySeatWebhookSignature, handleSeatSubscriptionEvent } from './services/billing/seatSubscriptionService.js';
 import { generateOwnerDataExport } from './services/export/generateOwnerDataExport.js';
 import { generateGstFilingReport } from './services/reports/generateGstFilingReport.js';
@@ -1708,10 +1708,14 @@ app.post('/api/subscription/create', async (c) => {
     const { organisationId } = auth;
     const body = await c.req.json();
     const tier = body.tier;
+    // Sept 2026 -- yearly subscriptions. Defaults to 'monthly' so this
+    // route's behavior is byte-identical for every existing caller that
+    // has never heard of cycle at all.
+    const cycle = body.cycle === 'yearly' ? 'yearly' : 'monthly';
     const rawTrialDays = Number(body.trialDays);
     const trialDays = Number.isFinite(rawTrialDays) ? Math.min(90, Math.max(0, Math.floor(rawTrialDays))) : 0;
 
-    const result = await createSubscription({ orgId: organisationId, tier, supabase, requestedTrialDays: trialDays });
+    const result = await createSubscription({ orgId: organisationId, tier, cycle, supabase, requestedTrialDays: trialDays });
     if (!result.success) return c.json({ error: result.error }, 400);
     return c.json(result);
   } catch (err) {
@@ -1778,6 +1782,33 @@ app.post('/api/subscription/change-tier', async (c) => {
     return c.json(result);
   } catch (err) {
     console.error('[POST /api/subscription/change-tier] Error:', err);
+    return c.json({ error: 'internal_error' }, 500);
+  }
+});
+
+// Sept 2026 -- monthly <-> yearly cycle changes, same tier. A dedicated
+// route calling changeSubscriptionCycle() (always cancel-then-create,
+// per Atif's decision to use Razorpay's documented, proven order rather
+// than an unvalidated create-then-cancel safety net). Deliberately
+// separate from /change-tier above, which is unrelated and untouched --
+// same-tier-different-cycle and same-cycle-different-tier are genuinely
+// different operations with different underlying mechanisms now.
+app.post('/api/subscription/change-cycle', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+    const body = await c.req.json();
+    const newTier = body.newTier;
+    const newCycle = body.newCycle;
+
+    if (!newTier || !newCycle) return c.json({ error: 'missing_fields' }, 400);
+
+    const result = await changeSubscriptionCycle({ orgId: organisationId, newTier, newCycle, supabase });
+    if (!result.success) return c.json({ error: result.error }, 400);
+    return c.json(result);
+  } catch (err) {
+    console.error('[POST /api/subscription/change-cycle] Error:', err);
     return c.json({ error: 'internal_error' }, 500);
   }
 });

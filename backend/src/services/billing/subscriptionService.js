@@ -20,23 +20,32 @@
 //
 // Plan IDs (created once via Razorpay Dashboard, cannot be edited/deleted
 // after creation per Razorpay's own docs):
-//   pro:      plan_TMlrUSFrLzANMV  (Rs 588.82/month, GST-inclusive charge;
-//                                    Rs 499 base + 18% GST)
-//   business: plan_TMlsaUBnn0hW2L  (Rs 2358.82/month, GST-inclusive charge;
-//                                    Rs 1999 base + 18% GST)
+//   pro monthly:      plan_TMlrUSFrLzANMV  (Rs 588.82/month, GST-inclusive;
+//                                           Rs 499 base + 18% GST)
+//   business monthly: plan_TMlsaUBnn0hW2L  (Rs 2358.82/month, GST-inclusive;
+//                                           Rs 1999 base + 18% GST)
+//   pro yearly:        plan_Tb9bRLuNqaS1Us  (Rs 5888.20/year, GST-inclusive;
+//                                            Rs 4990 base + 18% GST -- 10
+//                                            months' price for 12 months,
+//                                            confirmed with Atif Sept 2026)
+//   business yearly:   plan_Tb9d1XMahMCZTL  (Rs 23588.20/year, GST-inclusive;
+//                                            Rs 19990 base + 18% GST, same
+//                                            10-for-12 structure)
 
 import Razorpay from 'razorpay';
 import { validateWebhookSignature, validatePaymentVerification } from 'razorpay/dist/utils/razorpay-utils.js';
 
 const PLAN_IDS = {
-  pro: 'plan_TMlrUSFrLzANMV',
-  business: 'plan_TMlsaUBnn0hW2L',
+  pro: { monthly: 'plan_TMlrUSFrLzANMV', yearly: 'plan_Tb9bRLuNqaS1Us' },
+  business: { monthly: 'plan_TMlsaUBnn0hW2L', yearly: 'plan_Tb9d1XMahMCZTL' },
 };
 
 // Large-but-finite billing-cycle count, since Razorpay's Subscriptions API
-// requires SOME total_count rather than truly indefinite -- 120 monthly
-// cycles = 10 years, a practical stand-in for "until cancelled."
-const TOTAL_COUNT_INDEFINITE = 120;
+// requires SOME total_count rather than truly indefinite. Both cycles
+// target the same practical horizon (~10 years) as the original monthly
+// design -- 120 monthly cycles, but only 10 yearly cycles, since a yearly
+// subscriber renews far less often for the same span of real time.
+const TOTAL_COUNT_INDEFINITE = { monthly: 120, yearly: 10 };
 
 function getRazorpayInstance() {
   return new Razorpay({
@@ -86,10 +95,10 @@ export async function isEligibleForTrial({ orgId, supabase }) {
   return ageMs <= TWENTY_FOUR_HOURS_MS;
 }
 
-export async function createSubscription({ orgId, tier, supabase, requestedTrialDays = 0 }) {
-  const planId = PLAN_IDS[tier];
+export async function createSubscription({ orgId, tier, cycle = 'monthly', supabase, requestedTrialDays = 0 }) {
+  const planId = PLAN_IDS[tier]?.[cycle];
   if (!planId) {
-    return { success: false, error: 'invalid_tier' };
+    return { success: false, error: 'invalid_tier_or_cycle' };
   }
 
   const razorpay = getRazorpayInstance();
@@ -99,9 +108,9 @@ export async function createSubscription({ orgId, tier, supabase, requestedTrial
 
   const subscriptionParams = {
     plan_id: planId,
-    total_count: TOTAL_COUNT_INDEFINITE,
+    total_count: TOTAL_COUNT_INDEFINITE[cycle],
     customer_notify: 1,
-    notes: { product: 'assistme', feature: 'subscription', org_id: orgId, tier, trial_days: effectiveTrialDays },
+    notes: { product: 'assistme', feature: 'subscription', org_id: orgId, tier, cycle, trial_days: effectiveTrialDays },
   };
 
   let trialEndsAt = null;
@@ -127,6 +136,7 @@ export async function createSubscription({ orgId, tier, supabase, requestedTrial
         razorpay_subscription_id: subscription.id,
         status: 'created',
         plan_tier: tier,
+        billing_cycle: cycle,
         trial_ends_at: trialEndsAt,
         updated_at: new Date().toISOString(),
       },
@@ -148,11 +158,6 @@ export async function createSubscription({ orgId, tier, supabase, requestedTrial
 }
 
 export async function changeSubscriptionTier({ orgId, newTier, supabase }) {
-  const newPlanId = PLAN_IDS[newTier];
-  if (!newPlanId) {
-    return { success: false, error: 'invalid_tier' };
-  }
-
   const { data: sub, error: fetchErr } = await supabase
     .from('subscriptions')
     .select('*')
@@ -161,6 +166,24 @@ export async function changeSubscriptionTier({ orgId, newTier, supabase }) {
 
   if (fetchErr || !sub || !sub.razorpay_subscription_id) {
     return { success: false, error: 'no_active_subscription' };
+  }
+
+  // Sept 2026 -- PLAN_IDS is now nested by cycle (monthly/yearly), not a
+  // flat tier->planId map, since the yearly-subscription work added a
+  // second dimension. This was a real bug, caught by a regression test
+  // before it ever shipped: the lookup here used to run BEFORE sub was
+  // fetched and assumed the old flat structure, which would have
+  // resolved to the whole {monthly, yearly} object instead of a real
+  // plan ID for every tier change, monthly or not. Now resolved using
+  // the subscriber's OWN current cycle (sub.billing_cycle), so a tier
+  // change correctly PRESERVES whichever cycle they're already on --
+  // a yearly Pro subscriber switching to Business stays yearly, not
+  // silently downgraded to monthly. Falls back to 'monthly' only for
+  // safety on a row somehow missing the column (should not happen after
+  // the migration's NOT NULL default, but never assume).
+  const newPlanId = PLAN_IDS[newTier]?.[sub.billing_cycle || 'monthly'];
+  if (!newPlanId) {
+    return { success: false, error: 'invalid_tier' };
   }
 
   const razorpay = getRazorpayInstance();
@@ -207,7 +230,7 @@ export async function changeSubscriptionTier({ orgId, newTier, supabase }) {
     .update({ subscription_plan: 'free' })
     .eq('id', orgId);
 
-  const newSubResult = await createSubscription({ orgId, tier: newTier, supabase });
+  const newSubResult = await createSubscription({ orgId, tier: newTier, cycle: sub.billing_cycle || 'monthly', supabase });
   if (!newSubResult.success) {
     return { success: false, error: 'new_subscription_creation_failed' };
   }
@@ -225,6 +248,84 @@ export async function changeSubscriptionTier({ orgId, newTier, supabase }) {
   return {
     success: true,
     instant: false,
+    needsReauth: true,
+    subscriptionId: newSubResult.subscriptionId,
+    keyId: newSubResult.keyId,
+  };
+}
+
+// changeSubscriptionCycle() -- monthly <-> yearly, same tier. Deliberately
+// a SEPARATE function from changeSubscriptionTier() above, not a shared
+// code path, so this can never affect that function's existing, proven
+// behavior. ALWAYS cancels then creates -- never attempts Razorpay's
+// in-place update path at all, unlike changeSubscriptionTier()'s
+// try-in-place-first approach for same-cycle tier changes.
+//
+// This was a deliberate choice, not a shortcut: Razorpay's own official
+// documentation (WooCommerce/Magento plugin docs) explicitly prescribes
+// cancel-then-create as the correct order for plan changes. A more
+// sophisticated create-then-cancel safety net (never leaving a customer
+// without ANY active subscription if the new one fails to create) was
+// considered and researched, but the evidence for whether Razorpay
+// cleanly supports a customer holding two simultaneously active
+// subscriptions was genuinely inconclusive from documentation alone --
+// and the subscriptions_organisation_id_unique database constraint
+// would need to change too. Confirmed with Atif: ship the safer,
+// documented pattern now; revisit the more elaborate mechanism post-V1
+// after proper test-mode validation, not on an unconfirmed assumption.
+//
+// Known, accepted tradeoff of this simpler pattern: if cancelling the
+// old subscription succeeds but creating the new one then fails, the
+// org is left on 'free' with no active subscription until they retry.
+// Also accepted, per Atif's explicit "forfeit the rest of this month"
+// policy decision: no proration credit for whatever remains of the
+// old cycle -- the customer pays the full new-cycle price today.
+export async function changeSubscriptionCycle({ orgId, newTier, newCycle, supabase }) {
+  const newPlanId = PLAN_IDS[newTier]?.[newCycle];
+  if (!newPlanId) {
+    return { success: false, error: 'invalid_tier_or_cycle' };
+  }
+
+  const { data: sub, error: fetchErr } = await supabase
+    .from('subscriptions')
+    .select('*')
+    .eq('organisation_id', orgId)
+    .maybeSingle();
+
+  if (fetchErr || !sub || !sub.razorpay_subscription_id) {
+    return { success: false, error: 'no_active_subscription' };
+  }
+
+  const razorpay = getRazorpayInstance();
+
+  try {
+    await razorpay.subscriptions.cancel(sub.razorpay_subscription_id);
+  } catch (cancelErr) {
+    console.error('[changeSubscriptionCycle] cancel-old failed:', cancelErr.message);
+  }
+
+  await supabase
+    .from('organisations')
+    .update({ subscription_plan: 'free' })
+    .eq('id', orgId);
+
+  const newSubResult = await createSubscription({ orgId, tier: newTier, cycle: newCycle, supabase });
+  if (!newSubResult.success) {
+    return { success: false, error: 'new_subscription_creation_failed' };
+  }
+
+  await recordSubscriptionEvent({
+    orgId,
+    razorpaySubscriptionId: sub.razorpay_subscription_id,
+    eventType: 'cycle_change_requires_reauth',
+    planTier: newTier,
+    amountPaisa: null,
+    payload: { from_tier: sub.plan_tier, from_cycle: sub.billing_cycle, to_tier: newTier, to_cycle: newCycle, method: 'cancel_and_recreate' },
+    supabase,
+  });
+
+  return {
+    success: true,
     needsReauth: true,
     subscriptionId: newSubResult.subscriptionId,
     keyId: newSubResult.keyId,
