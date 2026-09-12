@@ -49,6 +49,28 @@ const PRICE_PER_TOKEN_USD = {
 
 const USD_TO_INR = 96;
 const CEILING_CACHE_TTL_MS = 60_000; // avoids a DB round-trip on every single AI call
+const DB_TIMEOUT_MS = 5_000;
+
+// Sept 2026 -- the OpenAI call itself has always had a bounded timeout
+// (an AbortController at the call site, 10-25s depending on the flow),
+// but the usage-check database calls sitting IN FRONT of it never did.
+// A slow or hung Supabase response could stall a request indefinitely
+// with no timeout catching it at all -- a real, previously-unguarded
+// gap, found while investigating an intermittent hang report (the
+// actual root cause turned out to be unrelated -- a request that never
+// reached the server at all -- but this gap was real regardless and
+// worth closing on its own merits). withTimeout() races any promise
+// against a bound; a timeout becomes a normal thrown error, which the
+// existing fail-open handling in checkUsageAllowed() and the
+// swallow-and-log handling in recordAiUsage() already treat exactly
+// like any other DB error -- no new error-handling philosophy needed,
+// just a hang that can no longer be unbounded.
+function withTimeout(promise, ms, label) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)),
+  ]);
+}
 
 export function computeCostPaisa({ model, inputTokens, outputTokens }) {
   const pricing = PRICE_PER_TOKEN_USD[model] || PRICE_PER_TOKEN_USD['gpt-4o-mini'];
@@ -178,7 +200,9 @@ async function getPlanAndPeriods({ orgId, supabase }) {
 // possible operations to run) still can.
 export async function checkUsageAllowed({ orgId, supabase }) {
   try {
-    const { plan, planCeilings, windowPeriod, monthPeriod } = await getPlanAndPeriods({ orgId, supabase });
+    const { plan, planCeilings, windowPeriod, monthPeriod } = await withTimeout(
+      getPlanAndPeriods({ orgId, supabase }), DB_TIMEOUT_MS, 'checkUsageAllowed DB lookup'
+    );
 
     const windowUsedPaisa = windowPeriod.cost_used_paisa || 0;
     const windowCeilingPaisa = planCeilings.window_ceiling_paisa;
@@ -225,7 +249,9 @@ export async function recordAiUsage({ orgId, model, inputTokens, outputTokens, s
   try {
     if (!orgId || !supabase) return;
 
-    const { plan, planCeilings, windowPeriod, monthPeriod } = await getPlanAndPeriods({ orgId, supabase });
+    const { plan, planCeilings, windowPeriod, monthPeriod } = await withTimeout(
+      getPlanAndPeriods({ orgId, supabase }), DB_TIMEOUT_MS, 'recordAiUsage DB lookup'
+    );
     const costPaisa = computeCostPaisa({ model, inputTokens, outputTokens });
 
     const windowUsedBefore = windowPeriod.cost_used_paisa || 0;
@@ -292,7 +318,9 @@ export async function runTrackedCompletion({ orgId, client, requestParams, reque
 // duplicated in the route itself. Replaces the old direct
 // getOrCreateCurrentPeriod() call that route used to make.
 export async function getUsageSummary({ orgId, supabase }) {
-  const { plan, planCeilings, windowPeriod, monthPeriod } = await getPlanAndPeriods({ orgId, supabase });
+  const { plan, planCeilings, windowPeriod, monthPeriod } = await withTimeout(
+    getPlanAndPeriods({ orgId, supabase }), DB_TIMEOUT_MS, 'getUsageSummary DB lookup'
+  );
 
   const windowUsedPaisa = windowPeriod.cost_used_paisa || 0;
   const windowCeilingPaisa = planCeilings.window_ceiling_paisa;
