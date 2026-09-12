@@ -19,7 +19,7 @@ import { getDocumentBrandingProfile } from './services/pdf/documentBrandingProfi
 import { listBankAccounts, createBankAccount, updateBankAccount, deleteBankAccount } from './services/capabilities/bankAccountsService.js';
 import { extractBankAccountFromImage } from './services/ai/extractBankAccountFromImage.js';
 import { getFinancialPosition } from './services/ai/queryEngine/primitives.js';
-import { recordAiUsage, checkUsageAllowed, getOrCreateCurrentPeriod, getCeilingPaisaForPlan } from './services/billing/usageTracking.js';
+import { checkUsageAllowed, runTrackedCompletion } from './services/billing/usageTracking.js';
 import { createWalletOrder, creditWalletTopup, verifyClientPayment, verifyWebhookSignature } from './services/billing/walletService.js';
 import { createSubscription, requestCancellation, handleSubscriptionEvent, verifySubscriptionWebhookSignature, jobDowngradeCancelledSubscriptions, verifyClientSubscriptionPayment, activateSubscriptionClientSide, changeSubscriptionTier } from './services/billing/subscriptionService.js';
 import { createSeatSubscription, verifyClientSeatPayment, activateSeatSubscriptionClientSide, verifySeatWebhookSignature, handleSeatSubscriptionEvent } from './services/billing/seatSubscriptionService.js';
@@ -1914,12 +1914,6 @@ app.get('/api/billing/usage-summary', async (c) => {
     const walletCreditsUsed = validWalletRows.reduce((sum, r) => sum + r.ai_credits_used, 0);
     const walletPercentUsed = walletCreditsTotal > 0 ? Math.round((walletCreditsUsed / walletCreditsTotal) * 100) : 0;
 
-    const periodType = plan === 'free' ? 'free_window' : 'paid_month';
-    const period = await getOrCreateCurrentPeriod({ orgId: organisationId, periodType, supabase });
-    const ceilingPaisa = getCeilingPaisaForPlan(plan);
-    const costUsedPaisa = period.cost_used_paisa || 0;
-    const percentUsed = ceilingPaisa > 0 ? Math.round((costUsedPaisa / ceilingPaisa) * 100) : 0;
-
     let subscriptionPeriodEndFormatted = null;
     if (plan !== 'free') {
       const { data: sub } = await supabase
@@ -1934,6 +1928,21 @@ app.get('/api/billing/usage-summary', async (c) => {
       }
     }
 
+    // Sept 2026 -- two-meter usage system (Step 5). getUsageSummary()
+    // returns both meters in one call, already correctly floored (a
+    // trader who has genuinely used the app even once, however
+    // negligible the real percentage, never sees a plain "0% used" --
+    // real bug Atif found, confirmed via his own actual usage figures
+    // before this fix). windowPeriod is present for every plan;
+    // monthPeriod is null for free (unchanged design -- free tier has
+    // no monthly meter at all, only the 5-hour window).
+    const { getUsageSummary } = await import('./services/billing/usageTracking.js');
+    const usageSummary = await getUsageSummary({ orgId: organisationId, supabase });
+
+    const formatPeriodEnd = (iso) => new Date(iso).toLocaleString('en-IN', {
+      timeZone: 'Asia/Kolkata', hour: 'numeric', minute: '2-digit', hour12: true, day: 'numeric', month: 'short',
+    });
+
     return c.json({
       plan,
       businessName: org?.name || null,
@@ -1944,17 +1953,20 @@ app.get('/api/billing/usage-summary', async (c) => {
       walletCreditsUsed,
       walletPercentUsed,
       subscriptionPeriodEndFormatted,
-      currentPeriod: {
-        periodType,
-        costUsedPaisa,
-        ceilingPaisa,
-        percentUsed,
-        periodEnd: period.period_end,
-        periodEndFormatted: new Date(period.period_end).toLocaleString('en-IN', {
-          timeZone: 'Asia/Kolkata', hour: 'numeric', minute: '2-digit', hour12: true,
-          day: 'numeric', month: 'short',
-        }),
+      windowPeriod: {
+        costUsedPaisa: usageSummary.window.usedPaisa,
+        ceilingPaisa: usageSummary.window.ceilingPaisa,
+        percentUsed: usageSummary.window.percentUsed,
+        periodEnd: usageSummary.window.periodEnd,
+        periodEndFormatted: formatPeriodEnd(usageSummary.window.periodEnd),
       },
+      monthPeriod: usageSummary.month ? {
+        costUsedPaisa: usageSummary.month.usedPaisa,
+        ceilingPaisa: usageSummary.month.ceilingPaisa,
+        percentUsed: usageSummary.month.percentUsed,
+        periodEnd: usageSummary.month.periodEnd,
+        periodEndFormatted: formatPeriodEnd(usageSummary.month.periodEnd),
+      } : null,
     });
   } catch (err) {
     console.error('[GET /api/billing/usage-summary] Error:', err);
@@ -5950,28 +5962,40 @@ app.post('/api/chat/:customer_id/spark', async (c) => {
     console.log(`[SPARK] op=${startTime} starting OpenAI call after ${Date.now() - startTime}ms (pre-call setup), prompt_chars=${systemContent.length}`);
 
     try {
-      const completion = await client.chat.completions.create({
-        model: 'gpt-4o-mini',
-        messages: [
-          { role: 'system', content: systemContent },
-          { role: 'user', content: userMessage },
-        ],
-        temperature: 0.2,
-      }, { signal: controller.signal });
+      // Sept 2026 -- routed through runTrackedCompletion() (Step 5),
+      // the single entry point for every OpenAI call in this app. The
+      // early check above (op=start) already catches the common case;
+      // this is a genuine, if rare, second check right at the point of
+      // real cost, catching budget consumed by another request between
+      // the two checks -- an improvement over the old code, which only
+      // checked once per flow.
+      const { blocked, checkResult, completion } = await runTrackedCompletion({
+        orgId: organisationId, client,
+        requestParams: {
+          model: 'gpt-4o-mini',
+          messages: [
+            { role: 'system', content: systemContent },
+            { role: 'user', content: userMessage },
+          ],
+          temperature: 0.2,
+        },
+        requestOptions: { signal: controller.signal },
+        supabase,
+      });
       clearTimeout(timeoutId);
+      if (blocked) {
+        console.log(`[SPARK] op=${startTime} usage_limit_reached at completion time after ${Date.now() - startTime}ms`);
+        return c.json({
+          routing: 'clarify',
+          message_type: 'usage_limit',
+          message: `Usage limit reached · Resets at ${checkResult.periodEndFormatted} · Get more usage`,
+          confidence_score: null,
+          actions: [],
+        });
+      }
       tokensInput = completion.usage?.prompt_tokens || 0;
       tokensOutput = completion.usage?.completion_tokens || 0;
       parsed = parseSparkResponse(completion.choices[0].message.content || '');
-      // Usage tracking (Subscription & Billing, Step 2d) -- fire-and-forget,
-      // tracking only, no enforcement. Reuses tokensInput/tokensOutput
-      // already extracted above for Spark's own logging -- no new
-      // extraction needed. recordAiUsage already imported in this file
-      // (Step 2b).
-      recordAiUsage({
-        orgId: organisationId, model: 'gpt-4o-mini',
-        inputTokens: tokensInput, outputTokens: tokensOutput,
-        supabase,
-      }).catch(() => {});
       console.log(`[SPARK] op=${startTime} OpenAI call completed after ${Date.now() - startTime}ms total, tokens_in=${tokensInput} tokens_out=${tokensOutput}`);
     } catch (aiErr) {
       clearTimeout(timeoutId);
@@ -7687,12 +7711,15 @@ app.post('/api/chat/:customer_id/ai-query', async (c) => {
       }
     }
 
-    // Usage enforcement (Subscription & Billing, Step 4b). Placed early --
-    // before Whisper transcription and both completion calls -- so a
-    // blocked request skips ALL downstream cost, not just the final call.
-    // checkUsageAllowed() returns allowed:true unconditionally while
-    // ENFORCEMENT_ENABLED is false (current state), so this is a genuine
-    // no-op right now -- verified inert, not just assumed.
+    // Usage enforcement (Subscription & Billing, Step 4b, upgraded to the
+    // two-meter system in Step 5). Placed early -- before Whisper
+    // transcription and both completion calls -- so a blocked request
+    // skips ALL downstream cost, not just the final call.
+    // ENFORCEMENT_ENABLED is true and this genuinely blocks real
+    // requests -- corrected Sept 2026 from an earlier comment here that
+    // claimed the opposite (enforcement was off when that was written,
+    // then turned on without the comment being updated -- caught during
+    // a usage-tracking audit, not by anyone noticing broken behavior).
     const usageCheck = await checkUsageAllowed({ orgId: organisationId, supabase });
     if (!usageCheck.allowed) {
       return c.json({
@@ -8061,18 +8088,21 @@ Hard rules:
     const t1 = setTimeout(() => controller1.abort(), 10000);
     let completion;
     try {
-      completion = await client.chat.completions.create({
-        model: 'gpt-4o-mini', messages, tools: AI_QUERY_TOOLS, tool_choice: 'auto', temperature: 0.1,
-      }, { signal: controller1.signal });
-      clearTimeout(t1);
-      // Usage tracking (Subscription & Billing, Step 2b) -- fire-and-forget,
-      // tracking only, no enforcement. Never awaited: adds zero latency to
-      // the response the customer/owner is waiting on.
-      recordAiUsage({
-        orgId: organisationId, model: 'gpt-4o-mini',
-        inputTokens: completion.usage?.prompt_tokens, outputTokens: completion.usage?.completion_tokens,
+      // Sept 2026 -- routed through runTrackedCompletion() (Step 5).
+      const result1 = await runTrackedCompletion({
+        orgId: organisationId, client,
+        requestParams: { model: 'gpt-4o-mini', messages, tools: AI_QUERY_TOOLS, tool_choice: 'auto', temperature: 0.1 },
+        requestOptions: { signal: controller1.signal },
         supabase,
-      }).catch(() => {});
+      });
+      clearTimeout(t1);
+      if (result1.blocked) {
+        return c.json({
+          response: `Usage limit reached · Resets at ${result1.checkResult.periodEndFormatted} · Get more usage`,
+          message_type: 'usage_limit', card_type: null, shareable: false, chart_data: null,
+        });
+      }
+      completion = result1.completion;
     } catch (e) {
       clearTimeout(t1);
       return c.json({ error: 'ai_error', message: 'AI temporarily unavailable' }, 500);
@@ -8093,17 +8123,24 @@ Hard rules:
       const controller2 = new AbortController();
       const t2 = setTimeout(() => controller2.abort(), 25000);
       try {
-        const completion2 = await client.chat.completions.create({
-          model: 'gpt-4o-mini', messages, temperature: 0.2,
-        }, { signal: controller2.signal });
-        clearTimeout(t2);
-        responseText = completion2.choices[0].message.content || 'No response';
-        // Usage tracking (Subscription & Billing, Step 2b) -- fire-and-forget.
-        recordAiUsage({
-          orgId: organisationId, model: 'gpt-4o-mini',
-          inputTokens: completion2.usage?.prompt_tokens, outputTokens: completion2.usage?.completion_tokens,
+        // Sept 2026 -- routed through runTrackedCompletion() (Step 5).
+        // Genuinely possible (if rare) for THIS call specifically to be
+        // blocked even when the first call wasn't -- the tool-execution
+        // step above does no LLM call itself, so no extra cost is
+        // incurred either way, but the trader gets a usage message
+        // instead of their answer rather than a silent/confusing failure.
+        const result2 = await runTrackedCompletion({
+          orgId: organisationId, client,
+          requestParams: { model: 'gpt-4o-mini', messages, temperature: 0.2 },
+          requestOptions: { signal: controller2.signal },
           supabase,
-        }).catch(() => {});
+        });
+        clearTimeout(t2);
+        if (result2.blocked) {
+          responseText = `Usage limit reached · Resets at ${result2.checkResult.periodEndFormatted} · Get more usage`;
+        } else {
+          responseText = result2.completion.choices[0].message.content || 'No response';
+        }
       } catch (e) {
         clearTimeout(t2);
         responseText = 'AI processing failed. Please try again.';
