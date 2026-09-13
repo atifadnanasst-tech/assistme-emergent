@@ -398,10 +398,16 @@ export default function SubscriptionBilling() {
 
     if (currentTier === 'free') {
       const defaultDays = TRIAL_DEFAULTS[targetTier.tier] || 0;
+      // Sept 2026 -- real bug found by Atif: this dialog was never
+      // updated when yearly subscriptions were built. targetTier.priceLabel
+      // is always the monthly label; the actual checkout flow further
+      // downstream (openCheckoutAndVerify) was correctly made cycle-aware,
+      // but this earlier confirmation dialog, shown BEFORE that, was not.
+      const effectivePriceLabel = isYearly && targetTier.yearlyPriceLabel ? targetTier.yearlyPriceLabel : targetTier.priceLabel;
       if (defaultDays > 0) {
         Alert.alert(
           `Start ${targetTier.displayName} Plan?`,
-          `${defaultDays}-day free trial, then ${targetTier.priceLabel} automatically. You can cancel anytime during the trial, no charge.`,
+          `${defaultDays}-day free trial, then ${effectivePriceLabel} automatically. You can cancel anytime during the trial, no charge.`,
           [
             { text: 'Cancel', style: 'cancel' },
             { text: 'Start Trial', onPress: () => handleFreshSubscribe(targetTier, defaultDays) },
