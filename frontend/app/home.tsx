@@ -16,6 +16,7 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, useNavigation, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import Constants from 'expo-constants';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import { authService } from '../lib/auth';
@@ -940,7 +941,6 @@ export default function HomeScreen() {
         <Ionicons name={fabExpanded ? 'close' : 'add'} size={28} color="#FFFFFF" />
       </TouchableOpacity>
 
-      <Text style={{ textAlign: "center", fontSize: 10, color: "#CCC", paddingVertical: 2 }}>v1.3.540</Text>
       {/* Bottom Navigation SafeAreaView */}
       <SafeAreaView style={styles.bottomNavSafeArea} edges={['bottom']}>
         <View style={styles.bottomNav}>
@@ -1065,6 +1065,30 @@ export default function HomeScreen() {
                 Settings: lives on the bottom Tools sheet (setShowToolsSheet).
                 Note: "Invite Team Members" was a mislabel — it is a REFERRAL feature,
                 now correctly named "Refer & Earn" above (distinct from staff/roles). */}
+
+            {/* Sept 2026 -- relocated from an always-visible home-screen
+                footer, per Atif's explicit request: not something a real
+                trader customer needs staring at them on the main screen.
+                Two deliberately SEPARATE numbers, clearly labeled so
+                there's no ambiguity: App Version reads live from
+                app.json via expo-constants (the real, store-facing
+                version, tied to runtimeVersion/native-build
+                compatibility -- only bumped on a genuine new native
+                build). Build is our own internal per-patch OTA counter,
+                bumped freely on every code patch however small, with NO
+                connection to runtimeVersion at all. These must stay
+                separate: if the OTA counter ever became the same number
+                as the real app version, bumping it on every patch would
+                silently break OTA delivery to already-installed devices
+                (confirmed by checking this project's own config before
+                building this -- version has correctly stayed at 1.0.2
+                all session while the OTA counter passed 15+ increments,
+                which is exactly why every update worked). */}
+            <View style={styles.menuDivider} />
+            <View style={styles.versionFooterRow}>
+              <Text style={styles.versionFooterText}>App Version {Constants.expoConfig?.version || '—'}</Text>
+              <Text style={styles.versionFooterText}>Build v1.3.541</Text>
+            </View>
           </View>
         </TouchableOpacity>
       </Modal>
@@ -1543,6 +1567,16 @@ const styles = StyleSheet.create({
     height: 1,
     backgroundColor: '#F0F0F0',
     marginVertical: 8,
+  },
+  versionFooterRow: {
+    paddingHorizontal: 16,
+    paddingBottom: 4,
+    alignItems: 'center',
+  },
+  versionFooterText: {
+    fontSize: 11,
+    color: '#B0B0B0',
+    marginBottom: 2,
   },
   sheetOverlay: {
     flex: 1,
