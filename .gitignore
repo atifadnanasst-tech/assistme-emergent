@@ -92,3 +92,4 @@ frontend/.metro-cache/
 .env.example
 yarn.lock
 test_output.log
+downloads/
