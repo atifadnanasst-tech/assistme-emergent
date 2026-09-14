@@ -62,12 +62,18 @@ Rules:
 - Return "products": [] if no products found.
 - Return only the JSON object described above.`;
 
-export function getImportModelForPlan(plan) {
-  return (plan === 'business' || plan === 'tajir') ? 'gpt-4o' : 'gpt-4o-mini';
-}
-
 export async function extractProductsFromFiles({ files, client, plan, orgId, supabase }) {
-  const importModel = getImportModelForPlan(plan);
+  // Sept 2026 -- model is now looked up from the SAME ai_usage_ceilings
+  // table the tracking system already queries and caches, via
+  // getExtractionModelForPlan(). Replaces the old hardcoded
+  // getImportModelForPlan() (plan === 'business' -> gpt-4o, else mini).
+  // Confirmed with Atif via a real side-by-side accuracy test on real
+  // bills before switching Business to gpt-4o-mini -- not assumed on
+  // cost alone. Admin-configurable per plan going forward without a
+  // code deploy: changing a tier's model is now a single UPDATE to
+  // ai_usage_ceilings.extraction_model.
+  const { getExtractionModelForPlan } = await import('../billing/usageTracking.js');
+  const importModel = await getExtractionModelForPlan(plan, supabase);
   const allExtracted = [];
   let usedFallback = false;
   const uploadedFileIds = [];

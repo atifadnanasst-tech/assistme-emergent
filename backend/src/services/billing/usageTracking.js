@@ -99,9 +99,10 @@ export function clearCeilingCacheForTests() {
 }
 
 const EMERGENCY_FALLBACK_CEILINGS = {
-  free: { plan: 'free', window_ceiling_paisa: 17, month_ceiling_paisa: null, window_hours: 5 },
-  pro: { plan: 'pro', window_ceiling_paisa: 71, month_ceiling_paisa: 8000, window_hours: 5 },
-  business: { plan: 'business', window_ceiling_paisa: 357, month_ceiling_paisa: 40000, window_hours: 5 },
+  free: { plan: 'free', window_ceiling_paisa: 62, month_ceiling_paisa: 2000, window_hours: 5, extraction_model: 'gpt-4o-mini' },
+  pro: { plan: 'pro', window_ceiling_paisa: 180, month_ceiling_paisa: 6000, window_hours: 5, extraction_model: 'gpt-4o-mini' },
+  business: { plan: 'business', window_ceiling_paisa: 400, month_ceiling_paisa: 18000, window_hours: 5, extraction_model: 'gpt-4o-mini' },
+  enterprise: { plan: 'enterprise', window_ceiling_paisa: 5000, month_ceiling_paisa: 300000, window_hours: 5, extraction_model: 'gpt-4o-mini' },
 };
 
 export async function getCeilings(supabase) {
@@ -185,10 +186,14 @@ async function getPlanAndPeriods({ orgId, supabase }) {
     orgId, periodType: 'free_window', windowHours: planCeilings.window_hours, supabase,
   });
 
-  let monthPeriod = null;
-  if (plan !== 'free') {
-    monthPeriod = await getOrCreatePeriod({ orgId, periodType: 'paid_month', supabase });
-  }
+  // Sept 2026 -- free tier now gets a monthly meter too, not just the
+  // window. Original design gave free tier window-only; Atif's revised
+  // free-tier plan explicitly requires a real monthly ceiling (Rs 20)
+  // as the thing that actually throttles a heavy user for the rest of
+  // the month once exhausted -- this is an expansion (a second layer
+  // of protection where there was only one), not a removal of anything
+  // that existed before.
+  const monthPeriod = await getOrCreatePeriod({ orgId, periodType: 'paid_month', supabase });
 
   return { plan, planCeilings, windowPeriod, monthPeriod };
 }
@@ -355,6 +360,20 @@ export function getCeilingPaisaForPlan(plan, ceilings) {
   const source = ceilings || EMERGENCY_FALLBACK_CEILINGS;
   const row = source[plan] || source.free;
   return row.month_ceiling_paisa ?? row.window_ceiling_paisa;
+}
+
+// Sept 2026 -- extraction_model added as a per-plan admin-configurable
+// column on the SAME ai_usage_ceilings table, rather than building a
+// separate settings system. Reuses the already-cached getCeilings()
+// lookup every extraction call already makes -- no new DB round-trip,
+// no new caching logic. Changing which model a tier uses for
+// extraction (e.g. Business from gpt-4o to gpt-4o-mini, confirmed by
+// Atif's own real-bill accuracy test before making this switch) is now
+// a single UPDATE to this table, not a code deploy.
+export async function getExtractionModelForPlan(plan, supabase) {
+  const ceilings = await getCeilings(supabase);
+  const row = ceilings[plan] || ceilings.free;
+  return row.extraction_model || 'gpt-4o-mini';
 }
 
 // percentUsed with a floor: real usage that rounds to 0% under plain
