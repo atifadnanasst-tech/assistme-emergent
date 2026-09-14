@@ -89,6 +89,14 @@ export async function extractProductsFromFiles({ files, client, plan, orgId, sup
   // future UI enhancement can tell the trader clearly, rather than
   // silently returning fewer products than were actually in the photos.
   let blockedFileCount = 0;
+  // Sept 2026 -- real bug found by Atif during testing: when every file
+  // in a batch got blocked (over budget), the frontend showed a
+  // generic "No products found" error indistinguishable from "the
+  // photo genuinely had no products in it." Capturing the reset time
+  // from the FIRST block encountered lets the caller give the trader
+  // the same clear, actionable usage-limit message used everywhere
+  // else in the app, instead of a confusing generic failure.
+  let blockedResetTime = null;
 
   for (const file of files.slice(0, MAX_IMPORTED_FILES)) {
     try {
@@ -137,13 +145,14 @@ export async function extractProductsFromFiles({ files, client, plan, orgId, sup
       // than aborting the whole batch -- other files in the same
       // import may still have budget room if this is right at the edge.
       const { runTrackedCompletion } = await import('../billing/usageTracking.js');
-      const { blocked, completion: res } = await runTrackedCompletion({
+      const { blocked, checkResult, completion: res } = await runTrackedCompletion({
         orgId, client,
         requestParams: { model: importModel, messages, max_tokens: 4000, temperature: 0.1 },
         supabase,
       });
       if (blocked) {
         blockedFileCount++;
+        if (!blockedResetTime) blockedResetTime = checkResult?.periodEndFormatted || null;
         continue;
       }
 
@@ -196,7 +205,7 @@ export async function extractProductsFromFiles({ files, client, plan, orgId, sup
 
   if (deduped.length > MAX_IMPORTED_PRODUCTS) deduped.splice(MAX_IMPORTED_PRODUCTS);
 
-  return { products: deduped, totalExtracted: allExtracted.length, usedFallback, importModel, detectedSupplierName, detectedSupplierBillNumber, blockedFileCount };
+  return { products: deduped, totalExtracted: allExtracted.length, usedFallback, importModel, detectedSupplierName, detectedSupplierBillNumber, blockedFileCount, blockedResetTime };
 }
 
 export async function resolveImportedProducts({ products, organisationId, supabase }) {
