@@ -182,7 +182,21 @@ export default function ProductImportSheet({ visible, onDismiss, onComplete, exi
       if (data.detected_supplier_bill_number) setBillNumber(data.detected_supplier_bill_number);
 
       if (!data.products?.length) {
-        Alert.alert('No products found', 'Could not extract any products from the selected files.');
+        // Sept 2026 -- real bug found by Atif during testing: every file
+        // in a batch being blocked (over the usage ceiling) previously
+        // showed this SAME generic message as a photo genuinely having
+        // no extractable products -- indistinguishable, confusing, and
+        // giving no path forward. Now checked explicitly and given the
+        // same clear, actionable usage-limit message used everywhere
+        // else in the app, including the reset time so the trader knows
+        // exactly when they can try again (or that upgrading/buying a
+        // wallet top-up would let them continue sooner).
+        if (data.blocked_file_count > 0) {
+          const resetText = data.blocked_reset_time ? ` · Resets at ${data.blocked_reset_time}` : '';
+          Alert.alert('Usage limit reached', `Your AI usage limit for this window has been reached${resetText}. Upgrade your plan or buy more usage to continue now.`);
+        } else {
+          Alert.alert('No products found', 'Could not extract any products from the selected files.');
+        }
         setStep('pick'); return;
       }
 
