@@ -13,7 +13,7 @@ import { authService } from '../lib/auth';
 import ProductFormSheet, { ProductFormData } from '../components/primitives/ProductFormSheet';
 import ProductImportSheet from '../components/primitives/ProductImportSheet';
 
-interface Product { id: string; name: string; category: string; image_url: string | null; selling_price: number; cost_price: number; tax_rate: number; is_top_seller: boolean; }
+interface Product { id: string; name: string; category: string; image_url: string | null; selling_price: number; cost_price: number; tax_rate: number; is_top_seller: boolean; quantity?: number | null; }
 interface Suggestion { product_id: string; product_name: string; reason: string; }
 
 export default function ProductsCatalogScreen() {
@@ -524,6 +524,11 @@ export default function ProductsCatalogScreen() {
                             <Ionicons name="pencil" size={14} color="#075E54" />
                           </TouchableOpacity>
                         </View>
+                        {p.quantity !== null && p.quantity !== undefined && (
+                          <Text style={[s.gridQuantity, p.quantity <= 0 && s.gridQuantityLow]}>
+                            {p.quantity <= 0 ? 'Out of stock' : `${p.quantity} in stock`}
+                          </Text>
+                        )}
                       </View>
                     </TouchableOpacity>
                   ))}
@@ -773,6 +778,8 @@ const s = StyleSheet.create({
   gridProductName: { flex: 1, fontSize: 14, fontWeight: '600', color: '#1A1A1A' },
   gridPriceRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 6 },
   gridPrice: { fontSize: 15, fontWeight: '700', color: '#075E54' },
+  gridQuantity: { fontSize: 11, color: '#888', marginTop: 3 },
+  gridQuantityLow: { color: '#D32F2F', fontWeight: '600' },
   priceEditInput: { borderWidth: 1, borderColor: '#075E54', borderRadius: 6, padding: 4, fontSize: 14, width: 80, color: '#333' },
   listRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF', borderRadius: 10, padding: 12, marginBottom: 6, gap: 10 },
   listImage: { width: 40, height: 40, borderRadius: 8, backgroundColor: '#F0F0F0' },

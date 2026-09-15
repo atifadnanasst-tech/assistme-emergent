@@ -8972,12 +8972,35 @@ app.get('/api/products/list', async (c) => {
   try {
     const auth = await authenticateChat(c);
     if (!auth) return c.json({ error: 'unauthorized' }, 401);
-    const { data: products } = await supabase.from('products').select('id, name, sku, selling_price, tax_rate, unit, custom_fields')
+    const { data: products } = await supabase.from('products').select('id, name, sku, selling_price, tax_rate, unit, custom_fields, track_inventory')
       .eq('organisation_id', auth.organisationId).eq('is_active', true).order('name');
+
+    // Sept 2026 -- live quantity surfaced on the product card (Home ->
+    // Products). Reads the SAME aggregate `inventory` table
+    // adjustInventory() already keeps consistent on every purchase,
+    // sale, and manual stock entry -- no new write-side logic needed,
+    // this is purely a read-side addition. A product with
+    // track_inventory=false gets quantity:null (not 0), so the
+    // frontend can distinguish "not tracked" from "tracked, currently
+    // zero stock" -- a real, meaningful difference to a trader.
+    const productIds = (products || []).map(p => p.id);
+    let quantityByProduct = {};
+    if (productIds.length > 0) {
+      const { data: invRows } = await supabase.from('inventory')
+        .select('product_id, quantity')
+        .eq('organisation_id', auth.organisationId)
+        .in('product_id', productIds)
+        .is('deleted_at', null);
+      for (const row of invRows || []) {
+        quantityByProduct[row.product_id] = (quantityByProduct[row.product_id] || 0) + Number(row.quantity || 0);
+      }
+    }
+
     return c.json({
       products: (products || []).map(p => ({
         id: p.id, name: p.name, sku: p.sku, selling_price: p.selling_price,
         tax_rate: p.tax_rate || 0, unit: p.unit || 'unit', hsn_code: p.custom_fields?.hsn_code || null,
+        quantity: p.track_inventory === false ? null : (quantityByProduct[p.id] ?? 0),
       })),
     });
   } catch (error) {
@@ -10422,14 +10445,36 @@ app.get('/api/catalog', async (c) => {
 
     const { data: org } = await supabase.from('organisations').select('id, name').eq('id', organisationId).single();
     const { data: products } = await supabase.from('products')
-      .select('id, name, category, image_url, selling_price, cost_price, custom_fields, sku')
+      .select('id, name, category, image_url, selling_price, cost_price, custom_fields, sku, track_inventory')
       .eq('organisation_id', organisationId).eq('is_active', true).order('category').order('name');
+
+    // Sept 2026 -- live quantity surfaced on each product card. Reads
+    // the SAME aggregate `inventory` table adjustInventory() already
+    // keeps consistent on every purchase, sale, and manual stock entry
+    // -- purely a read-side addition, no new write-side logic. A
+    // product with track_inventory=false gets quantity:null (not 0),
+    // so the frontend can distinguish "not tracked" from "tracked,
+    // currently zero stock" -- a real, meaningful difference to a
+    // trader glancing at their catalog.
+    const productIds = (products || []).map(p => p.id);
+    let quantityByProduct = {};
+    if (productIds.length > 0) {
+      const { data: invRows } = await supabase.from('inventory')
+        .select('product_id, quantity')
+        .eq('organisation_id', organisationId)
+        .in('product_id', productIds)
+        .is('deleted_at', null);
+      for (const row of invRows || []) {
+        quantityByProduct[row.product_id] = (quantityByProduct[row.product_id] || 0) + Number(row.quantity || 0);
+      }
+    }
 
     const allProducts = (products || []).map(p => ({
       id: p.id, name: p.name, category: p.category || 'Uncategorized',
       image_url: p.image_url || null, selling_price: p.selling_price || 0,
       cost_price: p.cost_price || 0, is_top_seller: p.custom_fields?.is_top_seller || false,
       sku: p.sku || null,
+      quantity: p.track_inventory === false ? null : (quantityByProduct[p.id] ?? 0),
     }));
     const categories = [...new Set(allProducts.map(p => p.category))];
 
