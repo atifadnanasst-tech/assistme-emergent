@@ -21,6 +21,7 @@ import {
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import { Ionicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
 import BottomSheet from './BottomSheet';
 import { authService } from '../../lib/auth';
 
@@ -85,6 +86,7 @@ interface ProductImportSheetProps {
 type Step = 'pick' | 'extracting' | 'review' | 'confirming';
 
 export default function ProductImportSheet({ visible, onDismiss, onComplete, existingCategories = [], mode = 'catalog', customerId }: ProductImportSheetProps) {
+  const router = useRouter();
   const [step, setStep] = useState<Step>('pick');
   const [items, setItems] = useState<ReviewItem[]>([]);
   const [telemetry, setTelemetry] = useState<{ total_extracted: number; total_new: number; total_resolved: number; total_fuzzy: number; model_used: string } | null>(null);
@@ -193,7 +195,17 @@ export default function ProductImportSheet({ visible, onDismiss, onComplete, exi
         // wallet top-up would let them continue sooner).
         if (data.blocked_file_count > 0) {
           const resetText = data.blocked_reset_time ? ` · Resets at ${data.blocked_reset_time}` : '';
-          Alert.alert('Usage limit reached', `Your AI usage limit for this window has been reached${resetText}. Upgrade your plan or buy more usage to continue now.`);
+          Alert.alert(
+            'Usage limit reached',
+            `Your AI usage limit for this window has been reached${resetText}.`,
+            [
+              { text: 'Not now', style: 'cancel' },
+              {
+                text: 'Get More Usage',
+                onPress: () => { onDismiss(); router.push('/settings/billing'); },
+              },
+            ]
+          );
         } else {
           Alert.alert('No products found', 'Could not extract any products from the selected files.');
         }
