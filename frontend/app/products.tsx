@@ -621,6 +621,7 @@ export default function ProductsCatalogScreen() {
           <View style={{ position: 'absolute', top: 60, right: 12, backgroundColor: '#FFF', borderRadius: 12, paddingVertical: 8, minWidth: 200, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.15, shadowRadius: 8, elevation: 8 }}>
             {[
               { label: 'Add Product', icon: 'add-circle-outline', onPress: () => { setHeaderMenuVisible(false); openAddForm(); } },
+              { label: 'See Inventory', icon: 'cube-outline', onPress: () => { setHeaderMenuVisible(false); router.push('/inventory'); } },
               { label: viewMode === 'grid' ? 'List View' : 'Grid View', icon: viewMode === 'grid' ? 'list-outline' : 'grid-outline', onPress: () => { setViewMode(v => v === 'grid' ? 'list' : 'grid'); setHeaderMenuVisible(false); } },
               { label: 'Import Products', icon: 'cloud-upload-outline', onPress: () => { setHeaderMenuVisible(false); setImportVisible(true); } },
               { label: 'Archived Products', icon: 'archive-outline', onPress: () => { setHeaderMenuVisible(false); loadArchived(); setArchivedVisible(true); } },

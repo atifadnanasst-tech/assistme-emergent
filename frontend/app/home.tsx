@@ -1087,7 +1087,7 @@ export default function HomeScreen() {
             <View style={styles.menuDivider} />
             <View style={styles.versionFooterRow}>
               <Text style={styles.versionFooterText}>App Version {Constants.expoConfig?.version || '—'}</Text>
-              <Text style={styles.versionFooterText}>Build v1.3.545</Text>
+              <Text style={styles.versionFooterText}>Build v1.3.546</Text>
             </View>
           </View>
         </TouchableOpacity>
