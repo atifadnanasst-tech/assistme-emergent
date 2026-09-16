@@ -10287,6 +10287,88 @@ app.patch('/api/products/:id', async (c) => {
 });
 
 // ─── POST /api/products/:id/image ───────────────────────────
+// Sept 2026 -- inventory module Phase 2 ("See Inventory" screen).
+// Phase 1 (live quantity on product cards) shipped in v1.3.545; this
+// completes it with the actual per-product movement history, tied
+// back to source documents, discussed and designed with Atif ahead of
+// building. Read-only -- no write-side changes at all, since
+// adjustInventory() and recordPurchaseBill() already write everything
+// this route needs to display.
+app.get('/api/products/:id/inventory', async (c) => {
+  try {
+    const auth = await authenticateChat(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const { organisationId } = auth;
+    const productId = c.req.param('id');
+
+    const { data: product } = await supabase.from('products')
+      .select('id, name, unit, track_inventory')
+      .eq('id', productId).eq('organisation_id', organisationId).single();
+    if (!product) return c.json({ error: 'not_found' }, 404);
+
+    // Current quantity, summed across locations -- matches the same
+    // calculation used on the product-card list (Phase 1), so the two
+    // screens never disagree with each other.
+    const { data: invRows } = await supabase.from('inventory')
+      .select('quantity').eq('organisation_id', organisationId).eq('product_id', productId).is('deleted_at', null);
+    const currentQuantity = (invRows || []).reduce((sum, r) => sum + Number(r.quantity || 0), 0);
+
+    const { data: transactions } = await supabase.from('inventory_transactions')
+      .select('id, type, quantity, reference_type, reference_id, notes, actor_id, created_at')
+      .eq('organisation_id', organisationId).eq('product_id', productId)
+      .is('deleted_at', null)
+      .order('created_at', { ascending: false })
+      .limit(100);
+
+    const txns = transactions || [];
+
+    // Batch-resolve every referenced document and actor in at most 3
+    // extra queries total, regardless of how many transactions exist --
+    // never one query per row. Three known reference_type values exist
+    // in this codebase today (confirmed by checking every actual write
+    // site before building this, not assumed): 'invoice',
+    // 'purchase_bill', 'manual_stock_entry' -- the last needs no lookup
+    // at all, it already means "no document."
+    const invoiceIds = [...new Set(txns.filter(t => t.reference_type === 'invoice').map(t => t.reference_id).filter(Boolean))];
+    const billIds = [...new Set(txns.filter(t => t.reference_type === 'purchase_bill').map(t => t.reference_id).filter(Boolean))];
+    const actorIds = [...new Set(txns.map(t => t.actor_id).filter(Boolean))];
+
+    const [invoicesRes, billsRes, actorsRes] = await Promise.all([
+      invoiceIds.length > 0 ? supabase.from('invoices').select('id, invoice_number').in('id', invoiceIds) : Promise.resolve({ data: [] }),
+      billIds.length > 0 ? supabase.from('purchase_bills').select('id, bill_number').in('id', billIds) : Promise.resolve({ data: [] }),
+      actorIds.length > 0 ? supabase.from('users').select('id, full_name').in('id', actorIds) : Promise.resolve({ data: [] }),
+    ]);
+
+    const invoiceById = {}; for (const inv of invoicesRes.data || []) invoiceById[inv.id] = inv.invoice_number;
+    const billById = {}; for (const b of billsRes.data || []) billById[b.id] = b.bill_number;
+    const actorById = {}; for (const u of actorsRes.data || []) actorById[u.id] = u.full_name;
+
+    const history = txns.map(t => {
+      let documentLabel = 'Manual entry';
+      if (t.reference_type === 'invoice' && invoiceById[t.reference_id]) documentLabel = `Invoice #${invoiceById[t.reference_id]}`;
+      else if (t.reference_type === 'purchase_bill' && billById[t.reference_id]) documentLabel = `Purchase Bill #${billById[t.reference_id]}`;
+      return {
+        id: t.id,
+        type: t.type,
+        quantity: Number(t.quantity),
+        document_label: documentLabel,
+        notes: t.notes || null,
+        actor_name: t.actor_id ? (actorById[t.actor_id] || null) : null,
+        created_at: t.created_at,
+      };
+    });
+
+    return c.json({
+      product: { id: product.id, name: product.name, unit: product.unit || 'unit' },
+      current_quantity: product.track_inventory === false ? null : currentQuantity,
+      history,
+    });
+  } catch (error) {
+    console.error('[GET /api/products/:id/inventory] Error:', error);
+    return c.json({ error: 'server_error' }, 500);
+  }
+});
+
 app.post('/api/products/:id/image', async (c) => {
   try {
     const auth = await authenticateChat(c);
