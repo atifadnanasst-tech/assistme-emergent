@@ -8959,7 +8959,16 @@ app.post('/api/products/resolve', async (c) => {
     const name = (body.name || '').trim();
     const customerId = body.customer_id || null;
     if (!name) return c.json({ error: 'name is required' }, 400);
-    const result = await resolveProduct({ productName: name, customerId, organisationId });
+    // Sept 2026 -- real bug found while investigating a separate issue
+    // (the empty-invoice onboarding audit): this call was missing the
+    // supabase parameter that resolveProduct() actually requires,
+    // meaning every call to this route has thrown internally
+    // (Cannot read properties of undefined) since it was written --
+    // caught by this route's own try/catch and returned as a generic
+    // 500, so it failed silently from every caller's perspective too.
+    // productImport.js's own call to the same function has always
+    // passed supabase correctly; this route simply never did.
+    const result = await resolveProduct({ productName: name, customerId, organisationId, supabase });
     return c.json(result);
   } catch (err) {
     console.error('[PRODUCTS/RESOLVE] Error:', err);
