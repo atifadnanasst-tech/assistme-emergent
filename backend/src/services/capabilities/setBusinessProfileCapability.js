@@ -23,16 +23,26 @@
  *   footer_text is assembled at PDF generation time from terms_text +
  *   system_config.pdf_footer_promo — intentionally NOT stored in header_cache.
  *
- * PROFILE-DB-01 (post-v1):
- *   Add DB-level unique constraint on (organisation_id) for default profiles.
- *   Application-level checks cannot fully prevent concurrent default profile
- *   creation. Accepted risk for v1 due to low concurrency and owner-only access.
+ * PROFILE-DB-01 (CLOSED Sept 2026):
+ *   Was: "Add DB-level unique constraint on (organisation_id) for default
+ *   profiles. Application-level checks cannot fully prevent concurrent
+ *   default profile creation. Accepted risk for v1 due to low concurrency
+ *   and owner-only access."
+ *   That risk assessment was wrong in practice, not just theoretically --
+ *   a live audit found this race had already produced duplicate default
+ *   profiles for 5 of 13 real signups, including one that printed a
+ *   placeholder business name on a real customer's real invoice during
+ *   his first onboarding session. Closed with a partial unique index
+ *   (business_profiles_one_default_per_org) plus graceful handling of
+ *   the resulting 23505 conflict below -- see _getOrCreateDefaultProfile.
  *
  * PROFILE-STYLE-01 (post-v1):
  *   invoice_template_profile field — stores detected invoice style preferences
  *   (logo placement, colors, header/footer layout) from owner-uploaded samples.
  *   Will be added to WRITABLE_FIELDS and header_cache when invoice styling ships.
  */
+
+import { fetchOneDeterministic } from '../shared/fetchOneDeterministic.js';
 
 // ── Whitelist ─────────────────────────────────────────────────────────────────
 
@@ -226,24 +236,22 @@ export async function getBusinessProfile(orgId, supabase) {
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
 async function _getOrCreateDefaultProfile(orgId, supabase) {
-  // PROFILE-DB-01: No DB-level uniqueness guarantee on default profiles.
-  // Using order+limit(1) instead of maybeSingle() so duplicate defaults
-  // (if they ever appear due to race) do not break the fetch.
-  const { data: rows, error: fetchErr } = await supabase
-    .from('business_profiles')
-    .select('*')
-    .eq('organisation_id', orgId)
-    .eq('is_active', true)
-    .eq('is_default', true)
-    .order('created_at', { ascending: true })
-    .limit(1);
+  // Sept 2026 -- migrated to the shared fetchOneDeterministic() utility
+  // as a natural byproduct of closing PROFILE-DB-01 below, not a
+  // separate unrelated refactor -- this function's insert path is
+  // already being touched for the real fix, so bringing its read path
+  // onto the same, now-proven pattern costs nothing extra.
+  const { row: existing, error: fetchErr } = await fetchOneDeterministic(supabase, 'business_profiles', {
+    filters: { organisation_id: orgId, is_active: true, is_default: true },
+    orderColumn: 'created_at', ascending: true,
+  });
 
   if (fetchErr) {
     console.error('[setBusinessProfileCapability] fetch error:', fetchErr.message);
     return null;
   }
 
-  if (rows && rows.length > 0) return rows[0];
+  if (existing) return existing;
 
   // No default profile — create one seeded from org name
   const { data: org } = await supabase
@@ -267,6 +275,27 @@ async function _getOrCreateDefaultProfile(orgId, supabase) {
     .single();
 
   if (createErr) {
+    // Sept 2026 -- PROFILE-DB-01 finally closed: business_profiles_one_default_per_org
+    // (a partial unique index) now makes this exact race impossible to
+    // silently duplicate. A 23505 (unique_violation) here means another
+    // concurrent request won the race and ALREADY created the real
+    // default profile a moment ago -- not a genuine failure, just the
+    // normal, expected outcome of two near-simultaneous requests.
+    // Re-fetch and return what the winner created, rather than treating
+    // this as an error and returning null.
+    if (createErr.code === '23505') {
+      console.warn('[setBusinessProfileCapability] concurrent default creation detected (expected, handled), re-fetching the winner for org:', orgId);
+      const { row: winner, error: refetchErr } = await fetchOneDeterministic(supabase, 'business_profiles', {
+        filters: { organisation_id: orgId, is_active: true, is_default: true },
+        orderColumn: 'created_at', ascending: true,
+      });
+      if (refetchErr || !winner) {
+        console.error('[setBusinessProfileCapability] re-fetch after conflict failed:', refetchErr?.message);
+        return null;
+      }
+      return winner;
+    }
+
     console.error('[setBusinessProfileCapability] create error:', createErr.message);
     return null;
   }
