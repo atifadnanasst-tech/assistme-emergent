@@ -313,6 +313,56 @@ export default function NewInvoiceScreen() {
     setTimeout(() => quantityInputRef.current?.focus(), 100);
   };
 
+  // Sept 2026 -- real gap found and confirmed during the Taj Book Depot
+  // onboarding audit: this screen had no way to add a genuinely new
+  // product at all, whether typed manually or preloaded from a Spark
+  // extraction that didn't match anything in the catalog. handleAddItem
+  // has always hard-required selectedProductId -- there was simply no
+  // path to get one for a product that doesn't exist yet. Reuses the
+  // existing, already-working POST /api/products route (the same one
+  // productMutations.js's createProduct already powers elsewhere in
+  // this app), then selects the newly-created product exactly like
+  // choosing an existing one -- the rest of the add-item flow needs no
+  // changes at all.
+  const [creatingProduct, setCreatingProduct] = useState(false);
+  const handleCreateNewProduct = async () => {
+    const name = productSearchQuery.trim();
+    if (!name) return;
+    setCreatingProduct(true);
+    try {
+      const token = await getToken();
+      if (!token) return;
+      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+      const res = await fetch(`${backendUrl}/api/products`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({
+          name,
+          selling_price: parseFloat(newPrice) || 0,
+          tax_rate: 0,
+        }),
+      });
+      if (!res.ok) {
+        const errText = await res.text();
+        let msg = 'Could not create this product. Please try again.';
+        try { const parsed = JSON.parse(errText); if (parsed?.message) msg = parsed.message; } catch {}
+        Alert.alert('Error', msg);
+        return;
+      }
+      const newProduct = await res.json();
+      setProducts(prev => [...prev, {
+        id: newProduct.id, name: newProduct.name, sku: newProduct.sku || '',
+        selling_price: newProduct.selling_price, tax_rate: newProduct.tax_rate,
+        unit: newProduct.unit || 'pcs', hsn_code: null, image_url: null,
+      }]);
+      handleSelectProduct(newProduct.id);
+    } catch (err) {
+      Alert.alert('Error', 'Could not create this product. Please try again.');
+    } finally {
+      setCreatingProduct(false);
+    }
+  };
+
   const searchVendors = async (q: string) => {
     if (q.trim().length < 2) { setVendorSuggestions([]); return; }
     try {
@@ -829,6 +879,22 @@ export default function NewInvoiceScreen() {
                     </View>
                   </TouchableOpacity>
                 ))}
+                {filteredProducts.length === 0 && (
+                  <TouchableOpacity
+                    style={[s.productSearchRow, { justifyContent: 'flex-start', gap: 8 }]}
+                    onPress={handleCreateNewProduct}
+                    disabled={creatingProduct}
+                  >
+                    {creatingProduct ? (
+                      <ActivityIndicator size="small" color="#075E54" />
+                    ) : (
+                      <Ionicons name="add-circle-outline" size={20} color="#075E54" />
+                    )}
+                    <Text style={{ fontSize: 14, fontWeight: '600', color: '#075E54' }}>
+                      Create "{productSearchQuery.trim()}" as new product
+                    </Text>
+                  </TouchableOpacity>
+                )}
               </ScrollView>
             )}
             {selectedProductId && (
