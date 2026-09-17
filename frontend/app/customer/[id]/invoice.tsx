@@ -403,7 +403,7 @@ export default function NewInvoiceScreen() {
           method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({
             customer_id: customerId,
-            items: items.map(i => ({ product_id: i.product_id, quantity: i.quantity, unit_price: i.unit_price, discount_pct: i.discount_pct, hsn_code: i.hsn_code, description: i.description })),
+            items: items.map(i => ({ product_id: i.product_id, product_name: i.product_name, quantity: i.quantity, unit_price: i.unit_price, discount_pct: i.discount_pct, hsn_code: i.hsn_code, description: i.description })),
             packing_handling: packingHandling, invoice_type: invoiceType, po_number: poNumber || null,
             existing_invoice_id: resumeDraftId || undefined,
             vendor_id: vendorId || undefined,
@@ -418,9 +418,20 @@ export default function NewInvoiceScreen() {
         });
 
         if (!r1.ok) {
-          const err = await r1.text();
-          console.error('[INVOICE] Create failed:', err);
-          Alert.alert('Error', 'Failed to create invoice');
+          const errText = await r1.text();
+          console.error('[INVOICE] Create failed:', errText);
+          // Sept 2026 -- this previously always showed a generic "Failed
+          // to create invoice" regardless of what the backend actually
+          // said, including the new unresolved_products error built to
+          // stop the exact silent-empty-invoice bug found on Taj Book
+          // Depot's second invoice. Now surfaces the real, specific
+          // message when the backend provides one.
+          let specificMessage = 'Failed to create invoice';
+          try {
+            const parsed = JSON.parse(errText);
+            if (parsed?.message) specificMessage = parsed.message;
+          } catch {}
+          Alert.alert('Error', specificMessage);
           return;
         }
 

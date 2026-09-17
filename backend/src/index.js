@@ -9649,6 +9649,50 @@ app.post('/api/invoices', async (c) => {
     let cgstTotal = 0, sgstTotal = 0, igstTotal = 0;
     const computedItems = [];
 
+    // Sept 2026 -- real bug found on a real customer's second invoice
+    // (Taj Book Depot, sent to a real recipient): the item-processing
+    // loop below has always silently continued past any item whose
+    // product_id didn't resolve to a real, active product -- with zero
+    // error, zero warning, nothing returned to the frontend. This
+    // happens whenever the Create Invoice screen is preloaded with
+    // Spark-extracted items that didn't match anything in the existing
+    // catalog (a genuinely new product from a photo, for example) --
+    // the frontend has no way to add a new product on this screen
+    // (a separate, real feature gap, tracked and scoped separately),
+    // so it sends an empty product_id, and this silently dropped
+    // EVERY item, leaving an invoice with a real number, a real
+    // recipient, and zero line items -- printing and sharing as a
+    // Rs 0 invoice with no indication anything had gone wrong.
+    //
+    // Deliberately only applied to a FINAL invoice, not a draft save
+    // (isDraftSave) -- a draft is legitimately allowed to be a
+    // work in progress with unresolved items; only a document that's
+    // about to be numbered, printed, and sent to a real customer needs
+    // this hard stop.
+    if (!isDraftSave) {
+      const candidateIds = [...new Set(items.map(i => i.product_id).filter(Boolean))];
+      const { data: resolvedProducts } = await supabase
+        .from('products')
+        .select('id')
+        .in('id', candidateIds.length > 0 ? candidateIds : ['00000000-0000-0000-0000-000000000000'])
+        .eq('organisation_id', organisationId)
+        .eq('is_active', true);
+      const resolvedIds = new Set((resolvedProducts || []).map((p) => p.id));
+
+      const unresolved = items
+        .map((item, idx) => ({ idx, item }))
+        .filter(({ item }) => !item.product_id || !resolvedIds.has(item.product_id));
+
+      if (unresolved.length > 0) {
+        const names = unresolved.map(({ idx, item }) => item.product_name || item.description || `item ${idx + 1}`);
+        return c.json({
+          error: 'unresolved_products',
+          message: `${unresolved.length} item${unresolved.length > 1 ? 's' : ''} could not be matched to a real product and would have been left off this invoice: ${names.join(', ')}. Add ${unresolved.length > 1 ? 'them' : 'it'} to your catalog first, then try again.`,
+          unresolved_items: names,
+        }, 400);
+      }
+    }
+
     // Determine intra/inter state
     let supplierState = null;
     let customerState = null;
