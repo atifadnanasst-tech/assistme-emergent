@@ -20,18 +20,40 @@
  * separately and combined in JS elsewhere in this codebase (e.g. customer_addresses).
  */
 
+import { fetchOneDeterministic } from '../shared/fetchOneDeterministic.js';
+
 export async function getDocumentBrandingProfile(organisationId, supabase) {
   // ── Business profile — same scoping rule generateDocumentPDF already used ──
-  const { data: bizProfile } = await supabase
-    .from('business_profiles')
-    .select('id, business_name, gstin, address_line1, address_line2, city, state, postal_code, phone, email, logo_url, signature_url, terms_text, show_assistme_branding')
-    .eq('organisation_id', organisationId)
-    .eq('is_default', true)
-    .eq('is_active', true)
-    .is('deleted_at', null)
-    .maybeSingle();
+  // Sept 2026 -- real bug found on a real customer's first invoice
+  // (Taj Book Depot): a known, documented race condition
+  // (PROFILE-DB-01, see setBusinessProfileCapability.js) let two
+  // is_default=true rows exist for the same org. .maybeSingle() throws
+  // its own error when more than one row matches, but the old code
+  // only destructured `data`, silently discarding that error --
+  // bizProfile became null, biz fell back to {}, and the invoice
+  // printed a blank/placeholder header instead of the real business
+  // name Taj had actually entered. Confirmed by checking a live
+  // audit: this had happened for every one of five real organisations
+  // that had touched this screen, not just Taj -- the underlying race
+  // is common in practice, not the rare edge case it was assumed to
+  // be. Now uses fetchOneDeterministic(), a small shared utility
+  // built specifically for this bug pattern (this is its second real
+  // use case -- see that file for the first, the footer-promo fix
+  // below) -- while the real, permanent fix (a database constraint
+  // preventing the duplicate from ever being created at all) is built
+  // and tested separately.
+  const { row: bizRow, error: bizErr } = await fetchOneDeterministic(supabase, 'business_profiles', {
+    select: 'id, business_name, gstin, address_line1, address_line2, city, state, postal_code, phone, email, logo_url, signature_url, terms_text, show_assistme_branding',
+    filters: { organisation_id: organisationId, is_default: true, is_active: true },
+    isNullColumns: ['deleted_at'],
+    orderColumn: 'created_at', ascending: true,
+  });
 
-  const biz = bizProfile || {};
+  if (bizErr) {
+    console.error('[getDocumentBrandingProfile] business profile fetch failed:', bizErr.message);
+  }
+
+  const biz = bizRow || {};
 
   // ── Bank accounts ───────────────────────────────────────────────────────
   let bankAccounts = [];
