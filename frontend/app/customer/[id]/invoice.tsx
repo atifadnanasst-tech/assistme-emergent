@@ -412,6 +412,28 @@ export default function NewInvoiceScreen() {
       Alert.alert('Payment Mode Required', 'Select how the payment was received, or uncheck "Also collect payment now".');
       return;
     }
+    // Sept 2026 -- real gap found while investigating why Taj Book
+    // Depot's "Collect Payment" appeared to do nothing: this amount
+    // check previously lived only deep inside the post-creation
+    // payment-recording block, with no else branch at all -- an
+    // invalid or zero amount silently skipped recording the payment,
+    // with literally zero indication to the user, unlike the
+    // collectionMode check right above this one. The specific
+    // trigger for Taj was a downstream symptom of the separate
+    // empty-invoice bug (fix D) -- the amount field auto-fills from
+    // the invoice total when this checkbox is first ticked, and that
+    // total was Rs 0 due to the items never having resolved. Fix D
+    // already prevents a Rs 0 invoice from being created at all now,
+    // so that specific trigger can't recur -- but the amount field
+    // itself is still freely editable with no required-field marker
+    // (unlike Payment Mode, which shows one), so someone manually
+    // clearing it or typing 0 would hit the exact same silent skip.
+    // Moved to the same early-exit pattern already proven for the
+    // payment-mode check just above, rather than a silent post-hoc skip.
+    if (collectPaymentNow && (!collectionAmount || parseFloat(collectionAmount) <= 0)) {
+      Alert.alert('Payment Amount Required', 'Enter a valid amount to collect, or uncheck "Also collect payment now".');
+      return;
+    }
     setSubmitting(action);
     try {
       const token = await getToken();
