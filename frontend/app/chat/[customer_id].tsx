@@ -1337,6 +1337,14 @@ export default function CustomerChatScreen() {
     setForwardedAttachment(payload);
     setSparkMode(true);
     setMessageMenuVisible(false);
+    // Sept 2026 -- diagnostic breadcrumb added while investigating the
+    // Taj Book Depot audit's forward-to-AI failure (zero backend trace
+    // found in the logs for that attempt, despite the forward itself
+    // appearing to work on the device). Cheap, safe insurance so any
+    // future occurrence leaves a clear trail of exactly how far the
+    // flow got, rather than reconstructing it after the fact from an
+    // absence of logs.
+    console.log('[SPARK-FORWARD]', { type: payload.type, has_url: !!payload.url, customer_id });
   };
 
   const resetSparkState = useCallback(() => {
@@ -1354,18 +1362,42 @@ export default function CustomerChatScreen() {
 
   const attachUploadToSpark = (uploadResult: { url: string; storage_path: string }, name: string, mimeType: string) => {
     const type = mimeType.startsWith('image/') ? 'image' : mimeType.startsWith('audio/') ? 'audio' : 'file';
-    setForwardedAttachment({
-      type,
-      url: uploadResult.url,
-      mime_type: mimeType,
-      name,
+    setForwardedAttachment(prev => {
+      // Sept 2026 -- diagnostic breadcrumb added while investigating the
+      // Taj Book Depot audit's forward-to-AI failure. A real, confirmed
+      // gap found while tracing this: if a message has already been
+      // forwarded (setting forwardedAttachment), then a NEW voice
+      // recording is made in Spark mode instead of typing an
+      // instruction, this line silently REPLACES the original forwarded
+      // content with the new recording -- discarding it entirely,
+      // rather than treating the recording as a separate instruction
+      // alongside what was forwarded. Not yet fixed here (a deliberate,
+      // separate product decision -- reject, merge, or something else),
+      // just logged so a future occurrence is immediately visible
+      // rather than silently losing the original attachment again.
+      if (prev) {
+        console.warn('[SPARK-ATTACH-OVERWRITE]', { previous_type: prev.type, new_type: type, customer_id });
+      }
+      return { type, url: uploadResult.url, mime_type: mimeType, name };
     });
   };
 
   // ── AI Spark handler ───────────────────────────────────────
   const handleSpark = async () => {
     const text = sparkInput.trim() || inputText.trim();
-    if (sparkWorkflowState !== 'attachment_ready' && !(sparkWorkflowState === 'idle' && text)) return;
+    // Sept 2026 -- diagnostic breadcrumb added while investigating the
+    // Taj Book Depot audit's forward-to-AI failure: zero [SPARK]
+    // backend log entries existed for that attempt, despite the
+    // forward itself appearing to work on the device -- meaning the
+    // call genuinely never reached the server. This breadcrumb fires
+    // at the very top of this function, before the early-return guard
+    // below, so a future occurrence will show clearly whether Send was
+    // ever actually pressed at all, and in exactly what state.
+    console.log('[SPARK-SEND-ATTEMPT]', { workflow_state: sparkWorkflowState, has_text: !!text, has_attachment: !!forwardedAttachment, customer_id });
+    if (sparkWorkflowState !== 'attachment_ready' && !(sparkWorkflowState === 'idle' && text)) {
+      console.warn('[SPARK-SEND-BLOCKED]', { workflow_state: sparkWorkflowState, has_text: !!text, customer_id });
+      return;
+    }
     if (!conversationId) return;
     Keyboard.dismiss();
     setSparkInput('');
