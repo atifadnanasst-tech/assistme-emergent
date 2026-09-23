@@ -37,6 +37,8 @@
 //     between periods is never credited back -- confirmed with Atif as
 //     intentional, matching Claude Pro's own rolling-window behavior.
 
+import { fetchOneDeterministic } from '../shared/fetchOneDeterministic.js';
+
 const PRICE_PER_TOKEN_USD = {
   'gpt-4o-mini': { input: 0.15 / 1_000_000, output: 0.60 / 1_000_000 },
   // gpt-4o pricing added Sept 2026 -- its absence was a real, separate
@@ -105,6 +107,39 @@ const EMERGENCY_FALLBACK_CEILINGS = {
   enterprise: { plan: 'enterprise', window_ceiling_paisa: 5000, month_ceiling_paisa: 300000, window_hours: 5, extraction_model: 'gpt-4o-mini' },
 };
 
+const ONBOARDING_POOL_FALLBACK_PAISA = 500;
+const ONBOARDING_WELCOME_CREDITS_TOTAL = 50;
+
+// Sept 2026 -- one-time welcome pool, all tiers, drawn from before the
+// normal window/month ceilings apply at all. Confirmed with Atif
+// directly: a brand-new signup burning their whole allowance on the
+// very first real attempt (a real customer's first purchase-bill scan
+// exhausted a free-tier ceiling sized for routine, ongoing use, not a
+// first try) means they never get to feel the app actually work
+// before hitting a wall -- defeating the entire point of showing
+// someone the product's core value. Read from system_config via
+// fetchOneDeterministic(), the same shared utility already used for
+// this table's other multi-row-by-design key (pdf_footer_promo) --
+// this key doesn't currently have targeted overrides, but using the
+// same safe pattern from the start avoids ever risking a third
+// instance of the exact .maybeSingle()-silently-swallows-its-own-
+// error bug that hit this codebase twice before this pattern existed.
+export async function getOnboardingPoolSizePaisa(supabase) {
+  try {
+    const { row, error } = await fetchOneDeterministic(supabase, 'system_config', {
+      select: 'value',
+      filters: { key: 'onboarding_credit_pool_paisa', is_active: true },
+      orderColumn: 'priority', ascending: false,
+    });
+    if (error) throw error;
+    const parsed = parseInt(row?.value, 10);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : ONBOARDING_POOL_FALLBACK_PAISA;
+  } catch (err) {
+    console.warn('[getOnboardingPoolSizePaisa] DB read failed, using fallback:', err.message);
+    return ONBOARDING_POOL_FALLBACK_PAISA;
+  }
+}
+
 export async function getCeilings(supabase) {
   const now = Date.now();
   if (_ceilingCache && (now - _ceilingCacheAt) < CEILING_CACHE_TTL_MS) return _ceilingCache;
@@ -147,8 +182,17 @@ async function getOrCreatePeriod({ orgId, periodType, windowHours, supabase }) {
   }
 
   const periodStart = now;
+  // Sept 2026 -- onboarding_pool is a genuine one-time, permanent
+  // allowance, not a recurring period like the other two -- it must
+  // never "expire" and auto-recreate the way window/month deliberately
+  // do. A period end 100 years out is a clean, simple way to express
+  // "this never refreshes" using the exact same existing/lazy-refresh
+  // mechanism, rather than adding a whole separate non-expiring-period
+  // code path just for one row type.
   const periodEnd = periodType === 'free_window'
     ? windowEnd(periodStart, windowHours || 5)
+    : periodType === 'onboarding_pool'
+    ? new Date(periodStart.getFullYear() + 100, periodStart.getMonth(), periodStart.getDate())
     : calendarMonthEnd(periodStart);
 
   const { data: created, error: insertErr } = await supabase
@@ -195,7 +239,12 @@ async function getPlanAndPeriods({ orgId, supabase }) {
   // that existed before.
   const monthPeriod = await getOrCreatePeriod({ orgId, periodType: 'paid_month', supabase });
 
-  return { plan, planCeilings, windowPeriod, monthPeriod };
+  // Sept 2026 -- the one-time welcome pool, fetched alongside the
+  // other two so all three are always available together wherever
+  // this function is called from.
+  const onboardingPoolPeriod = await getOrCreatePeriod({ orgId, periodType: 'onboarding_pool', supabase });
+
+  return { plan, planCeilings, windowPeriod, monthPeriod, onboardingPoolPeriod };
 }
 
 // checkUsageAllowed() -- both meters, fails open on any internal error.
@@ -205,9 +254,21 @@ async function getPlanAndPeriods({ orgId, supabase }) {
 // possible operations to run) still can.
 export async function checkUsageAllowed({ orgId, supabase }) {
   try {
-    const { plan, planCeilings, windowPeriod, monthPeriod } = await withTimeout(
+    const { plan, planCeilings, windowPeriod, monthPeriod, onboardingPoolPeriod } = await withTimeout(
       getPlanAndPeriods({ orgId, supabase }), DB_TIMEOUT_MS, 'checkUsageAllowed DB lookup'
     );
+
+    // Sept 2026 -- the one-time welcome pool is checked FIRST, and
+    // completely bypasses the window/month logic below while it still
+    // has room -- a brand-new signup should never be able to hit the
+    // normal ceilings (sized for routine, ongoing use) on their very
+    // first real attempt, on any tier. Once exhausted, falls straight
+    // through to the existing two-meter logic exactly as before.
+    const onboardingPoolUsedPaisa = onboardingPoolPeriod.cost_used_paisa || 0;
+    const onboardingPoolSizePaisa = await getOnboardingPoolSizePaisa(supabase);
+    if (onboardingPoolUsedPaisa < onboardingPoolSizePaisa) {
+      return { allowed: true, reason: 'within_onboarding_pool', plan };
+    }
 
     const windowUsedPaisa = windowPeriod.cost_used_paisa || 0;
     const windowCeilingPaisa = planCeilings.window_ceiling_paisa;
@@ -254,10 +315,29 @@ export async function recordAiUsage({ orgId, model, inputTokens, outputTokens, s
   try {
     if (!orgId || !supabase) return;
 
-    const { plan, planCeilings, windowPeriod, monthPeriod } = await withTimeout(
+    const { plan, planCeilings, windowPeriod, monthPeriod, onboardingPoolPeriod } = await withTimeout(
       getPlanAndPeriods({ orgId, supabase }), DB_TIMEOUT_MS, 'recordAiUsage DB lookup'
     );
     const costPaisa = computeCostPaisa({ model, inputTokens, outputTokens });
+
+    // Sept 2026 -- draw from the one-time welcome pool first, exactly
+    // mirroring checkUsageAllowed()'s own check -- re-fetched fresh
+    // here rather than trusting a value from an earlier check, same
+    // reasoning as every other value in this function. While the pool
+    // has room, window/month are deliberately left completely
+    // untouched -- a brand-new signup's early usage should never
+    // silently eat into the normal ceilings they'll actually live
+    // under once the welcome pool is gone.
+    const onboardingPoolUsedBefore = onboardingPoolPeriod.cost_used_paisa || 0;
+    const onboardingPoolSizePaisa = await getOnboardingPoolSizePaisa(supabase);
+    if (onboardingPoolUsedBefore < onboardingPoolSizePaisa) {
+      const { error: poolErr } = await supabase
+        .from('ai_usage_periods')
+        .update({ cost_used_paisa: onboardingPoolUsedBefore + costPaisa, updated_at: new Date().toISOString() })
+        .eq('id', onboardingPoolPeriod.id);
+      if (poolErr) throw poolErr;
+      return;
+    }
 
     const windowUsedBefore = windowPeriod.cost_used_paisa || 0;
     const { error: windowErr } = await supabase
@@ -323,9 +403,35 @@ export async function runTrackedCompletion({ orgId, client, requestParams, reque
 // duplicated in the route itself. Replaces the old direct
 // getOrCreateCurrentPeriod() call that route used to make.
 export async function getUsageSummary({ orgId, supabase }) {
-  const { plan, planCeilings, windowPeriod, monthPeriod } = await withTimeout(
+  const { plan, planCeilings, windowPeriod, monthPeriod, onboardingPoolPeriod } = await withTimeout(
     getPlanAndPeriods({ orgId, supabase }), DB_TIMEOUT_MS, 'getUsageSummary DB lookup'
   );
+
+  // Sept 2026 -- while the one-time welcome pool still has room, it's
+  // the ONLY thing shown -- confirmed directly with Atif: a brand-new
+  // user's very first usage screen should show one simple number, not
+  // three unfamiliar bars at once. Once exhausted, this branch never
+  // fires again for this org, and the normal two-meter summary below
+  // takes over exactly as it always has.
+  const onboardingPoolUsedPaisa = onboardingPoolPeriod.cost_used_paisa || 0;
+  const onboardingPoolSizePaisa = await getOnboardingPoolSizePaisa(supabase);
+  const onboardingPoolActive = onboardingPoolUsedPaisa < onboardingPoolSizePaisa;
+
+  if (onboardingPoolActive) {
+    const creditsUsed = Math.round((onboardingPoolUsedPaisa / onboardingPoolSizePaisa) * ONBOARDING_WELCOME_CREDITS_TOTAL);
+    const creditsRemaining = Math.max(ONBOARDING_WELCOME_CREDITS_TOTAL - creditsUsed, 0);
+    return {
+      plan,
+      onboarding: {
+        active: true,
+        creditsTotal: ONBOARDING_WELCOME_CREDITS_TOTAL,
+        creditsRemaining,
+        percentUsed: percentUsedWithFloor(onboardingPoolUsedPaisa, onboardingPoolSizePaisa),
+      },
+      window: null,
+      month: null,
+    };
+  }
 
   const windowUsedPaisa = windowPeriod.cost_used_paisa || 0;
   const windowCeilingPaisa = planCeilings.window_ceiling_paisa;
@@ -333,6 +439,7 @@ export async function getUsageSummary({ orgId, supabase }) {
 
   const summary = {
     plan,
+    onboarding: null,
     window: {
       usedPaisa: windowUsedPaisa,
       ceilingPaisa: windowCeilingPaisa,
