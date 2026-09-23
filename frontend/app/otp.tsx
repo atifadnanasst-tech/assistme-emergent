@@ -59,6 +59,30 @@ export default function OTPScreen() {
   }, [otp]);
 
   const handleOtpChange = (value: string, index: number) => {
+    // Sept 2026 -- real gap found: this screen already showed "Auto-
+    // detecting OTP ..." to the user (see the text below), but no
+    // autofill props existed anywhere on these inputs, and even once
+    // added, this handler only ever accepted exactly one digit at a
+    // time -- a real autofill event, which typically delivers the
+    // FULL code as one string into whichever box is focused, would
+    // have been silently rejected outright by the single-digit regex
+    // just below. The UI was promising something that could never
+    // actually happen.
+    if (value.length > 1 && /^\d+$/.test(value)) {
+      const digits = value.slice(0, 6 - index).split('');
+      const newOtp = [...otp];
+      digits.forEach((d, i) => { if (index + i < 6) newOtp[index + i] = d; });
+      setOtp(newOtp);
+      setError('');
+      const nextEmptyIndex = newOtp.findIndex((d) => !d);
+      if (nextEmptyIndex !== -1) {
+        inputRefs.current[nextEmptyIndex]?.focus();
+      } else {
+        inputRefs.current[5]?.blur();
+      }
+      return;
+    }
+
     // Only allow numeric input
     if (value && !/^\d$/.test(value)) return;
 
@@ -372,7 +396,9 @@ export default function OTPScreen() {
               onChangeText={(value) => handleOtpChange(value, index)}
               onKeyPress={(e) => handleKeyPress(e, index)}
               keyboardType="number-pad"
-              maxLength={1}
+              textContentType="oneTimeCode"
+              autoComplete="sms-otp"
+              maxLength={index === 0 ? 6 : 1}
               editable={!loading}
               selectTextOnFocus
             />
