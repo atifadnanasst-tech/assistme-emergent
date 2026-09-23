@@ -64,12 +64,24 @@ interface UsageSummary {
   walletPercentUsed: number;
   subscriptionPeriodEndFormatted: string | null;
   billingCycle: 'monthly' | 'yearly' | null;
+  // Sept 2026 -- onboarding welcome pool. Present and active for every
+  // brand-new signup on every tier until their one-time Rs 5 pool is
+  // exhausted; null forever afterward for that org. windowPeriod and
+  // monthPeriod are genuinely null while this is active -- the backend
+  // deliberately shows only the welcome-credits bar, not three
+  // unfamiliar numbers on someone's very first day.
+  onboarding: {
+    active: boolean;
+    creditsTotal: number;
+    creditsRemaining: number;
+    percentUsed: number;
+  } | null;
   windowPeriod: {
     costUsedPaisa: number;
     ceilingPaisa: number;
     percentUsed: number;
     periodEndFormatted: string;
-  };
+  } | null;
   monthPeriod: {
     costUsedPaisa: number;
     ceilingPaisa: number;
@@ -507,37 +519,68 @@ export default function SubscriptionBilling() {
               <Text style={styles.usageLabel}>AI Credits balance</Text>
               <Text style={styles.usageValueBold}>{usage.walletCreditsRemaining}</Text>
             </View>
-            <View style={styles.usageRow}>
-              <Text style={styles.usageLabel}>Current 5-hour window</Text>
-              <Text style={styles.usageValue}>{usage.windowPeriod.percentUsed}% used</Text>
-            </View>
-            <View style={styles.progressTrack}>
-              <View
-                style={[
-                  styles.progressFill,
-                  { width: `${usage.windowPeriod.percentUsed > 0 ? Math.max(2, Math.min(100, usage.windowPeriod.percentUsed)) : 0}%` },
-                  getProgressBarColorStyle(usage.windowPeriod.percentUsed),
-                ]}
-              />
-            </View>
-            <Text style={styles.usageReset}>Resets {usage.windowPeriod.periodEndFormatted}</Text>
 
-            {usage.monthPeriod && (
+            {usage.onboarding?.active ? (
+              // Sept 2026 -- welcome pool, confirmed with Atif to
+              // completely replace the window/month bars while active,
+              // not sit alongside them -- a brand-new user's first
+              // usage screen should show one simple, friendly number,
+              // not three unfamiliar bars at once.
               <>
-                <View style={[styles.usageRow, { marginTop: 16 }]}>
-                  <Text style={styles.usageLabel}>This month</Text>
-                  <Text style={styles.usageValue}>{usage.monthPeriod.percentUsed}% used</Text>
+                <View style={styles.usageRow}>
+                  <Text style={styles.usageLabel}>Welcome Credits</Text>
+                  <Text style={styles.usageValue}>{usage.onboarding.creditsRemaining} of {usage.onboarding.creditsTotal} left</Text>
                 </View>
                 <View style={styles.progressTrack}>
                   <View
                     style={[
                       styles.progressFill,
-                      { width: `${usage.monthPeriod.percentUsed > 0 ? Math.max(2, Math.min(100, usage.monthPeriod.percentUsed)) : 0}%` },
-                      getProgressBarColorStyle(usage.monthPeriod.percentUsed),
+                      { width: `${usage.onboarding.percentUsed > 0 ? Math.max(2, Math.min(100, usage.onboarding.percentUsed)) : 0}%` },
+                      getProgressBarColorStyle(usage.onboarding.percentUsed),
                     ]}
                   />
                 </View>
-                <Text style={styles.usageReset}>Resets {usage.monthPeriod.periodEndFormatted}</Text>
+                <Text style={styles.usageReset}>A one-time gift to help you get started -- try it out!</Text>
+              </>
+            ) : (
+              <>
+                {usage.windowPeriod && (
+                  <>
+                    <View style={styles.usageRow}>
+                      <Text style={styles.usageLabel}>Current 5-hour window</Text>
+                      <Text style={styles.usageValue}>{usage.windowPeriod.percentUsed}% used</Text>
+                    </View>
+                    <View style={styles.progressTrack}>
+                      <View
+                        style={[
+                          styles.progressFill,
+                          { width: `${usage.windowPeriod.percentUsed > 0 ? Math.max(2, Math.min(100, usage.windowPeriod.percentUsed)) : 0}%` },
+                          getProgressBarColorStyle(usage.windowPeriod.percentUsed),
+                        ]}
+                      />
+                    </View>
+                    <Text style={styles.usageReset}>Resets {usage.windowPeriod.periodEndFormatted}</Text>
+                  </>
+                )}
+
+                {usage.monthPeriod && (
+                  <>
+                    <View style={[styles.usageRow, { marginTop: 16 }]}>
+                      <Text style={styles.usageLabel}>This month</Text>
+                      <Text style={styles.usageValue}>{usage.monthPeriod.percentUsed}% used</Text>
+                    </View>
+                    <View style={styles.progressTrack}>
+                      <View
+                        style={[
+                          styles.progressFill,
+                          { width: `${usage.monthPeriod.percentUsed > 0 ? Math.max(2, Math.min(100, usage.monthPeriod.percentUsed)) : 0}%` },
+                          getProgressBarColorStyle(usage.monthPeriod.percentUsed),
+                        ]}
+                      />
+                    </View>
+                    <Text style={styles.usageReset}>Resets {usage.monthPeriod.periodEndFormatted}</Text>
+                  </>
+                )}
               </>
             )}
 
