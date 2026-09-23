@@ -1991,13 +1991,22 @@ app.get('/api/billing/usage-summary', async (c) => {
       walletPercentUsed,
       subscriptionPeriodEndFormatted,
       billingCycle,
-      windowPeriod: {
+      // Sept 2026 -- onboarding welcome pool. URGENT fix found and
+      // shipped as part of the same change that introduced it: this
+      // route previously read usageSummary.window unconditionally,
+      // but getUsageSummary() now correctly returns window as null
+      // while the onboarding pool is still active -- meaning this
+      // route would have thrown for every org with a fresh pool,
+      // which after the backfill is currently all of them. Caught
+      // and fixed before ever reaching a real device.
+      onboarding: usageSummary.onboarding,
+      windowPeriod: usageSummary.window ? {
         costUsedPaisa: usageSummary.window.usedPaisa,
         ceilingPaisa: usageSummary.window.ceilingPaisa,
         percentUsed: usageSummary.window.percentUsed,
         periodEnd: usageSummary.window.periodEnd,
         periodEndFormatted: formatPeriodEnd(usageSummary.window.periodEnd),
-      },
+      } : null,
       monthPeriod: usageSummary.month ? {
         costUsedPaisa: usageSummary.month.usedPaisa,
         ceilingPaisa: usageSummary.month.ceilingPaisa,
