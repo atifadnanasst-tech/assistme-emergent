@@ -86,6 +86,75 @@ export default function HomeScreen() {
   // owner can't actually use isn't shipped here -- it gets added as its
   // own complete, reviewed patch once Phase 2 actually lands.
   const [fabExpanded, setFabExpanded] = useState(false);
+
+  // Sept 2026 -- Home FAB, four new options (Sales, Purchase, Record
+  // Payment Received, Record Payment Made), designed and confirmed
+  // with Atif directly: each links to a form that already exists and
+  // already works perfectly when reached from inside a specific
+  // contact's own chat (Create invoice, Record payment received,
+  // Create purchase bill, Record payment made -- see chat/[customer_id].tsx's
+  // own menu, whose exact route targets this reuses unchanged). The
+  // only genuinely new thing is THIS entry point -- starting from Home
+  // means no contact is known yet, so tapping one of these four opens
+  // a picker first, then hands off to the exact same existing form
+  // once a contact is chosen, pre-loaded with that selection.
+  //
+  // Deliberately built as its own clean, self-contained block here --
+  // own state, own fetch, own modal -- NOT wired into or sharing state
+  // with the home screen's own top-bar customer search just above,
+  // which serves a different purpose (opening a chat directly) and is
+  // already bound to other visible UI. Confirmed with Atif: even
+  // though this could have reused task-detail.tsx's own inline
+  // contact-picker pattern by touching that already-working screen,
+  // building an independent copy here carries zero risk to either of
+  // the two already-live flows (Voice Reminder, Set Reminder) that
+  // already depend on it. This block is intentionally structured so
+  // that extracting it into a genuinely shared picker component later
+  // -- and refactoring task-detail.tsx and voice-reminder.tsx onto it
+  // too -- is a small, low-risk move rather than a rewrite: it has no
+  // dependency on anything else in this file beyond getToken-style
+  // auth and the backend URL, both already used the same inline way
+  // throughout this same file.
+  const [transactionPickerVisible, setTransactionPickerVisible] = useState(false);
+  const [transactionPickerDestination, setTransactionPickerDestination] = useState<string | null>(null);
+  const [transactionPickerContacts, setTransactionPickerContacts] = useState<Array<{ id: string; name: string; phone: string | null; company: string | null }>>([]);
+  const [transactionPickerLoading, setTransactionPickerLoading] = useState(false);
+  const [transactionPickerSearch, setTransactionPickerSearch] = useState('');
+
+  const openTransactionPicker = async (destinationSuffix: string) => {
+    setFabExpanded(false);
+    setTransactionPickerDestination(destinationSuffix);
+    setTransactionPickerSearch('');
+    setTransactionPickerVisible(true);
+    if (transactionPickerContacts.length === 0) {
+      setTransactionPickerLoading(true);
+      try {
+        const token = await authService.getAccessToken();
+        if (!token) return;
+        const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+        const res = await fetch(`${backendUrl}/api/customers`, { headers: { Authorization: `Bearer ${token}` } });
+        const data = await res.json();
+        setTransactionPickerContacts(data.customers || []);
+      } catch {
+        // fail quiet -- picker just shows an empty/loading state, user can retry by closing and reopening
+      } finally {
+        setTransactionPickerLoading(false);
+      }
+    }
+  };
+
+  const handleTransactionPickerSelect = (contactId: string) => {
+    setTransactionPickerVisible(false);
+    if (transactionPickerDestination) {
+      router.push(`/customer/${contactId}/${transactionPickerDestination}`);
+    }
+  };
+
+  const filteredTransactionPickerContacts = transactionPickerContacts.filter((c) => {
+    if (!transactionPickerSearch.trim()) return true;
+    const q = transactionPickerSearch.toLowerCase();
+    return c.name?.toLowerCase().includes(q) || c.company?.toLowerCase().includes(q);
+  });
   // refreshing stays a SEPARATE local state from useQuery's own
   // isFetching -- isFetching is also true during background polling and
   // realtime-triggered refetches, which would make the pull-to-refresh
@@ -910,6 +979,41 @@ export default function HomeScreen() {
       {fabExpanded && (
         <Pressable style={styles.fabBackdrop} onPress={() => setFabExpanded(false)}>
           <View style={styles.fabPills}>
+            {/* Sept 2026 -- four new options, customer-side (Sales,
+                Record Payment Received) in a pale green tint matching
+                the app's own existing primary color, supplier-side
+                (Purchase, Record Payment Made) in a pale amber tint --
+                deliberately not red, which reads as a warning rather
+                than a routine, neutral action. Subtle enough to
+                register at a glance, confirmed with Atif. */}
+            <TouchableOpacity
+              style={[styles.fabPill, styles.fabPillCustomerSide]}
+              onPress={() => openTransactionPicker('invoice')}
+            >
+              <Ionicons name="receipt-outline" size={20} color="#075E54" />
+              <Text style={styles.fabPillText}>Sales</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.fabPill, styles.fabPillCustomerSide]}
+              onPress={() => openTransactionPicker('record-payment')}
+            >
+              <Ionicons name="cash-outline" size={20} color="#075E54" />
+              <Text style={styles.fabPillText}>Record Payment Received</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.fabPill, styles.fabPillSupplierSide]}
+              onPress={() => openTransactionPicker('purchase-bill')}
+            >
+              <Ionicons name="cart-outline" size={20} color="#8A6D3B" />
+              <Text style={styles.fabPillText}>Purchase</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.fabPill, styles.fabPillSupplierSide]}
+              onPress={() => openTransactionPicker('supplier-payment')}
+            >
+              <Ionicons name="cash-outline" size={20} color="#8A6D3B" />
+              <Text style={styles.fabPillText}>Record Payment Made</Text>
+            </TouchableOpacity>
             <TouchableOpacity
               style={styles.fabPill}
               onPress={() => { setFabExpanded(false); router.push('/voice-reminder'); }}
@@ -940,6 +1044,49 @@ export default function HomeScreen() {
       >
         <Ionicons name={fabExpanded ? 'close' : 'add'} size={28} color="#FFFFFF" />
       </TouchableOpacity>
+
+      {/* Sept 2026 -- contact picker for the four new FAB transaction
+          options. Mirrors task-detail.tsx's own proven inline-picker
+          pattern (same /api/customers endpoint, same name/company
+          search) without touching that file at all -- see the state
+          block above for the full reasoning. */}
+      <Modal
+        visible={transactionPickerVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setTransactionPickerVisible(false)}
+      >
+        <Pressable style={styles.pickerBackdrop} onPress={() => setTransactionPickerVisible(false)}>
+          <Pressable style={styles.pickerSheet} onPress={() => {}}>
+            <Text style={styles.pickerTitle}>Who is this for?</Text>
+            <TextInput
+              style={styles.pickerSearchInput}
+              placeholder="Search contacts..."
+              value={transactionPickerSearch}
+              onChangeText={setTransactionPickerSearch}
+              autoFocus
+            />
+            {transactionPickerLoading ? (
+              <ActivityIndicator size="small" color="#075E54" style={{ marginTop: 20 }} />
+            ) : (
+              <FlatList
+                data={filteredTransactionPickerContacts}
+                keyExtractor={(item) => item.id}
+                style={{ maxHeight: 360 }}
+                ListEmptyComponent={
+                  <Text style={styles.pickerNoResults}>No contacts match "{transactionPickerSearch.trim()}"</Text>
+                }
+                renderItem={({ item }) => (
+                  <TouchableOpacity style={styles.pickerRow} onPress={() => handleTransactionPickerSelect(item.id)}>
+                    <Text style={styles.pickerRowName}>{item.name}</Text>
+                    {item.company ? <Text style={styles.pickerRowCompany}>{item.company}</Text> : null}
+                  </TouchableOpacity>
+                )}
+              />
+            )}
+          </Pressable>
+        </Pressable>
+      </Modal>
 
       {/* Bottom Navigation SafeAreaView */}
       <SafeAreaView style={styles.bottomNavSafeArea} edges={['bottom']}>
@@ -1087,7 +1234,7 @@ export default function HomeScreen() {
             <View style={styles.menuDivider} />
             <View style={styles.versionFooterRow}>
               <Text style={styles.versionFooterText}>App Version {Constants.expoConfig?.version || '—'}</Text>
-              <Text style={styles.versionFooterText}>Build v1.3.552</Text>
+              <Text style={styles.versionFooterText}>Build v1.3.553</Text>
             </View>
           </View>
         </TouchableOpacity>
@@ -1466,6 +1613,25 @@ const styles = StyleSheet.create({
     elevation: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4,
   },
   fabPillText: { fontSize: 15, color: '#1A1A1A', fontWeight: '600' },
+  // Sept 2026 -- subtle side-coding for the four new transaction pills.
+  // Deliberately pale tints, not bold fills -- confirmed with Atif:
+  // just enough to register subconsciously at a glance, not a second
+  // visual system. Customer-side matches the app's own existing
+  // primary green; supplier-side uses a neutral warm amber rather than
+  // red, which would read as a warning for what is a routine action.
+  fabPillCustomerSide: { backgroundColor: '#E8F5F1' },
+  fabPillSupplierSide: { backgroundColor: '#FBF3E7' },
+  pickerBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
+  pickerSheet: { backgroundColor: '#FFF', borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, maxHeight: '70%' },
+  pickerTitle: { fontSize: 18, fontWeight: '700', color: '#1A1A1A', marginBottom: 14 },
+  pickerSearchInput: {
+    borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 10, paddingHorizontal: 14, paddingVertical: 10,
+    fontSize: 15, marginBottom: 12,
+  },
+  pickerNoResults: { textAlign: 'center', color: '#999', fontSize: 14, paddingVertical: 24 },
+  pickerRow: { paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#F0F0F0' },
+  pickerRowName: { fontSize: 15, fontWeight: '600', color: '#1A1A1A' },
+  pickerRowCompany: { fontSize: 13, color: '#999', marginTop: 2 },
   fab: {
     position: 'absolute',
     right: 16,
