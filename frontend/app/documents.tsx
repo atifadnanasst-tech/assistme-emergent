@@ -87,10 +87,17 @@ const fmtDate = (d: string) => d ? new Date(d).toLocaleDateString('en-IN', { day
 
 export default function DocumentsScreen() {
   const router = useRouter();
-  const params = useLocalSearchParams<{ customer_id?: string }>();
+  // Sept 2026 -- scope param, for the three new Home-menu entry points
+  // (Sales, Purchase, and the existing all-tabs view unchanged when
+  // scope is absent). Purely additive: no scope in the URL at all
+  // means every existing caller of this screen (customer-chat "See
+  // Everything", the org-wide "Documents" entry) behaves byte-for-byte
+  // as it always has -- this only ever narrows what's shown, on an
+  // explicit opt-in.
+  const params = useLocalSearchParams<{ customer_id?: string; scope?: string }>();
   const isCustomerScoped = !!params.customer_id;
 
-  const [activeTab, setActiveTab] = useState<TabType>('invoice');
+  const [activeTab, setActiveTab] = useState<TabType>(params.scope === 'purchase' ? 'purchase_bill' : 'invoice');
   const [loading, setLoading] = useState(true);
   const [invoices, setInvoices] = useState<InvoiceDoc[]>([]);
   const [quotes, setQuotes] = useState<QuoteDoc[]>([]);
@@ -358,7 +365,7 @@ export default function DocumentsScreen() {
     } finally { setCreatingChallan(false); }
   };
 
-  const tabs: { key: TabType; label: string; count: number }[] = [
+  const allTabs: { key: TabType; label: string; count: number }[] = [
     { key: 'invoice', label: 'Invoice', count: invoices.length },
     { key: 'challan', label: 'Challan', count: invoices.filter(i => i.has_challan).length },
     { key: 'quote', label: 'Quote', count: quotes.length },
@@ -377,6 +384,21 @@ export default function DocumentsScreen() {
     // showing the amount instead of a count.
     ...(isCustomerScoped ? [{ key: 'balance_sheet' as TabType, label: `Balance Sheet${ledger.length > 0 || ledgerClosingBalance !== 0 ? ` (${fmt(ledgerClosingBalance)})` : ''}`, count: 0 }] : []),
   ];
+
+  // Sept 2026 -- sales/purchase scoping, confirmed with Atif: verified
+  // directly against this screen's own real data sources before
+  // building the split -- 'draft' is exclusively drawn from the
+  // invoices table (never purchase bills), so it belongs cleanly on
+  // the sales side with no ambiguity. No scope param (the existing,
+  // unchanged "Documents"/"See Everything" entry point) shows every
+  // tab exactly as it always has.
+  const SALES_SIDE_TABS: TabType[] = ['invoice', 'challan', 'quote', 'draft', 'receipt'];
+  const PURCHASE_SIDE_TABS: TabType[] = ['purchase_bill', 'supplier_payment'];
+  const tabs = params.scope === 'sales'
+    ? allTabs.filter((t) => SALES_SIDE_TABS.includes(t.key))
+    : params.scope === 'purchase'
+    ? allTabs.filter((t) => PURCHASE_SIDE_TABS.includes(t.key))
+    : allTabs;
 
   const renderInvoiceRow = ({ item }: { item: InvoiceDoc }) => (
     <TouchableOpacity style={s.row} onPress={() => openPdf(item.pdf_url)}>
