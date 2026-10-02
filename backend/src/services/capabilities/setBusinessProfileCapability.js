@@ -54,7 +54,12 @@ const WRITABLE_FIELDS = {
   address_line1: { column: 'address_line1',  label: 'Address Line 1',required: false },
   address_line2: { column: 'address_line2',  label: 'Address Line 2',required: false },
   city:          { column: 'city',           label: 'City',          required: false },
-  state:         { column: 'state',          label: 'State',         required: false },
+  // Promoted to required Oct 2026: invoice GST split (CGST+SGST vs IGST)
+  // reads business_profiles.state directly and silently defaults to
+  // same-state/CGST+SGST when it's empty -- a real tax-correctness gap,
+  // not just a form nicety. Also now the source of truth the Nudge
+  // Engine's hard-gate check reads (see businessProfileGate.js).
+  state:         { column: 'state',          label: 'State',         required: true  },
   postal_code:   { column: 'postal_code',    label: 'Postal Code',   required: false },
   logo_url:      { column: 'logo_url',       label: 'Logo',          required: false },
   signature_url: { column: 'signature_url',  label: 'Signature',     required: false },
